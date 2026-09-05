@@ -2,7 +2,9 @@ import SwiftUI
 import LitheTerminalModule
 
 struct TerminalView: View {
+    @Environment(\.controlActiveState) private var controlActiveState
     @EnvironmentObject private var model: AppModel
+    @State private var hoveredSessionID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,20 +26,16 @@ struct TerminalView: View {
 
     private var terminalToolbar: some View {
         HStack(spacing: 8) {
-            Image(systemName: "terminal")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(LitheTheme.secondaryText)
             Text("Terminal")
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(LitheTheme.primaryText)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 3) {
+                HStack(spacing: 0) {
                     ForEach(model.toolTerminalSessions) { terminalSession in
                         terminalTab(terminalSession)
                     }
                 }
-                .padding(.horizontal, 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -48,7 +46,8 @@ struct TerminalView: View {
                 }
             )
 
-            if let session = model.activeToolTerminalSession {
+            if let session = model.activeToolTerminalSession,
+               session.isManagedProcess || session.lastExitCode != nil {
                 TerminalStatusView(session: session)
             }
 
@@ -130,8 +129,6 @@ struct TerminalView: View {
 
         return HStack(spacing: 1) {
             HStack(spacing: 6) {
-                Image(systemName: "terminal")
-                    .font(.system(size: 10, weight: .medium))
                 TerminalToolTabTitle(
                     session: session,
                     fallbackTitle: model.terminalTitle(for: session),
@@ -139,9 +136,9 @@ struct TerminalView: View {
                 )
             }
             .foregroundStyle(isActive ? LitheTheme.primaryText : LitheTheme.secondaryText)
-            .padding(.leading, 9)
-            .padding(.trailing, 5)
-            .frame(height: 26)
+            .padding(.leading, 12)
+            .padding(.trailing, 6)
+            .frame(height: LitheTheme.Metrics.toolWindowHeaderHeight)
             .contentShape(Rectangle())
             .contentShape(
                 .dragPreview,
@@ -174,13 +171,20 @@ struct TerminalView: View {
             }
             .buttonStyle(.plain)
             .help("Close \(model.terminalTitle(for: session))")
+            .accessibilityLabel("Close \(model.terminalTitle(for: session))")
+            .opacity(isActive || hoveredSessionID == session.id ? 1 : 0)
         }
-        .background(isActive ? LitheTheme.subtleSelection : .clear)
-        .overlay {
-            RoundedRectangle(cornerRadius: 5)
-                .stroke(isActive ? LitheTheme.inputFocusBorder : .clear, lineWidth: 1)
+        .padding(.trailing, 6)
+        .frame(height: LitheTheme.Metrics.toolWindowHeaderHeight)
+        .background(hoveredSessionID == session.id ? LitheTheme.subtleSelection : .clear)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(isActive ? (controlActiveState == .inactive ? LitheTheme.secondaryText.opacity(0.6) : LitheTheme.tabUnderline) : .clear)
+                .frame(height: LitheTheme.Metrics.tabUnderlineHeight)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .onHover { isHovering in
+            hoveredSessionID = isHovering ? session.id : nil
+        }
         .background {
             GeometryReader { geometry in
                 Color.clear
@@ -304,9 +308,12 @@ private struct TerminalToolTabTitle: View {
     let isActive: Bool
 
     var body: some View {
-        Text(session.processTitle.flatMap { $0.isEmpty ? nil : $0 } ?? fallbackTitle)
-            .font(.system(size: 11.5, weight: isActive ? .semibold : .medium))
+        Text(session.isManagedProcess ? (session.processTitle ?? fallbackTitle) : fallbackTitle)
+            .font(.system(size: 13))
             .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: 240, alignment: .leading)
+            .help(session.displayTitle)
     }
 }
 

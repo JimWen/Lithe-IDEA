@@ -1602,11 +1602,12 @@ private struct EditorTerminalTabTitle: View {
     let fallbackTitle: String
 
     var body: some View {
-        Text(session.processTitle.flatMap { $0.isEmpty ? nil : $0 } ?? fallbackTitle)
-            .font(.system(size: 12.5))
+        Text(session.isManagedProcess ? (session.processTitle ?? fallbackTitle) : fallbackTitle)
+            .font(.system(size: LitheTheme.Metrics.tabFontSize))
             .lineLimit(1)
             .truncationMode(.middle)
             .frame(maxWidth: 240, alignment: .leading)
+            .help(session.displayTitle)
     }
 }
 

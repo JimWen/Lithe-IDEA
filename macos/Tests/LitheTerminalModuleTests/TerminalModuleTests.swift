@@ -5,6 +5,19 @@ import Testing
 @MainActor
 struct TerminalModuleTests {
     @Test
+    func shellWindowTitlesDoNotReplaceTheCompactLocalTabLabel() {
+        let transport = TestTransport()
+        let feature = TerminalFeatureModel(terminalFactory: { transport })
+        defer { feature.stopAllSessions() }
+        let session = feature.createSession(in: URL(fileURLWithPath: "/workspace/example"))
+
+        transport.onTitle?("developer@host:/workspace/example")
+
+        #expect(feature.terminalTitle(for: session) == "Local")
+        #expect(session.displayTitle == "developer@host:/workspace/example")
+    }
+
+    @Test
     func sessionOwnsTransportAndStopReleasesIt() {
         let transport = TestTransport()
         let feature = TerminalFeatureModel(terminalFactory: { transport })
@@ -41,6 +54,7 @@ struct TerminalModuleTests {
         #expect(created.processID == 1234)
         #expect(created.session.isManagedProcess)
         #expect(created.session.displayTitle == "Debug Main")
+        #expect(feature.terminalTitle(for: created.session) == "Debug Main")
         #expect(transport.processLaunches == [launch])
         #expect(transport.processEnvironments.first?["JAVA_HOME"] == "/opt/jdk")
         #expect(transport.processEnvironments.first?["REMOVE_ME"] == nil)

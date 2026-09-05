@@ -192,8 +192,9 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency L
     }
 
     private static func preferredTerminalFont() -> NSFont {
-        let size: CGFloat = 12.5
+        let size: CGFloat = 13
         let fontNames = [
+            "MesloLGS NF",
             "MesloLGS Nerd Font Mono",
             "JetBrainsMono Nerd Font Mono",
             "Hack Nerd Font Mono",
