@@ -160,6 +160,7 @@ private struct ActiveSessionChrome: View {
                     windowPresentation: windowPresentation
                 )
             )
+            .navigationTitle(windowTitle ?? "Lithe")
             .onReceive(model.$isSettingsPresented) { isPresented in
                 guard isPresented else { return }
                 openWindow(id: LitheWindowID.settings)
@@ -516,22 +517,34 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func apply(_ layout: LitheWindowLayout, title: String?, to window: NSWindow) {
-        window.contentMinSize = layout.minimumContentSize
+        if window.contentMinSize != layout.minimumContentSize {
+            window.contentMinSize = layout.minimumContentSize
+        }
         if let title {
             if window.title != title { window.title = title }
-            if layout == .workspace, window.tab.attributedTitle?.string != title {
-                window.tab.attributedTitle = NSAttributedString(string: title, attributes: [
-                    .font: NSFont.systemFont(ofSize: LitheTheme.Metrics.projectTabFontSize),
-                    .foregroundColor: NSColor.labelColor
+            // SwiftUI can reset the scene title when focus changes. Give AppKit's
+            // project tab its own title and let AppKit resolve selected text colors.
+            // Assign once even if AppKit's default mirrors window.title: this
+            // establishes an independent project-tab title before SwiftUI resets it.
+            if self.layout != layout || window.tab.title != title { window.tab.title = title }
+            if layout == .workspace {
+                let attributedTitle = NSAttributedString(string: title, attributes: [
+                    .font: NSFont.systemFont(ofSize: LitheTheme.Metrics.projectTabFontSize)
                 ])
-            } else if layout != .workspace {
+                if window.tab.attributedTitle != attributedTitle {
+                    window.tab.attributedTitle = attributedTitle
+                }
+            } else if window.tab.attributedTitle != nil {
                 window.tab.attributedTitle = nil
             }
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = layout == .workspace ? .hidden : .visible
+            // Keep SwiftUI's full-size titlebar hosting hierarchy stable when
+            // the scene changes appearance or joins a native tab group.
+            if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = true }
+            let visibility: NSWindow.TitleVisibility = layout == .workspace ? .hidden : .visible
+            if window.titleVisibility != visibility { window.titleVisibility = visibility }
         } else {
-            window.title = ""
-            window.titleVisibility = .hidden
+            if !window.title.isEmpty { window.title = "" }
+            if window.titleVisibility != .hidden { window.titleVisibility = .hidden }
         }
         guard self.layout != layout else { return }
 

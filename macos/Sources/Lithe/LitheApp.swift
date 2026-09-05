@@ -413,10 +413,7 @@ struct LitheApp: App {
         }
 
         Window(settingsWindowTitle(for: settings.language), id: LitheWindowID.settings) {
-            SettingsWindow(
-                model: model,
-                settings: settings
-            )
+            ProjectSettingsWindow(windows: projectWindows, settings: settings)
             .environmentObject(settings)
             .environmentObject(updateChecker)
             .environment(\.locale, settings.language.locale)
@@ -436,6 +433,16 @@ struct LitheApp: App {
     }
 
 
+}
+
+private struct ProjectSettingsWindow: View {
+    @ObservedObject var windows: ProjectWindowManager
+    @ObservedObject var settings: AppSettings
+
+    var body: some View {
+        SettingsWindow(model: windows.activeSessions.activeModel, settings: settings)
+            .id(windows.activeSessions.activeModel.id)
+    }
 }
 
 private struct SettingsWindow: View {
@@ -469,8 +476,12 @@ private struct SettingsWindow: View {
                 themePreference: settings.themePreference
             )
         )
+        .onAppear { windowReference.requestPresentation() }
         .onDisappear {
             model.isSettingsPresented = false
+        }
+        .onReceive(model.$isSettingsPresented) { isPresented in
+            if isPresented { windowReference.requestPresentation() }
         }
     }
 
@@ -500,6 +511,30 @@ struct SettingsAppearanceContainer<Content: View>: View {
 @MainActor
 private final class SettingsWindowReference: ObservableObject {
     weak var window: NSWindow?
+    private var presentationRequested = false
+
+    func requestPresentation() {
+        presentationRequested = true
+        presentIfRequested()
+    }
+
+    func presentIfRequested() {
+        guard presentationRequested, let window else { return }
+        presentationRequested = false
+        // A retained Settings window may belong to another display or Space.
+        // Open it beside the requesting project instead of leaving it hidden.
+        let projectWindow = NSApp.orderedWindows.first {
+            $0 !== window && $0.isVisible && !$0.isMiniaturized && $0.level == .normal
+        }
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        if let projectWindow, let screen = projectWindow.screen {
+            var frame = window.frame
+            frame.origin = NSPoint(x: projectWindow.frame.midX - frame.width / 2,
+                                   y: projectWindow.frame.midY - frame.height / 2)
+            window.setFrame(LitheWindowLayout.frame(frame, fitting: screen.visibleFrame), display: false)
+        }
+        window.makeKeyAndOrderFront(nil)
+    }
 }
 
 private final class SettingsTitlebarBackgroundView: NSView {
@@ -564,6 +599,7 @@ private struct SettingsWindowAccessor: NSViewRepresentable {
             applySettingsSurface(toTitlebarOf: window, color: settingsSurface)
             window.standardWindowButton(.miniaturizeButton)?.isEnabled = false
             window.standardWindowButton(.zoomButton)?.isEnabled = true
+            reference.presentIfRequested()
         }
     }
 

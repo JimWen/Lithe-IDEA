@@ -15,7 +15,7 @@ struct WorkbenchTitlebar<Content: View>: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: AttachmentView, context: Context) {
-        context.coordinator.host.rootView = content
+        context.coordinator.update(content: content)
         context.coordinator.attach(to: nsView.window)
     }
 
@@ -35,8 +35,20 @@ struct WorkbenchTitlebar<Content: View>: NSViewRepresentable {
     }
 
     @MainActor
+    final class ContentModel: ObservableObject {
+        @Published var content: Content
+        init(content: Content) { self.content = content }
+    }
+
+    struct HostedContent: View {
+        @ObservedObject var model: ContentModel
+        var body: some View { model.content }
+    }
+
+    @MainActor
     final class Coordinator {
-        let host: NSHostingView<Content>
+        let host: NSHostingView<HostedContent>
+        private let contentModel: ContentModel
         private let accessory = NSTitlebarAccessoryViewController()
         private let toolbar = NSToolbar(identifier: "lithe-workbench")
         private weak var window: NSWindow?
@@ -45,13 +57,21 @@ struct WorkbenchTitlebar<Content: View>: NSViewRepresentable {
         private static var trafficLightInset: CGFloat { 76 }
 
         init(content: Content) {
-            host = NSHostingView(rootView: content)
+            let contentModel = ContentModel(content: content)
+            self.contentModel = contentModel
+            host = NSHostingView(rootView: HostedContent(model: contentModel))
             // AppKit controls the accessory height; the hosting view must not
             // impose its SwiftUI ideal size on the titlebar's constraints.
             host.sizingOptions = []
             accessory.layoutAttribute = .right
             accessory.view = host
             toolbar.allowsUserCustomization = false
+        }
+
+        func update(content: Content) {
+            // Replacing NSHostingView.rootView tears down presented menus and
+            // popovers during unrelated workbench updates. Keep one hosting root.
+            contentModel.content = content
         }
 
         func attach(to newWindow: NSWindow?) {

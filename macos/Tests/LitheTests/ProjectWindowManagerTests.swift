@@ -255,6 +255,97 @@ struct ProjectWindowManagerTests {
         }
     }
 
+    @Test
+    func sidebarToggleKeepsSelectionAndSearchState() async throws {
+        try await withFixture { fixture in
+            let model = fixture.manager.activeSessions.activeModel
+            model.searchQuery = "retained query"
+            model.toggleSidebar(.project)
+            #expect(!model.isSidebarVisible)
+            #expect(model.selectedSidebar == .project)
+            model.toggleSidebar(.project)
+            #expect(model.isSidebarVisible)
+            model.toggleSidebar(.project)
+            model.selectedSidebar = .search
+            #expect(model.isSidebarVisible)
+            #expect(model.searchQuery == "retained query")
+        }
+    }
+
+    @Test
+    func projectTabTitleSurvivesSwiftUIResettingTheWindowTitle() async throws {
+        try await withFixture { fixture in
+            let window = makeWindow()
+            let coordinator = LitheWindowCoordinator(projectSessions: fixture.manager.activeSessions)
+            defer { coordinator.detach(); window.close() }
+            coordinator.attach(to: window, layout: .workspace, title: "alpha – file.go")
+            window.title = "Lithe"
+            #expect(window.tab.title == "alpha – file.go")
+            #expect(window.tab.attributedTitle?.string == "alpha – file.go")
+            #expect(window.titlebarAppearsTransparent)
+        }
+    }
+
+    @Test
+    func backgroundRefreshDoesNotMutateNativeWindowChrome() async throws {
+        try await withFixture { fixture in
+            let manager = fixture.manager
+            let presentation = ProjectWindowPresentation(manager: manager)
+            let window = ChromeTrackingWindow(
+                contentRect: NSRect(x: 40, y: 40, width: 980, height: 640),
+                styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+                backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            let coordinator = LitheWindowCoordinator(
+                projectSessions: manager.activeSessions,
+                windowID: manager.initialWindowID, windowPresentation: presentation
+            )
+            defer { coordinator.detach(); window.close() }
+            coordinator.attach(to: window, layout: .workspace, title: "alpha – file.go")
+            window.chromeMutationCount = 0
+
+            // Reassigning native chrome during unrelated model updates can end
+            // menu tracking or refocus a project behind an open Settings window.
+            for _ in 0..<10 {
+                coordinator.attach(to: window, layout: .workspace, title: "alpha – file.go")
+            }
+
+            #expect(window.chromeMutationCount == 0)
+            #expect(window.tab.title == "alpha – file.go")
+        }
+    }
+
+    @Test
+    func settingsFollowTheLanguageOfEachProject() async throws {
+        try await withFixture { fixture in
+            for (url, filename, category) in [
+                (fixture.alpha, "go.mod", SettingsCategory.go),
+                (fixture.beta, "Cargo.toml", SettingsCategory.rust),
+                (fixture.gamma, "pyproject.toml", SettingsCategory.python)
+            ] {
+                try "".write(to: url.appendingPathComponent(filename), atomically: true, encoding: .utf8)
+                let model = fixture.manager.sessions(for: UUID()).activeModel
+                model.openProjectDirectly(url)
+                await model.refreshWorkspace()
+                #expect(model.availableSettingsCategories.contains(category))
+                let languageCategories = model.availableSettingsCategories.filter { $0.languageProviderID != nil }
+                #expect(languageCategories == [category])
+            }
+        }
+    }
+
+    @Test
+    func searchPreviewClampsContextAtBothEndsOfTheFile() {
+        let text = (1...40).map { "line \($0)" }.joined(separator: "\n")
+        let first = ProjectSearchPreview.context(in: text, line: 1)
+        #expect(first.lines.first?.number == 1)
+        #expect(first.lines.last?.number == 9)
+        let last = ProjectSearchPreview.context(in: text, line: 40)
+        #expect(last.lines.last?.number == 40)
+        #expect(last.lines.last?.text == "line 40")
+    }
+
     private func withFixture(_ body: (WindowFixture) async throws -> Void) async throws {
         let fixture = try WindowFixture()
         do {
@@ -317,4 +408,14 @@ private final class WindowTestStore: KeyValueStore, @unchecked Sendable {
         defer { lock.unlock() }
         values[key] = value
     }
+}
+
+@MainActor
+private final class ChromeTrackingWindow: NSWindow {
+    var chromeMutationCount = 0
+    override var contentMinSize: NSSize { didSet { chromeMutationCount += 1 } }
+    override var titleVisibility: NSWindow.TitleVisibility { didSet { chromeMutationCount += 1 } }
+    override var titlebarAppearsTransparent: Bool { didSet { chromeMutationCount += 1 } }
+    override var tabbingIdentifier: String { didSet { chromeMutationCount += 1 } }
+    override var tabbingMode: NSWindow.TabbingMode { didSet { chromeMutationCount += 1 } }
 }

@@ -32,8 +32,12 @@ final class ProjectWindowPresentation: ObservableObject {
     func attach(_ window: NSWindow, id: UUID, layout: LitheWindowLayout) {
         let isNew = windows[id]?.window !== window
         if isNew { windows[id] = WindowReference(window) }
-        window.tabbingIdentifier = layout == .workspace ? "lithe-project" : "lithe-\(id)"
-        window.tabbingMode = layout == .workspace ? .automatic : .disallowed
+        let identifier = layout == .workspace ? "lithe-project" : "lithe-\(id)"
+        let mode: NSWindow.TabbingMode = layout == .workspace ? .automatic : .disallowed
+        // Setting native tab properties can rearrange windows and end menu
+        // tracking, even when SwiftUI is only refreshing background state.
+        if window.tabbingIdentifier != identifier { window.tabbingIdentifier = identifier }
+        if window.tabbingMode != mode { window.tabbingMode = mode }
         if isNew, let parentID = manager.takeTabParent(for: id),
            let parent = windows[parentID]?.window {
             parent.addTabbedWindow(window, ordered: .above)
