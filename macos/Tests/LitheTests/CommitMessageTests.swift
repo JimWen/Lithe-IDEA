@@ -479,14 +479,16 @@ struct CommitMessageSettingsTests {
     }
 
     @Test
-    func projectOpenBehaviorPersistsAndDefaultsToAsk() {
+    func projectOpenBehaviorDefaultsToTabsAndPreservesExplicitPreferences() {
         let store = InMemoryKeyValueStore()
         let initialSettings = AppSettings(store: store)
-        #expect(initialSettings.projectOpenBehavior == .ask)
+        #expect(initialSettings.projectOpenBehavior == .thisWindow)
 
-        initialSettings.projectOpenBehavior = .thisWindow
-        let reloadedSettings = AppSettings(store: store)
-        #expect(reloadedSettings.projectOpenBehavior == .thisWindow)
+        for behavior in ProjectOpenBehavior.allCases {
+            initialSettings.projectOpenBehavior = behavior
+            let reloadedSettings = AppSettings(store: store)
+            #expect(reloadedSettings.projectOpenBehavior == behavior)
+        }
     }
 
     @Test

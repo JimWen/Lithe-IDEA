@@ -332,13 +332,13 @@ struct SettingsView: View {
                     LitheSettingsSelect(
                         selection: $settings.projectOpenBehavior,
                         options: ProjectOpenBehavior.allCases,
-                        width: 180,
+                        width: 220,
                         accessibilityLabel: "Open projects in",
                         title: \ProjectOpenBehavior.title
                     )
                 }
 
-                Text("Choose whether opening another project asks first, stays in this window, or creates a new window.")
+                Text("New projects open as tabs by default. Drag a project tab out to create a separate window, or use Window → Merge All Project Windows to combine them again.")
                     .font(LitheTheme.smallFont)
                     .foregroundStyle(LitheTheme.secondaryText)
             }

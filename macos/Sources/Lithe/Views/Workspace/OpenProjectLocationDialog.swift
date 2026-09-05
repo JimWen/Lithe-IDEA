@@ -47,6 +47,7 @@ struct OpenProjectLocationDialog: View {
                 }
                 .buttonStyle(.bordered)
                 .lithePointer()
+                .keyboardShortcut(.cancelAction)
 
                 Button("New Window") {
                     onResolve(.newWindow, doNotAskAgain)
@@ -54,12 +55,13 @@ struct OpenProjectLocationDialog: View {
                 .buttonStyle(.bordered)
                 .lithePointer()
 
-                Button("This Window") {
+                Button("New Project Tab") {
                     onResolve(.thisWindow, doNotAskAgain)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(LitheTheme.accent)
                 .lithePointer()
+                .keyboardShortcut(.defaultAction)
             }
             .controlSize(.regular)
             .padding(14)

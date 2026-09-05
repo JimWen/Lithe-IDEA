@@ -119,6 +119,7 @@ final class AppModel: ObservableObject, Identifiable {
     private var isProjectSessionActive = true
     private var fileVisibilityRulesObserverID: UUID?
     private var requestProjectOpen: ((URL) -> Void)?
+    private var requestProjectClose: (() -> Void)?
     private var didCloseProject: (() -> Void)?
     private var securityScopedWorkspaceURL: URL?
     let javaTestWorkflowState = JavaTestWorkflowState()
@@ -662,9 +663,11 @@ final class AppModel: ObservableObject, Identifiable {
 
     func configureProjectSession(
         requestOpen: @escaping (URL) -> Void,
+        requestClose: (() -> Void)? = nil,
         didClose: @escaping () -> Void
     ) {
         requestProjectOpen = requestOpen
+        requestProjectClose = requestClose
         didCloseProject = didClose
     }
 
@@ -958,6 +961,11 @@ final class AppModel: ObservableObject, Identifiable {
 
     func closeProject() {
         guard workspaceURL != nil else { return }
+        if let requestProjectClose {
+            // Native project windows own unsaved confirmation and tab teardown.
+            requestProjectClose()
+            return
+        }
         guard documentFeature.beginProjectClose() else {
             performCloseProject()
             return

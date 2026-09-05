@@ -3091,6 +3091,10 @@ private final class TestProjectWindowSessions: ProjectWindowSessionHandling {
             _ = await projectWindowCleanupRelease.waitUntilOpen()
         }
     }
+
+    func stopAllSessions() async {
+        await resetForProjectWindowClose()
+    }
 }
 
 @MainActor

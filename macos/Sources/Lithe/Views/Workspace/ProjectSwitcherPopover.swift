@@ -15,7 +15,7 @@ struct ProjectSwitcherPopover: View {
     let onOpenRecentProject: (RecentProject) -> Void
 
     private var openProjectPaths: Set<String> {
-        Set(projectSessions.openProjects.compactMap { $0.workspaceURL?.standardizedFileURL.path })
+        Set(projectSessions.switcherProjects.compactMap { $0.workspaceURL?.standardizedFileURL.path })
     }
 
     private var recentProjects: [RecentProject] {
@@ -38,7 +38,7 @@ struct ProjectSwitcherPopover: View {
                 divider
 
                 sectionTitle("Open Projects")
-                ForEach(projectSessions.openProjects) { projectModel in
+                ForEach(projectSessions.switcherProjects) { projectModel in
                     openProjectRow(projectModel)
                 }
 
@@ -103,13 +103,13 @@ struct ProjectSwitcherPopover: View {
         let isCurrent = projectModel.id == projectSessions.activeSessionID
         return Button {
             isPresented = false
-            projectSessions.activateSession(projectModel.id)
+            if let url = projectModel.workspaceURL {
+                model.openProject(url)
+            }
         } label: {
             projectRowContent(
                 name: projectModel.projectName,
                 path: projectModel.workspaceURL?.path ?? "",
-                badge: initials(for: projectModel.projectName),
-                badgeColor: color(for: projectModel.projectName),
                 isCurrent: isCurrent
             )
         }
@@ -131,8 +131,6 @@ struct ProjectSwitcherPopover: View {
             projectRowContent(
                 name: project.name,
                 path: project.path,
-                badge: initials(for: project.name),
-                badgeColor: exists ? color(for: project.name) : LitheTheme.raised,
                 isCurrent: false
             )
         }
@@ -145,17 +143,10 @@ struct ProjectSwitcherPopover: View {
     private func projectRowContent(
         name: String,
         path: String,
-        badge: String,
-        badgeColor: Color,
         isCurrent: Bool
     ) -> some View {
         HStack(spacing: 10) {
-            Text(badge)
-                .font(.system(size: 11.5, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
-                .background(badgeColor)
-                .clipShape(RoundedRectangle(cornerRadius: 7))
+            ProjectBadge(name: name, size: 24)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
@@ -180,23 +171,5 @@ struct ProjectSwitcherPopover: View {
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
         .contentShape(Rectangle())
-    }
-
-    private func initials(for name: String) -> String {
-        let words = name.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-        let characters = words.prefix(2).compactMap(\.first)
-        return characters.isEmpty ? "LI" : String(characters).uppercased()
-    }
-
-    private func color(for value: String) -> Color {
-        let palette: [Color] = [
-            Color(red: 0.24, green: 0.49, blue: 0.88),
-            Color(red: 0.24, green: 0.63, blue: 0.43),
-            Color(red: 0.86, green: 0.39, blue: 0.20),
-            Color(red: 0.56, green: 0.34, blue: 0.82),
-            Color(red: 0.72, green: 0.52, blue: 0.10)
-        ]
-        let hash = value.utf8.reduce(0) { ($0 * 31 + Int($1)) & 0x7fffffff }
-        return palette[hash % palette.count]
     }
 }

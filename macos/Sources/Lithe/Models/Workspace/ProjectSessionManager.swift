@@ -23,6 +23,10 @@ final class ProjectSessionManager: ObservableObject {
     private let settings: AppSettings
     private let modelFactory: () -> AppModel
     private let newWindowOpener: (URL) -> Void
+    private let tabOpener: ((URL) -> Void)?
+    private let windowCloser: (() -> Void)?
+    private let activateExistingProject: ((URL) -> Bool)?
+    private let openProjectsProvider: (() -> [AppModel])?
     private var modelObservations: [UUID: AnyCancellable] = [:]
     // A closed model can disappear from `sessions` before its asynchronous
     // module teardown finishes. Keep the task here so the manager remains the
@@ -32,11 +36,19 @@ final class ProjectSessionManager: ObservableObject {
     init(
         settings: AppSettings,
         modelFactory: @escaping () -> AppModel,
-        newWindowOpener: @escaping (URL) -> Void
+        newWindowOpener: @escaping (URL) -> Void,
+        tabOpener: ((URL) -> Void)? = nil,
+        windowCloser: (() -> Void)? = nil,
+        activateExistingProject: ((URL) -> Bool)? = nil,
+        openProjectsProvider: (() -> [AppModel])? = nil
     ) {
         self.settings = settings
         self.modelFactory = modelFactory
         self.newWindowOpener = newWindowOpener
+        self.tabOpener = tabOpener
+        self.windowCloser = windowCloser
+        self.activateExistingProject = activateExistingProject
+        self.openProjectsProvider = openProjectsProvider
 
         let initialModel = modelFactory()
         sessions = [initialModel]
@@ -51,6 +63,8 @@ final class ProjectSessionManager: ObservableObject {
     var openProjects: [AppModel] {
         sessions.filter { $0.workspaceURL != nil }
     }
+
+    var switcherProjects: [AppModel] { openProjectsProvider?() ?? openProjects }
 
     var hasUnsavedDocuments: Bool {
         sessions.contains(where: \.hasUnsavedDocuments)
@@ -91,8 +105,9 @@ final class ProjectSessionManager: ObservableObject {
             activateSession(existing.id)
             return
         }
+        if activateExistingProject?(normalizedURL) == true { return }
 
-        if openProjects.isEmpty {
+        if openProjects.isEmpty && activeModel.standaloneFileURL == nil {
             activeModel.openProjectDirectly(normalizedURL)
             refreshRecentProjects()
             return
@@ -215,6 +230,10 @@ final class ProjectSessionManager: ObservableObject {
     }
 
     private func openInThisWindow(_ url: URL) {
+        if let tabOpener {
+            tabOpener(url)
+            return
+        }
         let model: AppModel
         if activeModel.workspaceURL == nil {
             model = activeModel
@@ -235,6 +254,7 @@ final class ProjectSessionManager: ObservableObject {
                 guard let self, let model else { return }
                 self.requestOpenProject(url, from: model.id)
             },
+            requestClose: windowCloser,
             didClose: { [weak self, weak model] in
                 guard let self, let model else { return }
                 self.removeClosedSession(model)

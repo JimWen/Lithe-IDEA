@@ -23,51 +23,13 @@ private enum WorkbenchWorkspaceMetrics {
     static let paneCornerRadius: CGFloat = 10
 }
 
-private enum WorkbenchPopoverLayoutMetrics {
-    static let leadingOverlap: CGFloat = 10
-    static let viewportMargin: CGFloat = 8
-    static let arrowWidth: CGFloat = 22
-    static let arrowHeight: CGFloat = 12
-}
-
-private struct WorkbenchPopoverArrow: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.midX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.closeSubpath()
-        return path
-    }
-}
-
-private struct ProjectSwitcherButtonBoundsPreferenceKey: PreferenceKey {
-    static var defaultValue: Anchor<CGRect>?
-
-    static func reduce(
-        value: inout Anchor<CGRect>?,
-        nextValue: () -> Anchor<CGRect>?
-    ) {
-        value = nextValue() ?? value
-    }
-}
-
-private struct BranchSwitcherButtonBoundsPreferenceKey: PreferenceKey {
-    static var defaultValue: Anchor<CGRect>?
-
-    static func reduce(
-        value: inout Anchor<CGRect>?,
-        nextValue: () -> Anchor<CGRect>?
-    ) {
-        value = nextValue() ?? value
-    }
-}
-
 struct WorkbenchView: View {
     private let moduleUIRegistry = WorkbenchModuleUIComposition.builtIn
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var projectSessions: ProjectSessionManager
     @EnvironmentObject private var settings: AppSettings
+    @Environment(\.locale) private var locale
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarWidth: CGFloat = 320
     @State private var rightSidebarWidth: CGFloat = 380
@@ -91,8 +53,6 @@ struct WorkbenchView: View {
     var body: some View {
         let _ = LitheSignpost.bodyEvaluated("WorkbenchView")
         VStack(spacing: 0) {
-            topBar
-
             if projectSessions.openProjects.count > 1 {
                 projectTabBar
             }
@@ -108,6 +68,14 @@ struct WorkbenchView: View {
             }
 
             statusBar
+        }
+        .background {
+            WorkbenchTitlebar(content: topBar
+                .environmentObject(model)
+                .environmentObject(projectSessions)
+                .environmentObject(settings)
+                .environment(\.locale, locale)
+                .environment(\.colorScheme, colorScheme))
         }
         .background {
             WorkbenchBackgroundImageView(
@@ -302,26 +270,6 @@ struct WorkbenchView: View {
                     + "Git will refuse if it contains unmerged work."
             )
         }
-        .overlayPreferenceValue(ProjectSwitcherButtonBoundsPreferenceKey.self) { bounds in
-            GeometryReader { geometry in
-                if isProjectSwitcherPresented, let bounds {
-                    projectSwitcherOverlay(
-                        buttonFrame: geometry[bounds],
-                        viewportSize: geometry.size
-                    )
-                }
-            }
-        }
-        .overlayPreferenceValue(BranchSwitcherButtonBoundsPreferenceKey.self) { bounds in
-            GeometryReader { geometry in
-                if isBranchSwitcherPresented, let bounds {
-                    branchSwitcherOverlay(
-                        buttonFrame: geometry[bounds],
-                        viewportSize: geometry.size
-                    )
-                }
-            }
-        }
         .overlay {
             if model.isSearchEverywhereVisible {
                 SearchEverywhereView()
@@ -376,7 +324,7 @@ struct WorkbenchView: View {
                 }
             }
         }
-        .frame(height: LitheTheme.Metrics.tabHeight + 4)
+        .frame(height: LitheTheme.Metrics.projectTabHeight)
         .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.toolHeader)
     }
 
@@ -487,10 +435,9 @@ struct WorkbenchView: View {
             .buttonStyle(.plain)
             .lithePointer()
             .accessibilityIdentifier("project-switcher-\(model.id.uuidString)")
-            .anchorPreference(
-                key: ProjectSwitcherButtonBoundsPreferenceKey.self,
-                value: .bounds
-            ) { $0 }
+            .popover(isPresented: instantProjectSwitcherPresentation, arrowEdge: .bottom) {
+                projectSwitcherContent
+            }
 
             Button {
                 updateSwitcherPresentation(
@@ -526,10 +473,9 @@ struct WorkbenchView: View {
             }
             .buttonStyle(.plain)
             .lithePointer()
-            .anchorPreference(
-                key: BranchSwitcherButtonBoundsPreferenceKey.self,
-                value: .bounds
-            ) { $0 }
+            .popover(isPresented: instantBranchSwitcherPresentation, arrowEdge: .bottom) {
+                branchSwitcherContent
+            }
 
             Spacer(minLength: 22)
 
@@ -545,7 +491,6 @@ struct WorkbenchView: View {
             backgroundPickerButton
 
         }
-        .padding(.leading, 76)
         .padding(.trailing, 10)
         .frame(height: LitheTheme.Metrics.toolbarHeight)
         .background {
@@ -558,151 +503,61 @@ struct WorkbenchView: View {
         }
     }
 
-    private func projectSwitcherOverlay(
-        buttonFrame: CGRect,
-        viewportSize: CGSize
-    ) -> some View {
-        let popupMetrics = ProjectSwitcherLayoutMetrics.self
-        let chromeMetrics = WorkbenchPopoverLayoutMetrics.self
-        let placement = workbenchPopoverPlacement(
-            buttonFrame: buttonFrame,
-            viewportWidth: viewportSize.width,
-            popupWidth: popupMetrics.width
-        )
-
-        return ZStack(alignment: .topLeading) {
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture { updateSwitcherPresentation(project: false) }
-
-            ZStack(alignment: .topLeading) {
-                WorkbenchPopoverArrow()
-                    .fill(LitheTheme.popupBackground)
-                    .overlay {
-                        WorkbenchPopoverArrow()
-                            .stroke(LitheTheme.panelBorder, lineWidth: 1)
-                    }
-                    .frame(width: chromeMetrics.arrowWidth, height: chromeMetrics.arrowHeight)
-                    .offset(x: placement.arrowCenterX - (chromeMetrics.arrowWidth / 2))
-
-                ProjectSwitcherPopover(
-                    isPresented: instantProjectSwitcherPresentation,
-                    onNewProject: {
-                        updateSwitcherPresentation(project: false)
-                        model.chooseProject(title: "New Project", prompt: "Choose Folder")
-                    },
-                    onOpenProject: {
-                        updateSwitcherPresentation(project: false)
-                        model.chooseProject()
-                    },
-                    onCloneRepository: {
-                        updateSwitcherPresentation(project: false)
-                        model.showCloneRepository()
-                    },
-                    onOpenRecentProject: { project in
-                        updateSwitcherPresentation(project: false)
-                        model.openProject(project.url)
-                    }
-                )
-                .environmentObject(model)
-                .lithePopupChrome()
-                .padding(.top, chromeMetrics.arrowHeight - 1)
+    private var projectSwitcherContent: some View {
+        ProjectSwitcherPopover(
+            isPresented: instantProjectSwitcherPresentation,
+            onNewProject: {
+                updateSwitcherPresentation(project: false)
+                model.chooseProject(title: "New Project", prompt: "Choose Folder")
+            },
+            onOpenProject: {
+                updateSwitcherPresentation(project: false)
+                model.chooseProject()
+            },
+            onCloneRepository: {
+                updateSwitcherPresentation(project: false)
+                model.showCloneRepository()
+            },
+            onOpenRecentProject: { project in
+                updateSwitcherPresentation(project: false)
+                model.openProject(project.url)
             }
-            .offset(x: placement.popupX, y: buttonFrame.maxY)
-        }
-        .transaction { transaction in
-            transaction.animation = nil
-            transaction.disablesAnimations = true
-        }
-        .onExitCommand { updateSwitcherPresentation(project: false) }
+        )
+        .environmentObject(model)
     }
 
-    private func branchSwitcherOverlay(
-        buttonFrame: CGRect,
-        viewportSize: CGSize
-    ) -> some View {
-        let popupMetrics = BranchSwitcherPopover.Metrics.self
-        let chromeMetrics = WorkbenchPopoverLayoutMetrics.self
-        let placement = workbenchPopoverPlacement(
-            buttonFrame: buttonFrame,
-            viewportWidth: viewportSize.width,
-            popupWidth: popupMetrics.popupWidth
-        )
-
-        return ZStack(alignment: .topLeading) {
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture { updateSwitcherPresentation(branch: false) }
-
-            ZStack(alignment: .topLeading) {
-                WorkbenchPopoverArrow()
-                    .fill(LitheTheme.popupBackground)
-                    .overlay {
-                        WorkbenchPopoverArrow()
-                            .stroke(LitheTheme.panelBorder, lineWidth: 1)
-                    }
-                    .frame(width: chromeMetrics.arrowWidth, height: chromeMetrics.arrowHeight)
-                    .offset(x: placement.arrowCenterX - (chromeMetrics.arrowWidth / 2))
-
-                BranchSwitcherPopover(
-                    isPresented: instantBranchSwitcherPresentation,
-                    onCommit: {
-                        updateSwitcherPresentation(branch: false)
-                        model.selectedSidebar = .changes
-                    },
-                    onPush: { reference in
-                        updateSwitcherPresentation(branch: false)
-                        pendingTopBarPushReference = reference
-                    },
-                    onDelete: { reference in
-                        updateSwitcherPresentation(branch: false)
-                        pendingTopBarDeleteReference = reference
-                    },
-                    onNewBranch: { reference in
-                        updateSwitcherPresentation(branch: false)
-                        newBranchReference = reference
-                    },
-                    onCheckoutRevision: {
-                        updateSwitcherPresentation(branch: false)
-                        isCheckoutRevisionPresented = true
-                    },
-                    onManageBranches: {
-                        updateSwitcherPresentation(branch: false)
-                        if !model.isGitLogVisible {
-                            model.selectedSidebar = .changes
-                            Task { await model.toggleGitLog() }
-                        }
-                    }
-                )
-                .environmentObject(model)
-                .padding(.top, chromeMetrics.arrowHeight - 1)
+    private var branchSwitcherContent: some View {
+        BranchSwitcherPopover(
+            isPresented: instantBranchSwitcherPresentation,
+            onCommit: {
+                updateSwitcherPresentation(branch: false)
+                model.selectedSidebar = .changes
+            },
+            onPush: { reference in
+                updateSwitcherPresentation(branch: false)
+                pendingTopBarPushReference = reference
+            },
+            onDelete: { reference in
+                updateSwitcherPresentation(branch: false)
+                pendingTopBarDeleteReference = reference
+            },
+            onNewBranch: { reference in
+                updateSwitcherPresentation(branch: false)
+                newBranchReference = reference
+            },
+            onCheckoutRevision: {
+                updateSwitcherPresentation(branch: false)
+                isCheckoutRevisionPresented = true
+            },
+            onManageBranches: {
+                updateSwitcherPresentation(branch: false)
+                if !model.isGitLogVisible {
+                    model.selectedSidebar = .changes
+                    Task { await model.toggleGitLog() }
+                }
             }
-            .offset(x: placement.popupX, y: buttonFrame.maxY)
-        }
-        .transaction { transaction in
-            transaction.animation = nil
-            transaction.disablesAnimations = true
-        }
-        .onExitCommand { updateSwitcherPresentation(branch: false) }
-    }
-
-    private func workbenchPopoverPlacement(
-        buttonFrame: CGRect,
-        viewportWidth: CGFloat,
-        popupWidth: CGFloat
-    ) -> (popupX: CGFloat, arrowCenterX: CGFloat) {
-        let metrics = WorkbenchPopoverLayoutMetrics.self
-        let desiredX = buttonFrame.minX - metrics.leadingOverlap
-        let maximumX = max(
-            metrics.viewportMargin,
-            viewportWidth - popupWidth - metrics.viewportMargin
         )
-        let popupX = min(max(desiredX, metrics.viewportMargin), maximumX)
-        let arrowCenterX = min(
-            max(buttonFrame.midX - popupX, metrics.arrowWidth),
-            popupWidth - metrics.arrowWidth
-        )
-        return (popupX, arrowCenterX)
+        .environmentObject(model)
     }
 
     private var instantProjectSwitcherPresentation: Binding<Bool> {

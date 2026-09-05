@@ -131,7 +131,7 @@ final class AppSettings: ObservableObject {
         ) ?? .stash
         projectOpenBehavior = ProjectOpenBehavior(
             rawValue: defaults.string(forKey: Key.projectOpenBehavior) ?? ""
-        ) ?? .ask
+        ) ?? .thisWindow
         keyboardShortcutOverrides = Self.loadKeyboardShortcutOverrides(from: defaults)
         customLogDirectory = defaults.string(forKey: Key.customLogDirectory).flatMap { path in
             guard !path.isEmpty else { return nil }
@@ -238,7 +238,7 @@ final class AppSettings: ObservableObject {
         hiddenDirectoryNames = FileVisibilityRules.default.hiddenDirectoryNames
         hiddenFilePatterns = FileVisibilityRules.default.hiddenFilePatterns
         gitSaveChangesPolicy = .stash
-        projectOpenBehavior = .ask
+        projectOpenBehavior = .thisWindow
         commitMessageAI = .default
         setCustomLogDirectory(nil)
         clearWorkbenchBackground()
@@ -584,17 +584,17 @@ enum EditorTabLayoutMode: String, CaseIterable, Identifiable {
 }
 
 enum ProjectOpenBehavior: String, CaseIterable, Identifiable {
-    case ask
     case thisWindow
     case newWindow
+    case ask
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .ask: "Ask every time"
-        case .thisWindow: "This window"
-        case .newWindow: "New window"
+        case .thisWindow: "Merge into project tabs"
+        case .newWindow: "Separate windows"
         }
     }
 }

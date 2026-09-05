@@ -45,12 +45,12 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
     private var terminationCleanupState: TerminationCleanupState = .idle
     private var isUpdateInstallTermination = false
     private var updateForceExitTask: Task<Void, Never>?
-    weak var projectSessions: ProjectSessionManager? {
+    weak var projectWindows: ProjectWindowManager? {
         didSet {
-            guard let projectSessions else { return }
+            guard let projectWindows else { return }
             let pendingURLs = pendingFileURLs
             pendingFileURLs.removeAll()
-            pendingURLs.forEach { projectSessions.openStandaloneFile($0) }
+            pendingURLs.forEach { projectWindows.openStandaloneFile($0) }
         }
     }
     var recordCleanPluginShutdown: (() -> Void)?
@@ -73,9 +73,9 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
     /// Confirms unsaved work before an update download starts so termination
     /// during replacement cannot be cancelled mid-install.
     func prepareForUpdateInstall() -> Bool {
-        guard let projectSessions else { return true }
+        guard let projectWindows else { return true }
         return Self.confirmUnsavedDocuments(
-            for: projectSessions,
+            for: projectWindows,
             context: .applicationTermination
         )
     }
@@ -96,7 +96,7 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let projectSessions else { return .terminateNow }
+        guard let projectWindows else { return .terminateNow }
 
         // AppKit may ask more than once while a previous asynchronous reply is
         // pending. Do not show another confirmation dialog or start a second
@@ -113,32 +113,32 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
 
         if isUpdateInstallTermination {
             return beginTerminationCleanup(
-                for: projectSessions,
+                for: projectWindows,
                 sender: sender,
                 timeoutNanoseconds: Self.updateTerminationCleanupTimeoutNanoseconds
             )
         }
 
         return Self.confirmUnsavedDocuments(
-            for: projectSessions,
+            for: projectWindows,
             context: .applicationTermination
-        ) ? beginTerminationCleanup(for: projectSessions, sender: sender) : .terminateCancel
+        ) ? beginTerminationCleanup(for: projectWindows, sender: sender) : .terminateCancel
     }
 
     private func beginTerminationCleanup(
-        for projectSessions: ProjectSessionManager,
+        for projectWindows: ProjectWindowManager,
         sender: NSApplication,
         timeoutNanoseconds: UInt64? = nil
     ) -> NSApplication.TerminateReply {
         terminationCleanupState = .cleaning
-        terminationCleanupTask = Task { @MainActor [weak self, projectSessions, sender] in
+        terminationCleanupTask = Task { @MainActor [weak self, projectWindows, sender] in
             if let timeoutNanoseconds {
                 await Self.stopSessions(
-                    projectSessions,
+                    projectWindows,
                     timingOutAfterNanoseconds: timeoutNanoseconds
                 )
             } else {
-                await projectSessions.stopAllSessions()
+                await projectWindows.stopAllSessions()
             }
             guard let self, self.terminationCleanupState == .cleaning else { return }
             self.terminationCleanupTask = nil
@@ -149,12 +149,12 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private static func stopSessions(
-        _ projectSessions: ProjectSessionManager,
+        _ projectWindows: ProjectWindowManager,
         timingOutAfterNanoseconds timeoutNanoseconds: UInt64
     ) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor in
-                await projectSessions.stopAllSessions()
+                await projectWindows.stopAllSessions()
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: timeoutNanoseconds)
@@ -176,8 +176,8 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard let projectSessions else { return }
-        Task { await projectSessions.resumeGitObservationAfterActivation() }
+        guard let projectWindows else { return }
+        Task { await projectWindows.resumeGitObservationAfterActivation() }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -219,8 +219,8 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
     private func handleOpenedURLs(_ urls: [URL]) {
         for url in urls {
             if url.isFileURL {
-                if let projectSessions {
-                    projectSessions.openStandaloneFile(url)
+                if let projectWindows {
+                    projectWindows.openStandaloneFile(url)
                 } else if !pendingFileURLs.contains(where: {
                     $0.standardizedFileURL == url.standardizedFileURL
                 }) {
@@ -259,7 +259,8 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
 struct LitheApp: App {
     @NSApplicationDelegateAdaptor(LitheAppDelegate.self) private var appDelegate
     @StateObject private var settings: AppSettings
-    @StateObject private var projectSessions: ProjectSessionManager
+    @StateObject private var projectWindows: ProjectWindowManager
+    @StateObject private var windowPresentation: ProjectWindowPresentation
     @StateObject private var memoryUsageMonitor: MemoryUsageMonitor
     @StateObject private var frameRateMonitor = FrameRateMonitor()
     @StateObject private var updateChecker: UpdateChecker
@@ -292,7 +293,7 @@ struct LitheApp: App {
         let pluginRuntimeRecovery = MacPluginRuntimeRecoveryCoordinator()
         pluginRuntimeRecovery.recoverPreviousSession(using: moduleStore)
         _settings = StateObject(wrappedValue: settings)
-        let projectSessions = ProjectSessionManager(
+        let projectWindows = ProjectWindowManager(
             settings: settings,
             modelFactory: {
                 AppModel(
@@ -309,13 +310,14 @@ struct LitheApp: App {
                         gitPerformanceLogger: gitPerformanceLogger
                     ).services
                 )
-            },
-            newWindowOpener: Self.openProjectInNewWindow
+            }
         )
         if let startupProjectURL = Self.startupProjectURL {
-            projectSessions.openStartupProject(startupProjectURL)
+            projectWindows.activeSessions.openStartupProject(startupProjectURL)
         }
-        _projectSessions = StateObject(wrappedValue: projectSessions)
+        _projectWindows = StateObject(wrappedValue: projectWindows)
+        _windowPresentation = StateObject(wrappedValue: ProjectWindowPresentation(manager: projectWindows))
+        NSWindow.allowsAutomaticWindowTabbing = false
         _memoryUsageMonitor = StateObject(wrappedValue: MemoryUsageMonitor(
             startedAt: litheProcessLaunchDate,
             baselineReporter: { marker in
@@ -327,7 +329,7 @@ struct LitheApp: App {
         ))
         let updateChecker = UpdateChecker()
         _updateChecker = StateObject(wrappedValue: updateChecker)
-        appDelegate.projectSessions = projectSessions
+        appDelegate.projectWindows = projectWindows
         appDelegate.recordCleanPluginShutdown = {
             pluginRuntimeRecovery.recordCleanShutdown(using: moduleStore)
         }
@@ -370,13 +372,15 @@ struct LitheApp: App {
         }
     }
 
-    private var model: AppModel { projectSessions.activeModel }
+    private var model: AppModel { projectWindows.activeSessions.activeModel }
 
     var body: some Scene {
-        WindowGroup {
-            RootView()
-                .environmentObject(model)
-                .environmentObject(projectSessions)
+        WindowGroup("Lithe", id: LitheWindowID.workspace, for: UUID.self) { windowID in
+            ProjectWindowScene(
+                windows: projectWindows,
+                presentation: windowPresentation,
+                windowID: windowID.wrappedValue
+            )
                 .environmentObject(settings)
                 .environmentObject(memoryUsageMonitor)
                 .environmentObject(frameRateMonitor)
@@ -392,6 +396,8 @@ struct LitheApp: App {
                     memoryUsageMonitor.start()
                     frameRateMonitor.start()
                 }
+        } defaultValue: {
+            projectWindows.defaultWindowID()
         }
         .defaultSize(
             width: LitheWindowLayout.welcomeContentSize.width,
@@ -399,155 +405,11 @@ struct LitheApp: App {
         )
         .windowStyle(.hiddenTitleBar)
         .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("Open Project…") {
-                    model.chooseProject()
-                }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "open-project"))
-            }
-
-            CommandGroup(after: .saveItem) {
-                Button("Save") {
-                    model.saveActiveDocument()
-                }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "save"))
-                .disabled(model.activeDocument == nil)
-
-                Button("Close Project") {
-                    model.closeProject()
-                }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "close-project"))
-                .disabled(model.workspaceURL == nil)
-
-                Button("Close File") {
-                    model.closeStandaloneFile()
-                }
-                .disabled(model.standaloneFileURL == nil)
-            }
-
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings…") {
-                    model.showSettings()
-                }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "settings"))
-            }
-
-            CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") {
-                    Task { await updateChecker.checkForUpdates(manual: true) }
-                }
-                .disabled(updateChecker.isChecking)
-            }
-
-            CommandMenu("Navigate") {
-                Group {
-                    Button("Back") {
-                        model.navigateBack()
-                    }
-                    .litheKeyboardShortcut(
-                        model.keyboardShortcutFeature.primaryKeyPress(for: "navigate-back")
-                    )
-                    .disabled(!model.canNavigateBack)
-
-                    Button("Forward") {
-                        model.navigateForward()
-                    }
-                    .litheKeyboardShortcut(
-                        model.keyboardShortcutFeature.primaryKeyPress(for: "navigate-forward")
-                    )
-                    .disabled(!model.canNavigateForward)
-
-                    Divider()
-
-                    Button("Search Everywhere…") {
-                        model.toggleSearchEverywhere()
-                    }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "search-everywhere"))
-                    .disabled(model.workspaceURL == nil)
-
-                    Divider()
-
-                    Button("Find in File…") {
-                        model.showFindBar()
-                    }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "find-in-file"))
-                    .disabled(model.activeDocument == nil)
-
-                    Button("Replace in File…") {
-                        model.showReplaceBar()
-                    }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "replace-in-file"))
-                    .disabled(model.activeDocument == nil)
-
-                    Button("Find Next") {
-                        model.navigateFind(offset: 1)
-                    }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "find-next"))
-                    .disabled(!model.isFindBarVisible || model.findMatchCount == 0)
-
-                    Button("Find Previous") {
-                        model.navigateFind(offset: -1)
-                    }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "find-previous"))
-                    .disabled(!model.isFindBarVisible || model.findMatchCount == 0)
-
-                    Button("Go to Line…") {
-                        model.showGoToLine()
-                    }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "go-to-line"))
-                    .disabled(model.activeDocument == nil)
-                }
-
-                Divider()
-
-                Button("Go to Definition") {
-                    model.goToDefinition()
-                }
-                .litheKeyboardShortcut(
-                    model.keyboardShortcutFeature.primaryKeyPress(for: "go-to-definition")
-                )
-                .disabled(!model.canPerformShortcutCommand(id: "go-to-definition"))
-
-                Button("Go to Implementation") {
-                    model.goToImplementation()
-                }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "go-to-implementation"))
-                .disabled(!model.supportsLanguageServerFeature(.implementation))
-
-                Button("Find Usages") {
-                    model.findReferences()
-                }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "find-usages"))
-                .disabled(!model.supportsLanguageServerFeature(.references))
-
-                Divider()
-
-                Button("Find in Files…") {
-                    model.openProjectSearch()
-                }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "search-in-project"))
-                .disabled(model.workspaceURL == nil)
-
-                Button("Replace in Files…") {
-                    model.openProjectReplace()
-                }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "replace-in-project"))
-                .disabled(model.workspaceURL == nil)
-            }
-
-            CommandMenu("History") {
-                Button("Show Local History…") {
-                    if let fileURL = model.activeDocument?.url {
-                        model.showLocalHistory(for: fileURL)
-                    }
-                }
-                .disabled(model.activeDocument == nil)
-
-                Button("Show Project Local History…") {
-                    model.showProjectLocalHistory()
-                }
-                .disabled(model.workspaceURL == nil)
-            }
+            LitheProjectCommands(
+                projectWindows: projectWindows,
+                windowPresentation: windowPresentation,
+                updateChecker: updateChecker
+            )
         }
 
         Window(settingsWindowTitle(for: settings.language), id: LitheWindowID.settings) {
@@ -573,15 +435,7 @@ struct LitheApp: App {
         return url
     }
 
-    private static func openProjectInNewWindow(_ url: URL) {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-        configuration.arguments = ["--open-project", url.path]
-        NSWorkspace.shared.openApplication(
-            at: Bundle.main.bundleURL,
-            configuration: configuration
-        )
-    }
+
 }
 
 private struct SettingsWindow: View {

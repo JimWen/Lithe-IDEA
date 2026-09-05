@@ -2,10 +2,13 @@ import AppKit
 import SwiftUI
 
 enum LitheWindowID {
+    static let workspace = "workspace"
     static let settings = "settings"
 }
 
 struct RootView: View {
+    var windowID: UUID?
+    var windowPresentation: ProjectWindowPresentation?
     @EnvironmentObject private var projectSessions: ProjectSessionManager
     @EnvironmentObject private var updateChecker: UpdateChecker
     @State private var didStartAutomaticUpdateCheck = false
@@ -18,7 +21,7 @@ struct RootView: View {
                     isActive: session.id == projectSessions.activeSessionID
                 )
             }
-            ActiveSessionChrome()
+            ActiveSessionChrome(windowID: windowID, windowPresentation: windowPresentation)
         }
         .frame(
             minWidth: windowLayout.minimumContentSize.width,
@@ -124,7 +127,6 @@ private struct ProjectSessionContent: View {
                 WelcomeView()
             } else {
                 WorkbenchView()
-                    .ignoresSafeArea(.container, edges: .top)
             }
         }
         .environmentObject(session)
@@ -138,6 +140,8 @@ private struct ProjectSessionContent: View {
 }
 
 private struct ActiveSessionChrome: View {
+    let windowID: UUID?
+    let windowPresentation: ProjectWindowPresentation?
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var projectSessions: ProjectSessionManager
@@ -151,7 +155,9 @@ private struct ActiveSessionChrome: View {
                 WindowCloseGuard(
                     projectSessions: projectSessions,
                     layout: windowLayout,
-                    title: windowTitle
+                    title: windowTitle,
+                    windowID: windowID,
+                    windowPresentation: windowPresentation
                 )
             )
             .onReceive(model.$isSettingsPresented) { isPresented in
@@ -208,7 +214,9 @@ private struct ActiveSessionChrome: View {
             return projectSessions.activeModel.standaloneFileURL?.lastPathComponent ?? "Lithe"
         }
         if windowLayout == .workspace {
-            return projectSessions.activeModel.workspaceURL?.lastPathComponent ?? "Lithe"
+            let project = model.workspaceURL?.lastPathComponent ?? "Lithe"
+            if let document = model.activeDocument { return "\(project) – \(document.displayName)" }
+            return project
         }
         return String(
             localized: "Welcome to Lithe",
@@ -222,9 +230,15 @@ private struct WindowCloseGuard: NSViewRepresentable {
     let projectSessions: ProjectSessionManager
     let layout: LitheWindowLayout
     let title: String?
+    let windowID: UUID?
+    let windowPresentation: ProjectWindowPresentation?
 
     func makeCoordinator() -> LitheWindowCoordinator {
-        LitheWindowCoordinator(projectSessions: projectSessions)
+        LitheWindowCoordinator(
+            projectSessions: projectSessions,
+            windowID: windowID,
+            windowPresentation: windowPresentation
+        )
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -312,6 +326,7 @@ protocol ProjectWindowSessionHandling: UnsavedDocumentHandling {
     func requestCloseActiveWorkbenchItem() -> Bool
     func requestCloseActiveSession() -> Bool
     func resetForProjectWindowClose() async
+    func stopAllSessions() async
 }
 
 extension ProjectSessionManager: ProjectWindowSessionHandling {
@@ -340,9 +355,13 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
     private var nativeWindowCloseTask: Task<Void, Never>?
     private let confirmUnsavedDocuments: @MainActor (any UnsavedDocumentHandling) -> Bool
     private var isDetached = false
+    private let windowID: UUID?
+    private let windowPresentation: ProjectWindowPresentation?
 
     init(
         projectSessions: any ProjectWindowSessionHandling,
+        windowID: UUID? = nil,
+        windowPresentation: ProjectWindowPresentation? = nil,
         confirmUnsavedDocuments: @escaping @MainActor (any UnsavedDocumentHandling) -> Bool = {
             LitheAppDelegate.confirmUnsavedDocuments(
                 for: $0,
@@ -351,6 +370,8 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
         }
     ) {
         self.projectSessions = projectSessions
+        self.windowID = windowID
+        self.windowPresentation = windowPresentation
         self.confirmUnsavedDocuments = confirmUnsavedDocuments
     }
 
@@ -365,6 +386,16 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
             startMonitoringCloseCommand()
         }
         apply(layout, title: title, to: window)
+        if let windowID { windowPresentation?.attach(window, id: windowID, layout: layout) }
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        if let windowID { windowPresentation?.activate(windowID) }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if let windowID { windowPresentation?.closed(windowID) }
+        stopMonitoringCloseCommand()
     }
 
     func toggleWorkspaceZoom() {
@@ -401,6 +432,11 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
             return false
         }
         if projectSessions.hasActiveProject || projectSessions.hasActiveStandaloneFile {
+            if windowPresentation != nil {
+                guard confirmUnsavedDocuments(projectSessions) else { return false }
+                closeWindowAfterProjectCleanup(sender)
+                return false
+            }
             return projectSessions.requestCloseActiveSession()
         }
         return true
@@ -418,8 +454,15 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
     private func closeWindowAfterProjectCleanup(_ sender: NSWindow) {
         guard nativeWindowCloseTask == nil else { return }
         let projectSessions = projectSessions
+        let preservesNativeTabGroup = windowPresentation != nil
         nativeWindowCloseTask = Task { @MainActor [weak self, weak sender] in
-            await projectSessions.resetForProjectWindowClose()
+            if preservesNativeTabGroup {
+                // Keep the project's scene and tabbing identifier alive until
+                // AppKit closes the tab and selects its remaining neighbour.
+                await projectSessions.stopAllSessions()
+            } else {
+                await projectSessions.resetForProjectWindowClose()
+            }
             guard let self else { return }
             defer { self.nativeWindowCloseTask = nil }
             guard !self.isDetached,
@@ -475,7 +518,15 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
     private func apply(_ layout: LitheWindowLayout, title: String?, to window: NSWindow) {
         window.contentMinSize = layout.minimumContentSize
         if let title {
-            window.title = title
+            if window.title != title { window.title = title }
+            if layout == .workspace, window.tab.attributedTitle?.string != title {
+                window.tab.attributedTitle = NSAttributedString(string: title, attributes: [
+                    .font: NSFont.systemFont(ofSize: LitheTheme.Metrics.projectTabFontSize),
+                    .foregroundColor: NSColor.labelColor
+                ])
+            } else if layout != .workspace {
+                window.tab.attributedTitle = nil
+            }
             window.titlebarAppearsTransparent = true
             window.titleVisibility = layout == .workspace ? .hidden : .visible
         } else {

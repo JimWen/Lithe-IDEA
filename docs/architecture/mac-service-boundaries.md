@@ -80,6 +80,27 @@ macOS owns the platform side of these capabilities:
   native handles (LSP process transport belongs to Rust);
 - native window, menu, clipboard, shortcut, installer, and update behavior.
 
+## Project window ownership
+
+`ProjectWindowManager` owns the per-window `ProjectSessionManager` instances and
+aggregates unsaved-document confirmation and shutdown across the application.
+Each SwiftUI workspace scene has its own stable UUID and session manager. New
+projects join the source window as native macOS tabs by default; Settings →
+Projects can instead select separate windows or confirmation on each opening.
+Existing stored opening preferences keep their raw values.
+
+`ProjectWindowPresentation` owns weak native window references and invokes
+AppKit tab operations. Merging, reordering, and dragging a tab into a separate
+window do not transfer or recreate the project's `AppModel`, documents, terminal
+sessions, or debug services. A project already open in another window is focused
+instead of duplicated. Window closure retains its session manager until module
+and process cleanup completes, and application termination also awaits those
+closing windows.
+
+`LitheProjectCommands` observes the focused scene's `AppModel` so Save, navigation,
+and other project commands target the correct window without broadcasting editor
+changes through the application-wide window registry.
+
 ## Verification
 
 Run this check after changing an application boundary:
@@ -101,3 +122,10 @@ workflow, while the LSP process lifecycle and protocol state are shared Rust
 contracts. Java Run/Debug sessions, and terminal session
 state still use Swift platform ports. See
 [`language-tooling.md`](language-tooling.md) for the language tooling split.
+
+The macOS workbench mounts its project, branch and execution controls in a
+`WorkbenchTitlebar` titlebar accessory above AppKit's project tab strip. Content
+respects the window safe area. Resizing updates the native accessory width
+without publishing high-frequency SwiftUI state. Project and branch popovers
+anchor to their titlebar controls; no content overlay spans across native tabs.
+Native tab dimensions and drag behavior follow the running macOS version.
