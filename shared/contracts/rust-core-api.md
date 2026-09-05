@@ -919,6 +919,14 @@ environment references. It does not return a shell command or platform
 executable path. All project paths use `/`, reject absolute paths and `..`
 traversal, and remain relative to `root`. A `java.main` configuration launches its declared Java source through `project-jdk`. Retired framework providers are excluded from resolution with `unsupportedProvider` diagnostics; regenerate existing project configurations to remove them.
 
+The host can expose `current-file` before a project has a runnable entry point.
+Saving its options with `runConfig.updateOptions` or `runConfig.saveEditorChanges`
+materializes an `editor.current-file` configuration if no declared target has
+that ID. This target has no implicit Java toolchain; the host resolves the
+active editor file through its language provider at launch. Existing
+`java.current-file` configurations retain their legacy behavior. Other missing
+configuration IDs remain errors.
+
 `java.codeVision` accepts a workspace root, a target Java path, and Java source
 paths. It returns declaration locations and usage counts; Git blame attribution
 is joined by the UI from the shared Git result. `java.className` accepts Java

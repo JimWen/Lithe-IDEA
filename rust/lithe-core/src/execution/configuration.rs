@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 const VERSION: u32 = 2;
 const LEGACY_VERSION: u32 = 1;
 const GENERATOR_REVISION: &str = "4";
+const CURRENT_FILE_ID: &str = "current-file";
+const EDITOR_CURRENT_FILE_PROVIDER: &str = "editor.current-file";
 /// Toolchain requirements and `project.json` are separate documents that happen
 /// to live under `.lithe`. Their schema did not change with run-config v2, so
 /// they keep their own version and must not be validated against `VERSION`.
@@ -591,10 +593,18 @@ pub fn resolve(request: ResolveRequest) -> Result<Value, CoreError> {
         validate_sidecar_version_value(manifest)?;
     }
     let generated_ids = configuration_ids(&generated)?;
+    let has_editor_default = [&team, &local].iter().any(|source| {
+        source["configurations"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(is_editor_current_file))
+    });
     let mut diagnostics = Vec::new();
     for source in [&team, &local] {
         for id in configuration_ids(source)?.keys() {
-            if !generated_ids.contains_key(id) && !id.starts_with("user:") {
+            if !generated_ids.contains_key(id)
+                && !id.starts_with("user:")
+                && !(id == CURRENT_FILE_ID && has_editor_default)
+            {
                 diagnostics.push(json!({
                     "id": id,
                     "code": "orphanedOverride",
@@ -832,14 +842,21 @@ fn update_configuration_options(
         toolchain_candidates: Vec::new(),
         local_document: request.local_document.clone(),
     })?;
-    let provider = resolved["configurations"]
+    let resolved_provider = resolved["configurations"]
         .as_array()
         .and_then(|items| {
             items
                 .iter()
                 .find(|value| value["id"] == request.configuration_id)
         })
-        .and_then(|value| value["provider"].as_str())
+        .and_then(|value| value["provider"].as_str());
+    // The host exposes Current File even when generation finds no entry point.
+    // Materialize that editor-owned target only when its options are saved;
+    // adding it must not introduce a Java toolchain into non-Java projects.
+    let is_editor_default =
+        resolved_provider.is_none() && request.configuration_id == CURRENT_FILE_ID;
+    let provider = resolved_provider
+        .or_else(|| is_editor_default.then_some(EDITOR_CURRENT_FILE_PROVIDER))
         .ok_or_else(|| {
             CoreError::new(ErrorCode::InvalidRequest, "Run configuration was not found")
         })?;
@@ -869,6 +886,11 @@ fn update_configuration_options(
         "id": request.configuration_id,
         "env": request.environment
     });
+    if is_editor_default {
+        patch["name"] = json!("Current File");
+        patch["provider"] = json!(EDITOR_CURRENT_FILE_PROVIDER);
+        patch["execution"] = json!("application");
+    }
     if let Some(working_directory) = working_directory.as_ref() {
         patch["cwd"] = json!(working_directory);
     }
@@ -1138,6 +1160,12 @@ fn validate_sidecar_version_value(document: &Value) -> Result<(), CoreError> {
     validate_sidecar_version(version)
 }
 
+// Only the reserved editor target can be introduced outside the user: namespace.
+// A stale override for any other generated target must still be ignored.
+fn is_editor_current_file(item: &Value) -> bool {
+    item["id"] == CURRENT_FILE_ID && item["provider"] == EDITOR_CURRENT_FILE_PROVIDER
+}
+
 fn merge_values(
     base: &Value,
     team: &Value,
@@ -1158,7 +1186,11 @@ fn merge_values(
                     "Run configuration id is required",
                 ));
             };
-            if source_index > 0 && !result.contains_key(id) && !id.starts_with("user:") {
+            if source_index > 0
+                && !result.contains_key(id)
+                && !id.starts_with("user:")
+                && !is_editor_current_file(item)
+            {
                 continue;
             }
             if let Some(existing) = result.get_mut(id) {

@@ -447,7 +447,7 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
 
     private func configurationKind(_ value: String) -> RunConfigurationKind {
         switch value {
-        case "java.current-file": .currentFile
+        case "java.current-file", "editor.current-file": .currentFile
         case "java.main": .javaMain
         default: .process(provider: value)
         }

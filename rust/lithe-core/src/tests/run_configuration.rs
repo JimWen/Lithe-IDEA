@@ -7,6 +7,69 @@ use std::fs;
 use std::path::PathBuf;
 
 #[test]
+fn saving_implicit_current_file_materializes_options_without_java_requirements() {
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    for scope in ["local", "project"] {
+        let root = temporary_root(&format!("editor-current-file-{scope}"));
+        let _cleanup = RemoveOnDrop(root.clone());
+        fs::create_dir_all(root.join(".lithe/run")).unwrap();
+        fs::write(root.join("go.mod"), "module example.invalid/library\n").unwrap();
+        fs::write(
+            root.join(".lithe/run/generated.json"),
+            r#"{"version":2,"configurations":[]}"#,
+        )
+        .unwrap();
+        let saved: Value = serde_json::from_str(&execute_json(
+            &serde_json::json!({
+                "id": "save-editor-default", "command": "runConfig.saveEditorChanges",
+                "payload": {"root": root, "scope": scope, "configurationId": "current-file",
+                    "arguments": "--preview", "environment": {"MODE": "test"},
+                    "toolchain": {"javaHomePath": ""}}
+            })
+            .to_string(),
+        ))
+        .unwrap();
+        assert_eq!(saved["ok"], true, "{saved}");
+        for (key, filename) in [
+            ("localDocument", "local.json"),
+            ("projectDocument", "configurations.json"),
+        ] {
+            if let Some(document) = saved["data"][key].as_str() {
+                fs::write(root.join(".lithe/run").join(filename), document).unwrap();
+            }
+        }
+        let resolved: Value = serde_json::from_str(&execute_json(&serde_json::json!({
+            "id": "resolve-editor-default", "command": "runConfig.resolve", "payload": {"root": root}
+        }).to_string())).unwrap();
+        assert_eq!(resolved["ok"], true, "{resolved}");
+        let configuration = &resolved["data"]["configurations"][0];
+        assert_eq!(configuration["id"], "current-file", "{resolved}");
+        assert_eq!(configuration["provider"], "editor.current-file");
+        assert_eq!(configuration["args"], serde_json::json!(["--preview"]));
+        assert_eq!(configuration["env"]["MODE"], "test");
+        assert!(configuration["toolchains"]["java"].is_null());
+        assert!(configuration["extensions"]["java"].is_null());
+        let unknown: Value = serde_json::from_str(&execute_json(
+            &serde_json::json!({
+                "id": "save-missing", "command": "runConfig.updateOptions",
+                "payload": {"root": root, "scope": scope, "configurationId": "missing-target"}
+            })
+            .to_string(),
+        ))
+        .unwrap();
+        assert_eq!(
+            unknown["ok"], false,
+            "only the known editor default can be materialized"
+        );
+    }
+}
+
+#[test]
 fn run_configuration_commands_generate_merge_and_plan() {
     let root = temporary_root("run-config");
     fs::create_dir_all(root.join("src/main/java/com/example"))
