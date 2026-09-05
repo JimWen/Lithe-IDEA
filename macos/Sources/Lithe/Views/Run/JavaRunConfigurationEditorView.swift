@@ -85,7 +85,6 @@ struct RunConfigurationEditorView: View {
         }
         .frame(width: 520, height: 470)
         .background(LitheTheme.window)
-        .preferredColorScheme(.dark)
         .fileImporter(
             isPresented: $isPathPickerPresented,
             allowedContentTypes: activePathPicker?.allowedContentTypes ?? [.folder]

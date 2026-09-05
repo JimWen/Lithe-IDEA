@@ -4,7 +4,6 @@ import LitheSearchModule
 struct SearchSidebarView: View {
     @EnvironmentObject private var model: AppModel
     @FocusState private var searchFocused: Bool
-    @State private var searchOptions = ProjectSearchOptions.default
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,7 +36,7 @@ struct SearchSidebarView: View {
                     .foregroundStyle(LitheTheme.secondaryText)
                 }
                 Button {
-                    model.openProjectReplace(inheriting: searchOptions)
+                    model.openProjectReplace(inheriting: model.projectSearchOptions)
                 } label: {
                     Image(systemName: "arrow.left.arrow.right")
                 }
@@ -72,7 +71,7 @@ struct SearchSidebarView: View {
                 .font(LitheTheme.uiFont)
                 .foregroundStyle(LitheTheme.secondaryText)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.searchResults.isEmpty && !model.isSearching {
+            } else if model.projectSearchMatches.isEmpty && !model.isSearching {
                 Text("No matches")
                     .font(LitheTheme.uiFont)
                     .foregroundStyle(LitheTheme.secondaryText)
@@ -80,7 +79,7 @@ struct SearchSidebarView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(model.searchResults) { result in
+                        ForEach(model.projectSearchMatches) { result in
                             Button {
                                 model.openSearchResult(result)
                             } label: {
@@ -132,10 +131,11 @@ struct SearchSidebarView: View {
                 }
             }
         }
-        .task(id: "\(model.searchQuery)|\(searchOptions.cacheKey)") {
+        .task(id: "\(model.searchQuery)|\(model.projectSearchOptions.cacheKey)|\(model.isProjectSearchPresented)") {
+            guard !model.isProjectSearchPresented else { return }
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            await model.searchProject(options: searchOptions)
+            await model.searchProject(options: model.projectSearchOptions)
         }
         .onAppear { searchFocused = true }
         // 侧栏已经打开时再次按 Cmd+Shift+F，靠令牌变化把焦点移回输入框。
@@ -146,15 +146,15 @@ struct SearchSidebarView: View {
         HStack(spacing: 7) {
             LitheSystemIcon(systemImage: "line.3.horizontal.decrease")
                 .foregroundStyle(
-                    searchOptions.fileMask.isEmpty ? LitheTheme.secondaryText : LitheTheme.accent
+                    model.projectSearchOptions.fileMask.isEmpty ? LitheTheme.secondaryText : LitheTheme.accent
                 )
-            TextField("File mask, e.g. *.java, *.kt", text: $searchOptions.fileMask)
+            TextField("File mask, e.g. *.java, *.kt", text: $model.projectSearchOptions.fileMask)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .help("Comma-separated glob patterns. Empty searches every file.")
-            if !searchOptions.fileMask.isEmpty {
+            if !model.projectSearchOptions.fileMask.isEmpty {
                 Button {
-                    searchOptions.fileMask = ""
+                    model.projectSearchOptions.fileMask = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                 }
@@ -174,12 +174,12 @@ struct SearchSidebarView: View {
 
     private var searchOptionsMenu: some View {
         Menu {
-            Toggle("Match Case", isOn: $searchOptions.caseSensitive)
-            Toggle("Whole Words", isOn: $searchOptions.wholeWords)
-            Toggle("Regular Expression", isOn: $searchOptions.regularExpression)
+            Toggle("Match Case", isOn: $model.projectSearchOptions.caseSensitive)
+            Toggle("Whole Words", isOn: $model.projectSearchOptions.wholeWords)
+            Toggle("Regular Expression", isOn: $model.projectSearchOptions.regularExpression)
         } label: {
-            Image(systemName: searchOptions == .default ? "slider.horizontal.3" : "slider.horizontal.3.circle.fill")
-                .foregroundStyle(searchOptions == .default ? LitheTheme.secondaryText : LitheTheme.accent)
+            Image(systemName: model.projectSearchOptions == .default ? "slider.horizontal.3" : "slider.horizontal.3.circle.fill")
+                .foregroundStyle(model.projectSearchOptions == .default ? LitheTheme.secondaryText : LitheTheme.accent)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }

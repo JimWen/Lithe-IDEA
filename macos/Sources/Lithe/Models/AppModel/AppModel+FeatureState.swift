@@ -5,6 +5,23 @@ import LitheLocalHistoryModule
 import LitheSearchModule
 
 extension AppModel {
+    func chooseEditorFile() {
+        guard let url = platformUI.chooseFile(title: "Open File", prompt: "Open") else { return }
+        if workspaceURL == nil { openStandaloneFile(url) }
+        else { openFile(url) }
+    }
+
+    /// Hiding a tool window keeps its selection and tree/search state alive.
+    func toggleSidebar(_ destination: SidebarDestination) {
+        if selectedSidebar == destination, isSidebarVisible {
+            isSidebarVisible = false
+        } else if destination == .database {
+            Task { await activateDatabaseModule() }
+        } else {
+            selectedSidebar = destination
+        }
+    }
+
     var workspaceSnapshotID: UUID? { workspaceFeature.appliedSnapshot?.id }
     var rootNode: FileNode? { workspaceFeature.rootNode }
     var projectFiles: [URL] { workspaceFeature.projectFiles }

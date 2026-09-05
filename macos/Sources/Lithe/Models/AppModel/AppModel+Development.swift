@@ -28,6 +28,7 @@ struct PendingRunAction: Equatable {
         case startConfiguration(RunConfiguration)
         case runAllServices
         case restart
+        case editConfiguration
     }
 
     let kind: Kind
@@ -135,6 +136,40 @@ extension AppModel {
 
     func selectRunConfiguration(_ configuration: RunConfiguration) {
         runFeatureIfActive?.select(configuration)
+    }
+
+    func showRunConfigurationEditor() {
+        Task { [weak self] in
+            guard let self, let identity = self.currentWorkspaceIdentity,
+                  let feature = await self.activateExecutionModule()?.runFeature,
+                  self.isCurrentWorkspace(identity) else { return }
+            switch await self.ensureRunProjectReady(feature, for: identity) {
+            case .ready: self.clearPendingRunAction(for: identity)
+            case .waitingForSnapshot(let waitingIdentity):
+                self.deferRunAction(.editConfiguration, for: waitingIdentity)
+                return
+            case .stale:
+                return
+            }
+            if feature.configurationStatus != .ready {
+                await self.generateRunConfigurations()
+            }
+            guard self.isCurrentWorkspace(identity) else { return }
+            guard feature.configurationStatus == .ready else {
+                self.isRunVisible = true
+                return
+            }
+            self.editingRunConfiguration = feature.selectedConfiguration
+        }
+    }
+
+    func requestRunConfigurationRescan() {
+        Task { [weak self] in
+            guard let self, let identity = self.currentWorkspaceIdentity,
+                  let feature = await self.activateExecutionModule()?.runFeature,
+                  self.isCurrentWorkspace(identity) else { return }
+            feature.requestRunConfigurationGeneration()
+        }
     }
 
     /// The single entry point for identification.
@@ -313,6 +348,7 @@ extension AppModel {
         case .startConfiguration(let configuration): startRunConfiguration(configuration)
         case .runAllServices: runAllServiceConfigurations()
         case .restart: restartSelectedRun()
+        case .editConfiguration: showRunConfigurationEditor()
         }
     }
 

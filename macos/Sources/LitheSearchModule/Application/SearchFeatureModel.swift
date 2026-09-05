@@ -23,6 +23,7 @@ public final class SearchFeatureModel: ObservableObject {
     private let operations: any SearchOperations
     private var indexTask: Task<Void, Never>?
     private var indexTaskGeneration = 0
+    private var searchGeneration = 0
 
     public var hasActiveModuleWork: Bool {
         isSearching || isSearchingEverywhere || isLoadingProjectReplacement || indexTask != nil
@@ -33,6 +34,7 @@ public final class SearchFeatureModel: ObservableObject {
     }
 
     public func reset() {
+        searchGeneration += 1
         indexTaskGeneration += 1
         indexTask?.cancel()
         indexTask = nil
@@ -104,6 +106,7 @@ public final class SearchFeatureModel: ObservableObject {
     }
 
     public func clearProjectSearch() {
+        searchGeneration += 1
         searchResults = []
         isSearching = false
     }
@@ -113,6 +116,8 @@ public final class SearchFeatureModel: ObservableObject {
         query: String,
         options: ProjectSearchOptions,
         visibilityRules: SearchVisibilityRules,
+        paths: [String]? = nil,
+        textOverrides: [String: String] = [:],
         isCurrent: @escaping @MainActor () -> Bool
     ) async {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -120,10 +125,24 @@ public final class SearchFeatureModel: ObservableObject {
             return
         }
 
+        searchGeneration += 1
+        let generation = searchGeneration
         isSearching = true
         let operations = self.operations
         let results = await Task.detached(priority: .userInitiated) {
-            operations.search(
+            if let paths {
+                // The shared preview operation supports an explicit file set
+                // and unsaved buffers. It performs no writes, and avoids
+                // filtering an already truncated project-wide result list.
+                return (operations.previewReplacement(
+                    at: workspaceURL, query: query, replacement: "",
+                    options: options, paths: paths, textOverrides: textOverrides,
+                    visibilityRules: visibilityRules
+                ) ?? []).flatMap { file in
+                    file.matches.map { FileSearchResult(url: file.url, line: $0.line, preview: $0.before) }
+                }
+            }
+            return operations.search(
                 at: workspaceURL,
                 query: query,
                 options: options,
@@ -131,7 +150,8 @@ public final class SearchFeatureModel: ObservableObject {
             ) ?? []
         }.value
 
-        guard isCurrent() else {
+        guard generation == searchGeneration else { return }
+        guard !Task.isCancelled, isCurrent() else {
             isSearching = false
             return
         }

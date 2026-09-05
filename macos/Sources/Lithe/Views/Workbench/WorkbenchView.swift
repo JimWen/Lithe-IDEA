@@ -35,9 +35,7 @@ struct WorkbenchView: View {
     @State private var rightSidebarWidth: CGFloat = 380
     @State private var topPaneHeight: CGFloat?
     @State private var isBranchSwitcherPresented = false
-    @State private var newBranchReference: GitReference?
     @State private var isCheckoutRevisionPresented = false
-    @State private var pendingTopBarPushReference: GitReference?
     @State private var pendingTopBarDeleteReference: GitReference?
     @State private var isProjectSwitcherPresented = false
     @State private var isPluginPanelPresented = false
@@ -80,7 +78,16 @@ struct WorkbenchView: View {
                 opacity: settings.workbenchBackgroundOpacity
             )
         }
-        .sheet(item: $newBranchReference) { reference in
+        .sheet(item: $model.editingRunConfiguration) { configuration in
+            if let feature = model.runFeatureIfActive {
+                RunConfigurationEditorView(feature: feature, configuration: configuration)
+                    .environmentObject(model)
+            }
+        }
+        .onChange(of: model.branchSwitcherRequest) { _ in
+            updateSwitcherPresentation(project: false, branch: true)
+        }
+        .sheet(item: $model.pendingNewBranchReference) { reference in
             TopBarNewBranchDialog(reference: reference) { name, checkout in
                 Task {
                     await model.createBranch(named: name, from: reference, checkout: checkout)
@@ -233,7 +240,7 @@ struct WorkbenchView: View {
         } message: {
             Text(model.pendingDiscardHunk?.change.path ?? "This action cannot be undone by Lithe.")
         }
-        .sheet(item: $pendingTopBarPushReference) { reference in
+        .sheet(item: $model.pendingGitPushReference) { reference in
             GitPushDialog(
                 projectName: model.projectName,
                 reference: reference,
@@ -276,6 +283,9 @@ struct WorkbenchView: View {
         }
         .animation(.easeOut(duration: 0.12), value: model.isSearchEverywhereVisible)
         // Replace in Files 挂在工作台层：搜索侧栏未打开时快捷键也能直接弹出。
+        .sheet(isPresented: $model.isProjectSearchPresented) {
+            ProjectSearchView().environmentObject(model)
+        }
         .sheet(isPresented: $model.isProjectReplaceVisible) {
             ProjectReplaceView()
                 .environmentObject(model)
@@ -532,7 +542,7 @@ struct WorkbenchView: View {
             },
             onPush: { reference in
                 updateSwitcherPresentation(branch: false)
-                pendingTopBarPushReference = reference
+                model.pendingGitPushReference = reference
             },
             onDelete: { reference in
                 updateSwitcherPresentation(branch: false)
@@ -540,7 +550,7 @@ struct WorkbenchView: View {
             },
             onNewBranch: { reference in
                 updateSwitcherPresentation(branch: false)
-                newBranchReference = reference
+                model.pendingNewBranchReference = reference
             },
             onCheckoutRevision: {
                 updateSwitcherPresentation(branch: false)
@@ -692,6 +702,9 @@ struct WorkbenchView: View {
                     model.selectRunConfiguration(.currentFile)
                 }
             }
+            Divider()
+            Button("Edit Configurations…") { model.showRunConfigurationEditor() }
+            Button("Identify / Rescan Project…") { model.requestRunConfigurationRescan() }
         } label: {
             HStack(spacing: 8) {
                 RunConfigurationIcon(
@@ -699,20 +712,20 @@ struct WorkbenchView: View {
                     size: 14
                 )
                 Text(model.runFeatureIfActive?.selectedConfiguration?.name ?? "Current File")
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(.system(size: 13))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .foregroundStyle(LitheTheme.primaryText)
             .padding(.horizontal, 4)
-            .frame(minWidth: 160, maxWidth: 190, alignment: .leading)
+            .frame(minWidth: 180, maxWidth: 300, alignment: .leading)
             .frame(height: 30)
             .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.visible)
-        .frame(minWidth: 160, maxWidth: 190, alignment: .leading)
+        .frame(minWidth: 180, maxWidth: 300, alignment: .leading)
         .frame(height: 30)
         .litheRowHover(isActive: false, cornerRadius: 6, activeBackground: LitheTheme.subtleSelection)
         .help("Select run configuration for Run or Debug")
@@ -754,11 +767,7 @@ struct WorkbenchView: View {
                 VStack(spacing: ActivityBarMetrics.spacing) {
                     ForEach(model.availableSidebarDestinations) { destination in
                         Button {
-                            if destination == .database {
-                                Task { await model.activateDatabaseModule() }
-                            } else {
-                                model.selectedSidebar = destination
-                            }
+                            model.toggleSidebar(destination)
                         } label: {
                             Group {
                                 if let ideaAssetPath = destination.ideaAssetPath {
@@ -777,7 +786,7 @@ struct WorkbenchView: View {
                                     height: ActivityBarMetrics.buttonHeight
                                 )
                                 .litheRowHover(
-                                    isActive: model.selectedSidebar == destination,
+                                    isActive: model.isSidebarVisible && model.selectedSidebar == destination,
                                     cornerRadius: 4,
                                     activeBackground: LitheTheme.subtleSelection
                                 )
@@ -785,7 +794,7 @@ struct WorkbenchView: View {
                         .buttonStyle(.plain)
                         .lithePointer()
                         .disabled(!destination.isAvailable)
-                        .foregroundStyle(model.selectedSidebar == destination ? LitheTheme.primaryText : LitheTheme.secondaryText)
+                        .foregroundStyle(model.isSidebarVisible && model.selectedSidebar == destination ? LitheTheme.primaryText : LitheTheme.secondaryText)
                         .help(
                             destination.isAvailable
                                 ? LocalizedStringKey(destination.title)
@@ -1050,6 +1059,7 @@ struct WorkbenchView: View {
     private var workspaceArea: some View {
         WorkbenchWorkspaceSplitView(
             sidebarWidth: sidebarWidth,
+            isSidebarVisible: model.isSidebarVisible,
             topPaneHeight: topPaneHeight,
             isBottomToolVisible: isBottomToolVisible,
             actions: WorkbenchWorkspaceSplitActions(
@@ -1060,12 +1070,8 @@ struct WorkbenchView: View {
                 onTopPaneHeightCommitted: { height in
                     topPaneHeight = height
                     saveLayout(sidebarWidth: sidebarWidth, topPaneHeight: height)
-                },
-                onBottomToolMinimize: {
-                    model.closeGitLog()
                 }
             ),
-            showsBottomToolMinimize: model.isGitLogVisible,
             hasWorkbenchBackground: model.workbenchBackgroundFeature.hasImage,
             sidebar: {
                 activeSidebar(projectTreeRowHeight: settings.projectTreeRowHeight)
@@ -1385,15 +1391,14 @@ private struct WorkbenchNotificationCenterView: View {
 private struct WorkbenchWorkspaceSplitActions {
     let onSidebarWidthCommitted: (CGFloat) -> Void
     let onTopPaneHeightCommitted: (CGFloat) -> Void
-    let onBottomToolMinimize: () -> Void
 }
 
 private struct WorkbenchWorkspaceSplitView<Sidebar: View, Editor: View, BottomTool: View>: View {
     let sidebarWidth: CGFloat
+    let isSidebarVisible: Bool
     let topPaneHeight: CGFloat?
     let isBottomToolVisible: Bool
     let actions: WorkbenchWorkspaceSplitActions
-    let showsBottomToolMinimize: Bool
     let hasWorkbenchBackground: Bool
     let sidebar: Sidebar
     let editor: Editor
@@ -1406,20 +1411,20 @@ private struct WorkbenchWorkspaceSplitView<Sidebar: View, Editor: View, BottomTo
 
     init(
         sidebarWidth: CGFloat,
+        isSidebarVisible: Bool,
         topPaneHeight: CGFloat?,
         isBottomToolVisible: Bool,
         actions: WorkbenchWorkspaceSplitActions,
-        showsBottomToolMinimize: Bool,
         hasWorkbenchBackground: Bool,
         @ViewBuilder sidebar: () -> Sidebar,
         @ViewBuilder editor: () -> Editor,
         @ViewBuilder bottomTool: () -> BottomTool
     ) {
         self.sidebarWidth = sidebarWidth
+        self.isSidebarVisible = isSidebarVisible
         self.topPaneHeight = topPaneHeight
         self.isBottomToolVisible = isBottomToolVisible
         self.actions = actions
-        self.showsBottomToolMinimize = showsBottomToolMinimize
         self.hasWorkbenchBackground = hasWorkbenchBackground
         self.sidebar = sidebar()
         self.editor = editor()
@@ -1466,7 +1471,7 @@ private struct WorkbenchWorkspaceSplitView<Sidebar: View, Editor: View, BottomTo
 
             ZStack(alignment: .topLeading) {
                 VStack(spacing: isBottomToolVisible ? WorkbenchWorkspaceMetrics.paneSpacing : 0) {
-                    HStack(spacing: WorkbenchWorkspaceMetrics.paneSpacing) {
+                    HStack(spacing: isSidebarVisible ? WorkbenchWorkspaceMetrics.paneSpacing : 0) {
                         sidebar
                             .frame(width: resolvedSidebarWidth)
                             .frame(maxHeight: .infinity)
@@ -1475,6 +1480,13 @@ private struct WorkbenchWorkspaceSplitView<Sidebar: View, Editor: View, BottomTo
                                 surrounding: hasWorkbenchBackground ? Color.clear : LitheTheme.titlebar,
                                 roundsCorners: false
                             )
+                            // Keep the subtree mounted so collapsing the tool window
+                            // preserves directory expansion, selection and search state.
+                            .frame(width: isSidebarVisible ? resolvedSidebarWidth : 0, alignment: .leading)
+                            .clipped()
+                            .opacity(isSidebarVisible ? 1 : 0)
+                            .allowsHitTesting(isSidebarVisible)
+                            .accessibilityHidden(!isSidebarVisible)
                         editor
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .workbenchPaneChrome(
@@ -1490,12 +1502,14 @@ private struct WorkbenchWorkspaceSplitView<Sidebar: View, Editor: View, BottomTo
                         isBottomToolVisible ? 0 : WorkbenchWorkspaceMetrics.paneInset
                     )
                     .overlay(alignment: .topLeading) {
-                        sidebarResizeHandle(
-                            resolvedSidebarWidth: resolvedSidebarWidth,
-                            minimumSidebarWidth: minimumSidebarWidth,
-                            maximumSidebarWidth: maximumSidebarWidth,
-                            bottomInset: isBottomToolVisible ? 0 : WorkbenchWorkspaceMetrics.paneInset
-                        )
+                        if isSidebarVisible {
+                            sidebarResizeHandle(
+                                resolvedSidebarWidth: resolvedSidebarWidth,
+                                minimumSidebarWidth: minimumSidebarWidth,
+                                maximumSidebarWidth: maximumSidebarWidth,
+                                bottomInset: isBottomToolVisible ? 0 : WorkbenchWorkspaceMetrics.paneInset
+                            )
+                        }
                     }
                     .frame(height: isBottomToolVisible ? resolvedTopPaneHeight : geometry.size.height)
 
@@ -1532,19 +1546,7 @@ private struct WorkbenchWorkspaceSplitView<Sidebar: View, Editor: View, BottomTo
                     )
                 }
 
-                if isBottomToolVisible, showsBottomToolMinimize {
-                    Button(action: actions.onBottomToolMinimize) {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .litheIconButton()
-                    .help("Collapse tool window")
-                    .accessibilityLabel("Collapse tool window")
-                    .position(
-                        x: geometry.size.width - ActivityBarMetrics.rightWidth - 20,
-                        y: resolvedTopPaneHeight + WorkbenchWorkspaceMetrics.paneSpacing + 16
-                    )
-                }
+
             }
             .frame(
                 width: geometry.size.width,

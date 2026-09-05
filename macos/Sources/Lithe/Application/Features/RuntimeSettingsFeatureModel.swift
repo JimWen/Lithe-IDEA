@@ -34,4 +34,9 @@ final class RuntimeSettingsFeatureModel: ObservableObject {
     func toolGuidance(_ command: String) -> RuntimeToolGuidance {
         service.toolGuidance(command)
     }
+    func customExecutablePath(for command: String) -> String? { service.customExecutablePath(for: command) }
+    func setCustomExecutablePath(_ path: String, for command: String) throws {
+        try service.setCustomExecutablePath(path, for: command)
+        objectWillChange.send()
+    }
 }

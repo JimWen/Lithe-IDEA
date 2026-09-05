@@ -101,6 +101,20 @@ closing windows.
 and other project commands target the correct window without broadcasting editor
 changes through the application-wide window registry.
 
+Find in Files and the Find tool window share the search module's query/options
+and results. The popup owns selection and bounded source previews. Search
+generations reject late responses when the query or scope changes. Open Files
+uses the existing shared preview operation with explicit paths and editor text
+overrides, without applying replacements or writing files.
+
+Go, Rust and Python settings appear when the active project's manifest or file
+inventory matches the language catalog. Project executable choices persist
+through `ProjectRuntimeService` and its injected key-value store; the existing
+runtime resolver applies them to subsequent Run, Debug and language-tool
+launches. Language-server configuration continues to use the Language
+Intelligence module. Editing a run configuration waits for the current
+workspace snapshot before identifying entry points or presenting the editor.
+
 ## Verification
 
 Run this check after changing an application boundary:

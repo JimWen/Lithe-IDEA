@@ -28,15 +28,77 @@ extension AppModel {
         }
     }
 
-    func searchProject(options: ProjectSearchOptions = .default) async {
+    func searchProject(options suppliedOptions: ProjectSearchOptions? = nil) async {
         guard let workspaceURL, let searchFeature = await activateSearchModule() else { return }
+        let identity = currentWorkspaceIdentity
         let query = searchQuery
+        let options = suppliedOptions ?? projectSearchOptions
+        let scope = projectSearchScope
+        let directory = projectSearchDirectory
+        projectSearchError = nil
+        if options.regularExpression, !query.isEmpty {
+            do { _ = try NSRegularExpression(pattern: query) }
+            catch {
+                searchFeature.clearProjectSearch()
+                projectSearchError = error.localizedDescription
+                return
+            }
+        }
+        var root = workspaceURL
+        if scope == .directory, !directory.isEmpty {
+            root = directory.hasPrefix("/")
+                ? URL(fileURLWithPath: directory).standardizedFileURL
+                : workspaceURL.appendingPathComponent(directory).standardizedFileURL
+            let base = workspaceURL.standardizedFileURL.path
+            guard (root.path == base || root.path.hasPrefix(base + "/")),
+                  workspaceFileOperations.isDirectory(at: root) else {
+                searchFeature.clearProjectSearch()
+                projectSearchError = String(localized: "Choose a directory inside the current project.")
+                return
+            }
+        }
         await searchFeature.searchProject(
-            at: workspaceURL, query: query, options: options,
+            at: root, query: query, options: options,
             visibilityRules: settings.fileVisibilityRules.searchRules,
-            isCurrent: { [weak self] in self?.workspaceURL == workspaceURL && self?.searchQuery == query }
+            paths: scope == .openFiles ? openDocuments.compactMap {
+                workspaceRelativePath(for: $0.url, root: workspaceURL)
+            } : nil,
+            textOverrides: scope == .openFiles ? openDocumentTextOverrides(rootURL: workspaceURL) : [:],
+            isCurrent: { [weak self] in
+                guard let self else { return false }
+                return !Task.isCancelled && self.currentWorkspaceIdentity == identity
+                    && self.searchQuery == query && self.projectSearchScope == scope
+                    && (suppliedOptions != nil || self.projectSearchOptions == options)
+                    && self.projectSearchDirectory == directory
+            }
         )
         try? services.moduleRuntime.markIdle(.search)
+    }
+
+    var projectSearchMatches: [FileSearchResult] {
+        let matches = searchResults.filter { $0.kind == .content }
+        guard projectSearchScope == .openFiles else { return matches }
+        let urls = Set(openDocuments.map { $0.url.standardizedFileURL })
+        return matches.filter { urls.contains($0.url.standardizedFileURL) }
+    }
+
+    func searchPreview(for result: FileSearchResult) async -> ProjectSearchPreview {
+        if let document = openDocuments.first(where: { $0.url == result.url }) {
+            return .context(in: document.text, line: result.line ?? 1)
+        }
+        let storage = services.fileStorage
+        return await Task.detached(priority: .userInitiated) {
+            do {
+                let limit = 2 * 1024 * 1024
+                if let size = storage.metadata(for: result.url)?.byteCount, size > limit {
+                    return ProjectSearchPreview(lines: [], message: String(localized: "Open the file to preview this large result."))
+                }
+                let data = try storage.readPrefix(from: result.url, byteCount: limit)
+                return ProjectSearchPreview.context(in: String(decoding: data, as: UTF8.self), line: result.line ?? 1)
+            } catch {
+                return ProjectSearchPreview(lines: [], message: error.localizedDescription)
+            }
+        }.value
     }
 
     func toggleSearchEverywhere() {
@@ -65,8 +127,7 @@ extension AppModel {
     func openProjectSearch() {
         guard workspaceURL != nil else { return }
         if !editorSelectedText.isEmpty { searchQuery = editorSelectedText }
-        selectedSidebar = .search
-        searchSidebarFocusRequest += 1
+        isProjectSearchPresented = true
     }
 
     func clearProjectReplacementPreview() {

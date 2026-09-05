@@ -32,6 +32,11 @@ final class ProjectRuntimeService: ObservableObject {
     private var activeServiceJavaHomePath = ""
 
     private let runtimeLocator: any RuntimeLocator
+    private let store: any KeyValueStore
+    private var executableOverrides: [String: String] = [:]
+    private var executableOverridesKey: String? {
+        projectURL.map { "lithe.project-runtime-executables." + $0.standardizedFileURL.path }
+    }
     private let toolDiscovery: any RuntimeToolDiscovery
     private var discoveryTask: Task<Void, Never>?
     private var activeDiscoveryID: UUID?
@@ -43,7 +48,7 @@ final class ProjectRuntimeService: ObservableObject {
         toolDiscovery: (any RuntimeToolDiscovery)? = nil
     ) {
         self.runtimeLocator = runtimeLocator
-        _ = store
+        self.store = store
         self.toolDiscovery = toolDiscovery ?? DefaultRuntimeToolDiscovery()
     }
 
@@ -56,6 +61,7 @@ final class ProjectRuntimeService: ObservableObject {
         activeDiscoveryID = nil
         let normalizedURL = url.standardizedFileURL
         projectURL = normalizedURL
+        executableOverrides = executableOverridesKey.flatMap { store.object(forKey: $0) as? [String: String] } ?? [:]
         javaRuntimes = []
         javaEnvironmentReport = .checking(for: normalizedURL)
         javaLanguageServerRuntimePreparation = .unprepared
@@ -67,6 +73,7 @@ final class ProjectRuntimeService: ObservableObject {
         discoveryTask = nil
         activeDiscoveryID = nil
         projectURL = nil
+        executableOverrides = [:]
         javaRuntimes = []
         javaEnvironmentReport = nil
         isDiscovering = false
@@ -222,7 +229,35 @@ final class ProjectRuntimeService: ObservableObject {
     /// Base environment for language-neutral processes such as Go, Python and
     /// Node. Overrides are layered on top without injecting Java variables.
     func processEnvironment(overrides: [String: String] = [:]) -> [String: String] {
-        runtimeLocator.environment().merging(overrides) { _, override in override }
+        var environment = runtimeLocator.environment()
+        var directories: [String] = []
+        for command in executableOverrides.keys.sorted() {
+            guard let path = executableOverrides[command], let url = executableURL(at: path) else { continue }
+            let directory = url.deletingLastPathComponent().path
+            if !directories.contains(directory) { directories.append(directory) }
+        }
+        if !directories.isEmpty {
+            environment["PATH"] = (directories + [environment["PATH"] ?? ""]).joined(separator: ":")
+        }
+        return environment.merging(overrides) { _, override in override }
+    }
+
+    func customExecutablePath(for command: String) -> String? { executableOverrides[command] }
+
+    /// Store project-local tool choices through the injected persistence port.
+    /// Run, debug and language tools all resolve through this same service.
+    func setCustomExecutablePath(_ path: String, for command: String) throws {
+        guard let key = executableOverridesKey, !command.isEmpty, !command.contains("/") else { return }
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            executableOverrides[command] = nil
+        } else {
+            guard let url = executableURL(at: trimmed) else {
+                throw RunExecutableResolutionError(message: "Choose an executable file for \(command).")
+            }
+            executableOverrides[command] = url.path
+        }
+        store.set(executableOverrides, forKey: key)
     }
 
     /// Returns all known candidates in preference order.  The platform
@@ -231,14 +266,21 @@ final class ProjectRuntimeService: ObservableObject {
     /// compatible.
     func executableCandidates(_ command: String) -> [RuntimeToolCandidate] {
         guard !command.isEmpty, !command.contains("/") else { return [] }
-        let environment = runtimeLocator.environment()
+        let environment = processEnvironment()
         let discovered = toolDiscovery.candidates(
             for: command,
             projectURL: projectURL,
             environment: environment
         )
-        var candidates = discovered
-        var seen = Set(discovered.map { $0.executableURL.standardizedFileURL.path })
+        var candidates: [RuntimeToolCandidate] = []
+        if let path = executableOverrides[command], let url = executableURL(at: path) {
+            candidates.append(RuntimeToolCandidate(command: command, executableURL: url,
+                source: .custom, detail: "Project settings"))
+        }
+        var seen = Set(candidates.map { $0.executableURL.standardizedFileURL.path })
+        for candidate in discovered where seen.insert(candidate.executableURL.standardizedFileURL.path).inserted {
+            candidates.append(candidate)
+        }
         for directory in (environment["PATH"] ?? "").split(separator: ":") where !directory.isEmpty {
             let candidateURL = URL(fileURLWithPath: String(directory))
                 .appendingPathComponent(command)

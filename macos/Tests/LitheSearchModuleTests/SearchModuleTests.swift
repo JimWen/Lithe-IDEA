@@ -7,6 +7,22 @@ import Testing
 @MainActor
 struct SearchModuleTests {
     @Test
+    func explicitFileScopeSearchesUnsavedBuffersWithoutWriting() async {
+        let feature = SearchFeatureModel(operations: ScopedSearchOperations())
+        defer { feature.reset() }
+        let root = URL(fileURLWithPath: "/search-fixture")
+        await feature.searchProject(
+            at: root, query: "unsaved", options: ProjectSearchOptions(fileMask: "*.go"),
+            visibilityRules: SearchVisibilityRules(hiddenDirectoryNames: [], hiddenFilePatterns: []),
+            paths: ["last.go"], textOverrides: ["last.go": "unsaved buffer"], isCurrent: { true }
+        )
+        #expect(feature.searchResults == [FileSearchResult(
+            url: root.appendingPathComponent("last.go"), line: 4, preview: "unsaved buffer"
+        )])
+        #expect(!feature.isSearching)
+    }
+
+    @Test
     func disabledSearchDoesNotConstructFactoryOrFeature() async throws {
         let recorder = SearchRecorder()
         let runtime = ModuleRuntime()
@@ -79,6 +95,33 @@ struct SearchModuleTests {
         #expect(operations.completedOperations == ["warm", "invalidate"])
     }
 
+    @Test
+    func anOlderQueryCannotStopOrOverwriteTheNewerOptionsSearch() async {
+        let operations = OrderedSearchOperations()
+        let feature = SearchFeatureModel(operations: operations)
+        let root = URL(fileURLWithPath: "/search-fixture")
+        let rules = SearchVisibilityRules(hiddenDirectoryNames: [], hiddenFilePatterns: [])
+        defer { operations.firstGate.signal(); operations.secondGate.signal(); feature.reset() }
+        let first = Task {
+            await feature.searchProject(at: root, query: "same", options: .default,
+                visibilityRules: rules, isCurrent: { true })
+        }
+        #expect(await operations.firstStarted.waitUntilSignaled(timeout: .seconds(2)))
+        let second = Task {
+            await feature.searchProject(at: root, query: "same", options: ProjectSearchOptions(caseSensitive: true),
+                visibilityRules: rules, isCurrent: { true })
+        }
+        #expect(await operations.secondStarted.waitUntilSignaled(timeout: .seconds(2)))
+        operations.firstGate.signal()
+        await first.value
+        #expect(feature.isSearching)
+        #expect(feature.searchResults.isEmpty)
+        operations.secondGate.signal()
+        await second.value
+        #expect(!feature.isSearching)
+        #expect(feature.searchResults.first?.preview == "new options")
+    }
+
     private func waitUntil(
         timeout: Duration = .seconds(2),
         condition: @MainActor () -> Bool
@@ -121,6 +164,28 @@ private struct TestSearchOperations: SearchOperations {
     func previewReplacement(at rootURL: URL, query: String, replacement: String, options: ProjectSearchOptions, paths: [String], textOverrides: [String: String], visibilityRules: SearchVisibilityRules) -> [ProjectReplacementFile]? { [] }
     func readFile(at rootURL: URL, relativePath: String) -> String? { nil }
     func writeFile(_ text: String, at rootURL: URL, relativePath: String) -> Bool { false }
+}
+
+private struct ScopedSearchOperations: SearchOperations {
+    func search(at rootURL: URL, query: String, options: ProjectSearchOptions, visibilityRules: SearchVisibilityRules) -> [FileSearchResult]? {
+        Issue.record("A restricted file scope must not filter a truncated project search")
+        return []
+    }
+    func searchEverywhere(at rootURL: URL, query: String, options: ProjectSearchOptions, visibilityRules: SearchVisibilityRules) -> SearchEverywhereResults? { nil }
+    func previewReplacement(at rootURL: URL, query: String, replacement: String, options: ProjectSearchOptions, paths: [String], textOverrides: [String: String], visibilityRules: SearchVisibilityRules) -> [ProjectReplacementFile]? {
+        #expect(paths == ["last.go"])
+        #expect(query == "unsaved")
+        #expect(options.fileMask == "*.go")
+        #expect(textOverrides == ["last.go": "unsaved buffer"])
+        return [ProjectReplacementFile(url: rootURL.appendingPathComponent("last.go"), relativePath: "last.go", matches: [
+            ProjectReplacementMatch(line: 4, before: "unsaved buffer", after: " buffer", occurrenceCount: 1)
+        ])]
+    }
+    func readFile(at rootURL: URL, relativePath: String) -> String? { nil }
+    func writeFile(_ text: String, at rootURL: URL, relativePath: String) -> Bool {
+        Issue.record("Search must never save a buffer")
+        return false
+    }
 }
 
 private final class BlockingIndexOperations: SearchOperations, @unchecked Sendable {
@@ -203,4 +268,26 @@ private final class AsyncTestSignal: @unchecked Sendable {
             return result
         }
     }
+}
+
+private final class OrderedSearchOperations: SearchOperations, @unchecked Sendable {
+    let firstGate = DispatchSemaphore(value: 0)
+    let secondGate = DispatchSemaphore(value: 0)
+    let firstStarted = AsyncTestSignal()
+    let secondStarted = AsyncTestSignal()
+
+    func search(at rootURL: URL, query: String, options: ProjectSearchOptions, visibilityRules: SearchVisibilityRules) -> [FileSearchResult]? {
+        let isSecond = options.caseSensitive
+        (isSecond ? secondStarted : firstStarted).signal()
+        // SearchOperations is synchronous and invoked on the search worker; the
+        // local deadline prevents a failed expectation from stranding that worker.
+        let completed = (isSecond ? secondGate : firstGate).wait(timeout: .now() + 4)
+        guard completed == .success else { return [] }
+        return [FileSearchResult(url: rootURL.appendingPathComponent("file.go"), line: 1,
+            preview: isSecond ? "new options" : "old options")]
+    }
+    func searchEverywhere(at rootURL: URL, query: String, options: ProjectSearchOptions, visibilityRules: SearchVisibilityRules) -> SearchEverywhereResults? { SearchEverywhereResults() }
+    func previewReplacement(at rootURL: URL, query: String, replacement: String, options: ProjectSearchOptions, paths: [String], textOverrides: [String: String], visibilityRules: SearchVisibilityRules) -> [ProjectReplacementFile]? { [] }
+    func readFile(at rootURL: URL, relativePath: String) -> String? { nil }
+    func writeFile(_ text: String, at rootURL: URL, relativePath: String) -> Bool { false }
 }

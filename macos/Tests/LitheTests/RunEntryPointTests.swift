@@ -9,6 +9,25 @@ import Testing
 @Suite("Run entry points", .serialized)
 @MainActor
 struct RunEntryPointTests {
+    @Test
+    func editConfigurationsWaitsForTheSnapshotThenOpensWithoutLaunching() async throws {
+        let workspace = try JavaWorkspaceFixture()
+        defer { workspace.remove() }
+        let operations = SequencedWorkspaceOperations.unavailableThenReady(workspace.snapshot)
+        let configurations = ReadyRunConfigurationOperations()
+        let model = makeAppModel(workspaceOperations: operations, runConfigurationOperations: configurations)
+        defer { model.editingRunConfiguration = nil; model.closeProject() }
+
+        model.openProjectDirectly(workspace.root)
+        model.showRunConfigurationEditor()
+        #expect(await awaitLoadDrivenChange(on: model) { model.pendingRunAction?.kind == .editConfiguration })
+        #expect(model.editingRunConfiguration == nil)
+        await model.workspaceFeature.refreshCurrent()
+        #expect(await awaitLoadDrivenChange(on: model) { model.editingRunConfiguration != nil })
+        #expect(model.pendingRunAction == nil)
+        #expect(configurations.launchPlanCallCount == 0)
+    }
+
     /// Run activates the execution module on demand, so it can reach a run
     /// feature before the workspace snapshot has been applied. Binding the
     /// workspace there is not enough: generation scans the file inventory the

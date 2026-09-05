@@ -16,8 +16,10 @@ final class AppModel: ObservableObject, Identifiable {
     let id = UUID()
     @Published private(set) var workspaceURL: URL?
     @Published private(set) var standaloneFileURL: URL?
+    @Published var isSidebarVisible = true
     @Published var selectedSidebar: SidebarDestination = .project {
         didSet {
+            isSidebarVisible = true
             guard oldValue != selectedSidebar else { return }
             sidebarRefreshTask?.cancel()
             sidebarRefreshTask = nil
@@ -39,12 +41,21 @@ final class AppModel: ObservableObject, Identifiable {
         }
     }
     @Published var isRunVisible = false
+    @Published var editingRunConfiguration: RunConfiguration?
+    @Published var pendingGitPushReference: GitReference?
+    @Published var pendingNewBranchReference: GitReference?
+    @Published var branchSwitcherRequest = 0
     @Published var isTestsVisible = false
     @Published var isSettingsPresented = false
     @Published private(set) var requestedSettingsCategory: SettingsCategory = .general
     @Published var isCloneRepositoryPresented = false
     @Published private(set) var recentProjects: [RecentProject]
     @Published var searchQuery = ""
+    @Published var isProjectSearchPresented = false
+    @Published var projectSearchOptions = ProjectSearchOptions.default
+    @Published var projectSearchScope = ProjectSearchScope.project
+    @Published var projectSearchDirectory = ""
+    @Published var projectSearchError: String?
     @Published var isSearchEverywhereVisible = false
     @Published var searchEverywhereQuery = ""
     @Published var isProjectReplaceVisible = false
@@ -996,6 +1007,10 @@ final class AppModel: ObservableObject, Identifiable {
         mediaFeature.reset()
         searchFeatureIfActive?.reset()
         searchQuery = ""
+        isProjectSearchPresented = false
+        projectSearchScope = .project
+        projectSearchDirectory = ""
+        projectSearchError = nil
         isSearchEverywhereVisible = false
         searchEverywhereQuery = ""
         isProjectReplaceVisible = false

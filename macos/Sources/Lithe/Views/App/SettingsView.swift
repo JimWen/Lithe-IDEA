@@ -72,6 +72,9 @@ struct SettingsView: View {
                   let firstMatch = filteredCategories.first else { return }
             viewState.selection = firstMatch
         }
+        .onChange(of: model.availableSettingsCategories) { categories in
+            if !categories.contains(viewState.selection) { viewState.selection = .general }
+        }
         .environment(\.locale, settings.language.locale)
     }
 
@@ -140,9 +143,9 @@ struct SettingsView: View {
 
     private var filteredCategories: [SettingsCategory] {
         let query = viewState.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return SettingsCategory.allCases }
+        guard !query.isEmpty else { return model.availableSettingsCategories }
 
-        return SettingsCategory.allCases.filter { category in
+        return model.availableSettingsCategories.filter { category in
             searchTerms(for: category).contains { term in
                 localizedSearchValue(term).localizedCaseInsensitiveContains(query)
                     || term.localizedCaseInsensitiveContains(query)
@@ -161,7 +164,13 @@ struct SettingsView: View {
         case .terminal:
             ["Terminal", "Shell", "Default shell"]
         case .lsp:
-            ["LSP", "Language server", "Java SDK", "JDK"]
+            ["LSP", "Language server", "Language Support"]
+        case .go:
+            ["Go", "GOROOT", "SDK", "gopls", "Toolchain"]
+        case .rust:
+            ["Rust", "Cargo", "rust-analyzer", "Toolchain"]
+        case .python:
+            ["Python", "Interpreter", "Virtual environment", "Language server"]
         case .ai:
             ["AI & Commit", "AI provider", "Model", "API key", "Commit message"]
         case .updates:
@@ -190,6 +199,12 @@ struct SettingsView: View {
             }
             .foregroundStyle(LitheTheme.secondaryText)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if viewState.selection.languageProviderID != nil {
+            ProjectLanguageSettingsView(category: viewState.selection) {
+                closeSettings()
+                model.showRunConfigurationEditor()
+            }
+                .id(viewState.selection)
         } else if viewState.selection == .lsp {
             LSPControlCenterView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -212,7 +227,7 @@ struct SettingsView: View {
                     case .editor: editorSettings
                     case .keymap: EmptyView()
                     case .terminal: terminalSettings
-                    case .lsp: EmptyView()
+                    case .lsp, .go, .rust, .python: EmptyView()
                     case .ai: aiSettings
                     case .updates: updatesSettings
                     }

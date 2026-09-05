@@ -8,6 +8,9 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     case keymap = "Keymap"
     case terminal = "Terminal"
     case lsp = "LSP"
+    case go = "Go"
+    case rust = "Rust"
+    case python = "Python"
     case ai = "AI & Commit"
     case updates = "Updates"
 
@@ -20,8 +23,27 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .keymap: "keyboard"
         case .terminal: "terminal"
         case .lsp: "server.rack"
+        case .go, .rust, .python: "chevron.left.forwardslash.chevron.right"
         case .ai: "wand.and.stars"
         case .updates: "arrow.down.circle"
+        }
+    }
+
+    var languageProviderID: String? {
+        switch self {
+        case .go: "go"
+        case .rust: "rust"
+        case .python: "python"
+        default: nil
+        }
+    }
+
+    var runtimeCommand: String? {
+        switch self {
+        case .go: "go"
+        case .rust: "cargo"
+        case .python: "python3"
+        default: nil
         }
     }
 }

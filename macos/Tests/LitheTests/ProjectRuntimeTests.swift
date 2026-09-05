@@ -13,6 +13,33 @@ struct ProjectRuntimeTests {
 
     @Test
     @MainActor
+    func languageExecutablesPersistPerProjectAndDriveLaunchEnvironment() throws {
+        let store = RuntimeOverrideStore()
+        let locator = SelectedToolRuntimeLocator()
+        let service = ProjectRuntimeService(runtimeLocator: locator, store: store)
+        let first = URL(fileURLWithPath: "/workspace/alpha")
+        let second = URL(fileURLWithPath: "/workspace/beta")
+        service.openProject(at: first)
+        defer { service.closeProject() }
+        try service.setCustomExecutablePath("/toolchains/custom/bin/go", for: "go")
+        #expect(service.executableOnPath("go")?.path == "/toolchains/custom/bin/go")
+        #expect(service.processEnvironment()["PATH"] == "/toolchains/custom/bin:/system/bin")
+        service.openProject(at: second)
+        #expect(service.customExecutablePath(for: "go") == nil)
+        #expect(service.executableOnPath("go")?.path == "/system/bin/go")
+        service.openProject(at: first)
+        #expect(service.executableOnPath("go")?.path == "/toolchains/custom/bin/go")
+        #expect(throws: RunExecutableResolutionError.self) {
+            try service.setCustomExecutablePath("/missing/go", for: "go")
+        }
+        #expect(service.executableOnPath("go")?.path == "/toolchains/custom/bin/go")
+        try service.setCustomExecutablePath("", for: "go")
+        #expect(service.executableOnPath("go")?.path == "/system/bin/go")
+        #expect(service.processEnvironment(overrides: ["PATH": "/run/override"])["PATH"] == "/run/override")
+    }
+
+    @Test
+    @MainActor
     func projectRelativeJavaOverridesResolveAgainstProjectRoot() {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lithe-project-relative-runtime", isDirectory: true)
@@ -102,4 +129,32 @@ private struct EmptyKeyValueStore: KeyValueStore {
     func stringArray(forKey key: String) -> [String]? { nil }
     func set(_ value: Any?, forKey key: String) {}
     func removeObject(forKey key: String) {}
+}
+
+private struct SelectedToolRuntimeLocator: RuntimeLocator {
+    func environment() -> [String: String] { ["PATH": "/system/bin"] }
+    func discover() -> RuntimeDiscoveryResult { RuntimeDiscoveryResult(javaRuntimes: []) }
+    func validJavaHome(path: String) -> URL? { nil }
+    func javaRuntime(at homeURL: URL) -> JavaRuntimeCandidate? { nil }
+    func isExecutable(at url: URL) -> Bool {
+        ["/toolchains/custom/bin/go", "/system/bin/go"].contains(url.path)
+    }
+}
+
+private final class RuntimeOverrideStore: KeyValueStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Any] = [:]
+    func object(forKey key: String) -> Any? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values[key]
+    }
+    func data(forKey key: String) -> Data? { object(forKey: key) as? Data }
+    func string(forKey key: String) -> String? { object(forKey: key) as? String }
+    func stringArray(forKey key: String) -> [String]? { object(forKey: key) as? [String] }
+    func set(_ value: Any?, forKey key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        values[key] = value
+    }
 }
