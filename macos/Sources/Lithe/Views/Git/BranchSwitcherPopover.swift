@@ -5,10 +5,10 @@ struct BranchSwitcherPopover: View {
     enum Metrics {
         static let popupWidth: CGFloat = 375
         static let searchBarHeight: CGFloat = 40
-        static let actionRowHeight: CGFloat = 28
-        static let branchRowHeight: CGFloat = 28
+        static let actionRowHeight = LitheTheme.Metrics.popupRowHeight
+        static let branchRowHeight = LitheTheme.Metrics.popupRowHeight
         static let branchGroupHeaderHeight: CGFloat = 24
-        static let branchListHeight: CGFloat = 280
+        static let maximumBranchListHeight: CGFloat = 280
     }
 
     @EnvironmentObject private var model: AppModel
@@ -34,6 +34,7 @@ struct BranchSwitcherPopover: View {
             branchList
         }
         .frame(width: Metrics.popupWidth, alignment: .leading)
+        .font(LitheTheme.uiFont(size: LitheTheme.Metrics.popupFontSize))
         .background(LitheTheme.popupBackground)
         .onAppear { searchFocused = true }
     }
@@ -82,9 +83,6 @@ struct BranchSwitcherPopover: View {
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: Metrics.searchBarHeight)
-        .background {
-            topRoundedSectionBackground(LitheTheme.toolHeader)
-        }
     }
 
     private var actions: some View {
@@ -147,13 +145,13 @@ struct BranchSwitcherPopover: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .bold))
                 Text(searchQuery.isEmpty ? "Recent" : "Branches")
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(.system(size: 12, weight: .medium))
                 Spacer()
                 if model.isLoadingGitHistory || model.isPerformingBranchOperation {
                     ProgressView().controlSize(.mini)
                 }
             }
-            .foregroundStyle(LitheTheme.primaryText)
+            .foregroundStyle(LitheTheme.secondaryText)
             .padding(.horizontal, 14)
             .frame(height: Metrics.branchGroupHeaderHeight)
 
@@ -187,12 +185,26 @@ struct BranchSwitcherPopover: View {
                     }
                 }
             }
-            .frame(height: Metrics.branchListHeight)
+            .frame(height: branchListHeight)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            bottomRoundedSectionBackground(LitheTheme.sidebar)
+    }
+
+    private var branchListHeight: CGFloat {
+        guard !filteredReferences.isEmpty else { return 64 }
+        if !normalizedQuery.isEmpty {
+            return min(Metrics.maximumBranchListHeight, CGFloat(searchResultRows.count) * Metrics.branchRowHeight + 8)
         }
+        let localChildren = localNamespaceGroups.filter { expandedLocalGroups.contains($0.id) }
+            .reduce(0) { $0 + $1.rows.count }
+        let remoteChildren = remoteRootGroups.filter { expandedRemoteGroups.contains($0.id) }
+            .reduce(0) { $0 + remoteRows(in: $1).count }
+        let rows = recentReferenceRows.count + localRootRows.count + localNamespaceGroups.count
+            + localChildren + remoteRootGroups.count + remoteChildren + tagRows.count
+        let sections = [!localReferences.isEmpty, !remoteRootGroups.isEmpty, !tagRows.isEmpty].filter { $0 }.count
+        let separator: CGFloat = recentReferences.isEmpty ? 0 : 13
+        return min(Metrics.maximumBranchListHeight,
+                   CGFloat(rows) * Metrics.branchRowHeight + CGFloat(sections) * Metrics.branchGroupHeaderHeight + separator + 8)
     }
 
     private func actionRow(
@@ -208,7 +220,7 @@ struct BranchSwitcherPopover: View {
                     .foregroundStyle(LitheTheme.secondaryText)
                     .frame(width: 18)
                 Text(LocalizedStringKey(title))
-                    .font(.system(size: 13))
+                    .font(LitheTheme.uiFont(size: LitheTheme.Metrics.popupFontSize))
                     .foregroundStyle(LitheTheme.primaryText)
                 Spacer()
                 if let shortcut {
@@ -299,7 +311,7 @@ struct BranchSwitcherPopover: View {
                     .foregroundStyle(LitheTheme.secondaryText)
                     .frame(width: 17)
                 Text(group.title)
-                    .font(.system(size: 12.5))
+                    .font(LitheTheme.uiFont(size: LitheTheme.Metrics.popupFontSize))
                     .foregroundStyle(LitheTheme.primaryText)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -333,7 +345,7 @@ struct BranchSwitcherPopover: View {
                     .foregroundStyle(LitheTheme.secondaryText)
                     .frame(width: 17)
                 Text(group.title)
-                    .font(.system(size: 12.5))
+                    .font(LitheTheme.uiFont(size: LitheTheme.Metrics.popupFontSize))
                     .foregroundStyle(LitheTheme.primaryText)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -368,7 +380,7 @@ struct BranchSwitcherPopover: View {
                         .foregroundStyle(highlightsCurrent ? LitheTheme.warning : LitheTheme.secondaryText)
                         .frame(width: 17)
                     Text(branchDisplayName(reference, presentation: presentation))
-                        .font(.system(size: 12.5))
+                        .font(LitheTheme.uiFont(size: LitheTheme.Metrics.popupFontSize))
                         .foregroundStyle(LitheTheme.primaryText)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -397,6 +409,8 @@ struct BranchSwitcherPopover: View {
             },
             menuContent: { branchActionMenu(for: reference) }
         )
+        .accessibilityLabel(branchRowTooltip(reference))
+        .help(branchRowTooltip(reference))
         .disabled(model.isPerformingBranchOperation)
     }
 
@@ -575,30 +589,10 @@ struct BranchSwitcherPopover: View {
         normalizedQuery.isEmpty || title.localizedCaseInsensitiveContains(normalizedQuery)
     }
 
-    private func topRoundedSectionBackground(_ color: Color) -> some View {
-        RoundedRectangle(cornerRadius: LitheTheme.Metrics.popupCornerRadius)
-            .fill(color)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(color)
-                    .frame(height: LitheTheme.Metrics.popupCornerRadius)
-            }
-    }
-
     private var popupDivider: some View {
         Rectangle()
             .fill(LitheTheme.divider.opacity(0.55))
             .frame(height: 1)
-    }
-
-    private func bottomRoundedSectionBackground(_ color: Color) -> some View {
-        RoundedRectangle(cornerRadius: LitheTheme.Metrics.popupCornerRadius)
-            .fill(color)
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(color)
-                    .frame(height: LitheTheme.Metrics.popupCornerRadius)
-            }
     }
 
     private func referenceIcon(_ reference: GitReference, marksCurrent: Bool) -> String {
@@ -630,11 +624,8 @@ struct BranchSwitcherPopover: View {
 /// A branch row that surfaces its actions through a native pop-up menu rather
 /// than a direct checkout.
 ///
-/// Using `SwiftUI.Menu` with `.menuStyle(.borderlessButton)` produces a native
-/// NSMenu, which works correctly inside the outer popover, positions itself to
-/// avoid screen edges, and provides the hover-safety path that IDEA exposes:
-/// once any row's menu is open, moving the cursor to another row opens that
-/// menu immediately without a click.
+/// Draw the row in SwiftUI over the native menu trigger. AppKit otherwise
+/// flattens a Menu label into its title/image and discards the row's layout.
 private struct BranchActionMenuRow<Label: View, MenuContent: View>: View {
     @ViewBuilder let label: () -> Label
     @ViewBuilder let menuContent: () -> MenuContent
@@ -645,14 +636,19 @@ private struct BranchActionMenuRow<Label: View, MenuContent: View>: View {
         SwiftUI.Menu {
             menuContent()
         } label: {
-            label()
-                .background(isHovering ? LitheTheme.subtleSelection : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+            Text("")
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        // Constrain to the list width so the menu button does not stretch.
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity)
+        .frame(height: BranchSwitcherPopover.Metrics.branchRowHeight)
+        .overlay {
+            label()
+                .background(isHovering ? LitheTheme.subtleSelection : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .lithePointer()
         .onHover { isHovering = $0 }
     }

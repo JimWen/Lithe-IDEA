@@ -393,7 +393,7 @@ enum LitheTheme {
         return style
     }
 
-    private static func uiFont(size: CGFloat) -> Font {
+    static func uiFont(size: CGFloat) -> Font {
         if activeTheme != .lithe, NSFont(name: "Inter", size: size) != nil {
             return Font.custom("Inter", size: size)
         }
@@ -425,6 +425,9 @@ enum LitheTheme {
         static let statusBarHeight: CGFloat = 28
         static let cornerRadius: CGFloat = 5
         static let popupCornerRadius: CGFloat = 10
+        static let popupRowHeight: CGFloat = 28
+        static let popupFontSize: CGFloat = 13
+        static let popupDetailFontSize: CGFloat = 11
         static let controlCornerRadius: CGFloat = 6
     }
 }
