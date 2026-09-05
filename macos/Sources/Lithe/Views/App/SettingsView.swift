@@ -26,7 +26,7 @@ struct SettingsView: View {
     @ObservedObject var viewState: SettingsViewState
     let initialCategory: SettingsCategory
     private let onDismiss: (() -> Void)?
-    private static let footerActionLabelWidth: CGFloat = 52
+    private static let footerActionLabelWidth: CGFloat = 40
 
     init(
         settings: AppSettings,
@@ -50,7 +50,7 @@ struct SettingsView: View {
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
             footer
         }
-        .frame(minWidth: 820, minHeight: 620)
+        .frame(minWidth: 800, minHeight: 560)
         .background {
             LitheTheme.settingsSurface
                 .ignoresSafeArea()
@@ -78,7 +78,8 @@ struct SettingsView: View {
     private var categories: some View {
         VStack(spacing: 0) {
             settingsSearchField
-                .padding(12)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
 
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
 
@@ -104,7 +105,7 @@ struct SettingsView: View {
             }
             .litheScrollViewChrome(alwaysShowVertical: true, usesCompactScrollers: true)
         }
-        .frame(width: 244)
+        .frame(width: 248)
         .frame(maxHeight: .infinity)
         .background(LitheTheme.settingsSurface)
     }
@@ -202,7 +203,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(LocalizedStringKey(viewState.selection.rawValue))
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(LitheTheme.primaryText)
                         .padding(.bottom, 8)
 
@@ -216,8 +217,8 @@ struct SettingsView: View {
                     case .updates: updatesSettings
                     }
                 }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 22)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .litheScrollViewChrome(alwaysShowVertical: true, usesCompactScrollers: true)
@@ -1169,26 +1170,26 @@ struct SettingsView: View {
     }
 
     private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 13) {
-            Text(LocalizedStringKey(title))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(LitheTheme.secondaryText)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(LocalizedStringKey(title))
+                    .font(.system(size: 13, weight: .medium))
+                Rectangle().fill(LitheTheme.divider).frame(height: 1)
+            }
             content()
         }
-        .font(.system(size: 12.5))
+        .font(.system(size: 13))
         .foregroundStyle(LitheTheme.primaryText)
-        .padding(.vertical, 16)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(LitheTheme.divider).frame(height: 1)
-        }
     }
 
     private func row<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        HStack {
+        HStack(spacing: 12) {
             Text(LocalizedStringKey(title))
-            Spacer()
+                .frame(width: 170, alignment: .trailing)
             content()
+            Spacer(minLength: 0)
         }
         .frame(minHeight: 28)
     }

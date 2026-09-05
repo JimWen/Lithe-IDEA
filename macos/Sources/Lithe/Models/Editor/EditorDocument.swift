@@ -4,11 +4,14 @@ import Foundation
 final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable {
     enum DocumentError: LocalizedError {
         case readOnly
+        case externalConflict
 
         var errorDescription: String? {
             switch self {
             case .readOnly:
                 "This document is read-only"
+            case .externalConflict:
+                "The file changed on disk. Choose Keep Editor Version or Load Disk Version before saving."
             }
         }
     }

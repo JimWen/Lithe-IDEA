@@ -106,12 +106,9 @@ enum EditorLayoutMetrics {
     }
 }
 
-/// Container-local caret geometry for the custom `CodeTextView` insertion point.
-///
-/// AppKit's default insertion-point drawing is disabled so blink width stays
-/// stable; this helper must still match NSTextView's end-of-line and
-/// end-of-document placement, including the extra line fragment after a
-/// trailing newline.
+/// Container-local insertion geometry for caret decorations and scrolling.
+/// Matches NSTextView's end-of-line and end-of-document placement, including
+/// the extra line fragment after a trailing newline. AppKit owns caret drawing.
 enum EditorCaretGeometry {
     static func rect(
         at location: Int,
@@ -2101,8 +2098,6 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     private var hoveredFoldID: String?
     private var lineIndex = TextLineIndex(source: "" as NSString)
     nonisolated(unsafe) private var windowResignObserver: NSObjectProtocol?
-    private var caretVisible = true
-    private var caretPresentationGeneration = 0
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -2147,6 +2142,25 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     override func paste(_ sender: Any?) {
         if onPasteImage?() == true { return }
         super.paste(sender)
+    }
+
+    override func insertNewline(_ sender: Any?) {
+        super.insertNewline(sender)
+        guard isEditable else { return }
+        // Resolve the extra line fragment before revealing a trailing newline.
+        // The insertion point must stay visible even when AppKit has only sized
+        // the document to the previously laid-out lines.
+        if let textContainer {
+            layoutManager?.ensureLayout(for: textContainer)
+        }
+        synchronizeCaretPresentation()
+        guard let caret = insertionPointRect() else { return }
+        if isVerticallyResizable, frame.height < caret.maxY {
+            setFrameSize(NSSize(width: frame.width, height: caret.maxY + textContainerInset.height))
+        }
+        // A zero-length range at EOF can reveal the preceding glyph instead
+        // of the extra line. Reveal the complete insertion line instead.
+        scrollToVisible(caret)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -2196,31 +2210,13 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         updateInsertionPointStateAndRestartTimer(true)
     }
 
-    override func updateInsertionPointStateAndRestartTimer(_ restartFlag: Bool) {
-        guard restartFlag else { return }
-        caretPresentationGeneration &+= 1
-        let generation = caretPresentationGeneration
-        caretVisible = true
-        needsDisplay = true
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(500)) { [weak self] in
-            self?.startCaretBlinking(for: generation)
-        }
-    }
-
-    private func startCaretBlinking(for generation: Int) {
-        guard generation == caretPresentationGeneration else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(500)) { [weak self] in
-            guard let self, generation == self.caretPresentationGeneration else { return }
-            self.caretVisible.toggle()
-            self.needsDisplay = true
-            self.startCaretBlinking(for: generation)
-        }
-    }
-
-    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn _: Bool) {
-        // The editor paints the caret from draw(_:) so AppKit's independent
-        // insertion-point blink callbacks cannot overwrite its width or phase.
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn: Bool) {
+        // Keep AppKit's selection geometry, invalidation, and blink lifecycle.
+        // Painting from draw(_:) bypasses those updates when Return moves the
+        // insertion point to a newly laid-out line.
+        var caret = rect
+        caret.size.width = EditorLayoutMetrics.caretWidth
+        super.drawInsertionPoint(in: caret, color: color, turnedOn: turnedOn)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -2921,28 +2917,16 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     private func drawCurrentLineBackground(in rect: NSRect) {
-        let source = string as NSString
-        let caret = min(selectedRange().location, source.length)
-        let lineRange = source.lineRange(for: NSRange(location: caret, length: 0))
-        guard let layoutManager,
-              layoutManager.numberOfGlyphs > 0 else { return }
-
-        let glyphRange = layoutManager.glyphRange(
-            forCharacterRange: lineRange,
-            actualCharacterRange: nil
-        )
-        guard glyphRange.location < layoutManager.numberOfGlyphs else { return }
-        let lineRect = layoutManager.lineFragmentRect(
-            forGlyphAt: glyphRange.location,
-            effectiveRange: nil
-        )
+        // Empty documents and the blank line after Return have no glyph range.
+        // Keep the line highlight on the same fragment as the insertion point.
+        guard let lineRect = insertionPointRect() else { return }
         let horizontalInset = EditorLayoutMetrics.currentLineHorizontalInset
         let visibleEditorRect = enclosingScrollView.map {
             convert($0.contentView.bounds, from: $0.contentView).intersection(bounds)
         } ?? bounds
         let currentLineRect = NSRect(
             x: visibleEditorRect.minX + horizontalInset,
-            y: textContainerOrigin.y + lineRect.minY,
+            y: lineRect.minY,
             width: max(0, visibleEditorRect.width - horizontalInset * 2),
             height: lineRect.height
         )
@@ -3037,15 +3021,10 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
                 withAttributes: attributes
             )
         }
-        drawCaret()
     }
 
-    private func drawCaret() {
-        guard caretVisible,
-              window?.firstResponder === self,
-              selectedRange().length == 0,
-              let layoutManager,
-              let textContainer else { return }
+    private func insertionPointRect() -> NSRect? {
+        guard let layoutManager, let textContainer else { return nil }
 
         let sourceLength = string.utf16.count
         let location = min(selectedRange().location, sourceLength)
@@ -3059,13 +3038,10 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
             textContainer: textContainer,
             fallbackLineHeight: fallbackLineHeight
         )
-        let caretRect = containerRect.offsetBy(
+        return containerRect.offsetBy(
             dx: textContainerOrigin.x,
             dy: textContainerOrigin.y
         )
-
-        insertionPointColor.setFill()
-        caretRect.fill()
     }
 
     override func mouseDown(with event: NSEvent) {

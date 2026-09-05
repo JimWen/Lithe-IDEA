@@ -8,13 +8,13 @@ enum WorkbenchLayoutMetrics {
 }
 
 private enum ActivityBarMetrics {
-    static let width: CGFloat = 38
+    static let width: CGFloat = 40
     static let rightWidth = WorkbenchLayoutMetrics.rightActivityBarWidth
     static let buttonWidth: CGFloat = 30
     static let buttonHeight: CGFloat = 30
-    static let spacing: CGFloat = 4
-    static let edgeInset: CGFloat = 4
-    static let toolViewportHeight: CGFloat = 292
+    static let spacing: CGFloat = 10
+    static let edgeInset: CGFloat = 5
+    static let toolViewportHeight: CGFloat = 320
 }
 
 private enum WorkbenchWorkspaceMetrics {
@@ -322,46 +322,6 @@ struct WorkbenchView: View {
                 }
             }
         }
-        .overlay(alignment: .bottomTrailing) {
-            if !model.activeNotifications.isEmpty {
-                VStack(alignment: .trailing, spacing: 8) {
-                    ForEach(model.activeNotifications) { notification in
-                        HStack(alignment: .center, spacing: 10) {
-                            Image(systemName: "info.circle.fill")
-                                .font(.system(size: 14))
-                                .foregroundStyle(LitheTheme.accent)
-                            Text(LocalizedStringKey(notification.message))
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(LitheTheme.primaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 4)
-                            Button {
-                                model.dismissNotification(notification.id)
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(LitheTheme.tertiaryText)
-                            }
-                            .buttonStyle(.plain)
-                            .frame(width: 16, height: 16)
-                            .contentShape(Rectangle())
-                            .litheRowHover(cornerRadius: LitheTheme.Metrics.cornerRadius, animation: nil)
-                            .accessibilityLabel("Dismiss notification")
-                        }
-                        .padding(.leading, 12)
-                        .padding(.trailing, 6)
-                        .padding(.vertical, 10)
-                        .frame(minWidth: 280, maxWidth: 360, alignment: .topLeading)
-                        .background(LitheTheme.notificationBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
-                        .contentShape(RoundedRectangle(cornerRadius: 7))
-                    }
-                }
-                .onHover { model.setNotificationStackHovered($0) }
-                .padding(.trailing, WorkbenchLayoutMetrics.rightActivityBarWidth + 12)
-                .padding(.bottom, 38)
-            }
-        }
         .overlay {
             if model.isSearchEverywhereVisible {
                 SearchEverywhereView()
@@ -505,10 +465,10 @@ struct WorkbenchView: View {
                 )
             } label: {
                 HStack(spacing: 8) {
-                    LitheLogo(size: 24)
+                    ProjectBadge(name: model.projectName)
 
                     Text(model.projectName)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(LitheTheme.primaryText)
                         .lineLimit(1)
 
@@ -544,7 +504,7 @@ struct WorkbenchView: View {
                 HStack(spacing: 7) {
                     LitheIDEAIcon(
                         resourcePath: "toolwindows/toolWindowVcs.svg",
-                        size: 14,
+                        size: 16,
                         fallbackSystemImage: "point.3.connected.trianglepath.dotted"
                     )
                         .foregroundStyle(LitheTheme.secondaryText)
@@ -952,12 +912,12 @@ struct WorkbenchView: View {
                                 if let ideaAssetPath = destination.ideaAssetPath {
                                     LitheIDEAIcon(
                                         resourcePath: ideaAssetPath,
-                                        size: 18,
+                                        size: 20,
                                         fallbackSystemImage: destination.systemImage
                                     )
                                 } else {
                                     Image(systemName: destination.systemImage)
-                                        .font(.system(size: 16, weight: .medium))
+                                        .font(.system(size: 18, weight: .regular))
                                 }
                             }
                                 .frame(
@@ -1033,7 +993,7 @@ struct WorkbenchView: View {
     }
 
     private var pluginActivityBar: some View {
-        VStack {
+        VStack(spacing: ActivityBarMetrics.spacing) {
             Button {
                 isNotificationCenterPresented.toggle()
                 if isNotificationCenterPresented {
@@ -1042,6 +1002,7 @@ struct WorkbenchView: View {
             } label: {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: unreadNotificationCount > 0 ? "bell.fill" : "bell")
+                        .font(.system(size: 18))
                         .frame(width: ActivityBarMetrics.buttonWidth, height: ActivityBarMetrics.buttonHeight)
                         .litheRowHover(
                             isActive: isNotificationCenterPresented,
@@ -1077,6 +1038,7 @@ struct WorkbenchView: View {
                    renderer.isVisible(model) {
                     Button { moduleUIRegistry.perform(contribution, model: model) } label: {
                         Image(systemName: contribution.icon ?? "rectangle.rightthird.inset.filled")
+                            .font(.system(size: 18))
                             .frame(width: ActivityBarMetrics.buttonWidth, height: ActivityBarMetrics.buttonHeight)
                             .litheRowHover(
                                 isActive: renderer.isSelected(model),
@@ -1105,6 +1067,7 @@ struct WorkbenchView: View {
             }
             Button { isPluginPanelPresented.toggle() } label: {
                 Image(systemName: "puzzlepiece.extension")
+                    .font(.system(size: 18))
                     .frame(width: ActivityBarMetrics.buttonWidth, height: ActivityBarMetrics.buttonHeight)
                     .litheRowHover(isActive: isPluginPanelPresented, cornerRadius: 4, activeBackground: LitheTheme.subtleSelection)
             }
@@ -1488,12 +1451,6 @@ struct WorkbenchView: View {
         }
     }
 
-    private var projectInitials: String {
-        let words = model.projectName.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-        let initials = words.prefix(2).compactMap(\.first)
-        return initials.isEmpty ? "LI" : String(initials).uppercased()
-    }
-
     private func restoreLayout() {
         guard !didRestoreLayout, let workspaceURL = model.workspaceURL else { return }
         let layout = model.loadWorkbenchLayout(for: workspaceURL)
@@ -1565,16 +1522,8 @@ private struct WorkbenchNotificationCenterView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(model.notifications) { notification in
                             HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: "info.circle.fill")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(LitheTheme.accent)
-                                    .padding(.top, 2)
-
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(LocalizedStringKey(notification.message))
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(LitheTheme.primaryText)
-                                        .fixedSize(horizontal: false, vertical: true)
+                                    WorkbenchNotificationContent(notification: notification)
 
                                     Text(notification.createdAt.formatted(date: .omitted, time: .shortened))
                                         .font(.system(size: 10.5))
@@ -1595,7 +1544,7 @@ private struct WorkbenchNotificationCenterView: View {
                 }
             }
         }
-        .frame(width: 340, height: 360)
+        .frame(width: 400, height: 420)
         .background(LitheTheme.raised)
         .onAppear {
             model.markAllNotificationsRead()

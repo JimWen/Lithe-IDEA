@@ -36,20 +36,33 @@ enum LitheFeatureAvailability {
     static let githubPullRequests = false
 }
 
+enum WorkbenchNotificationSeverity: Equatable {
+    case information
+    case success
+    case warning
+    case error
+}
+
 struct WorkbenchNotification: Identifiable, Equatable {
     let id: UUID
     let message: String
+    let title: String?
+    let severity: WorkbenchNotificationSeverity
     let createdAt: Date
     var isRead: Bool
 
     init(
         id: UUID = UUID(),
         message: String,
+        title: String? = nil,
+        severity: WorkbenchNotificationSeverity = .information,
         createdAt: Date = Date(),
         isRead: Bool = false
     ) {
         self.id = id
         self.message = message
+        self.title = title
+        self.severity = severity
         self.createdAt = createdAt
         self.isRead = isRead
     }

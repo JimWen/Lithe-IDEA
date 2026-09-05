@@ -559,7 +559,7 @@ struct LitheApp: App {
             .environmentObject(updateChecker)
             .environment(\.locale, settings.language.locale)
         }
-        .defaultSize(width: 1040, height: 720)
+        .defaultSize(width: 980, height: 720)
         .windowResizability(.contentMinSize)
     }
 

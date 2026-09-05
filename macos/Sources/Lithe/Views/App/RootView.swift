@@ -25,6 +25,10 @@ struct RootView: View {
             minHeight: windowLayout.minimumContentSize.height
         )
         .background(LitheTheme.window)
+        .overlay(alignment: .bottomTrailing) {
+            WorkbenchNotificationStack()
+                .environmentObject(projectSessions.activeModel)
+        }
         .sheet(item: $projectSessions.pendingProjectOpen) { request in
             OpenProjectLocationDialog(request: request) { placement, doNotAskAgain in
                 projectSessions.resolvePendingOpen(

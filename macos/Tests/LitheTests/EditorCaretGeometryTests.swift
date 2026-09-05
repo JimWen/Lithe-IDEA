@@ -8,6 +8,155 @@ import Testing
 struct EditorCaretGeometryTests {
     @MainActor
     @Test
+    func nativeInsertionPointDrawingFollowsReturn() throws {
+        let textView = makeLaidOutEditor(text: "first")
+        textView.isRichText = false
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+        let layoutManager = try #require(textView.layoutManager)
+        let textContainer = try #require(textView.textContainer)
+        let fallback = layoutManager.defaultLineHeight(for: textView.font!)
+        func paintedCaretRows() throws -> Set<Int> {
+            let caret = EditorCaretGeometry.rect(
+                at: textView.selectedRange().location, sourceLength: textView.string.utf16.count,
+                layoutManager: layoutManager, textContainer: textContainer, fallbackLineHeight: fallback
+            ).offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+            let bitmap = try #require(NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: 640, pixelsHigh: 240,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+            ))
+            let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+            NSGraphicsContext.saveGraphicsState()
+            defer { NSGraphicsContext.restoreGraphicsState() }
+            NSGraphicsContext.current = context
+            context.cgContext.clear(CGRect(x: 0, y: 0, width: 640, height: 240))
+            // Exercise the callback AppKit uses after updating its insertion
+            // point; a no-op override leaves no caret at the new position.
+            textView.drawInsertionPoint(in: caret, color: .magenta, turnedOn: true)
+            context.flushGraphics()
+            return Set((0..<240).filter { row in
+                let color = bitmap.colorAt(x: Int(caret.minX), y: row)
+                return (color?.alphaComponent ?? 0) > 0.5
+                    && (color?.redComponent ?? 0) > 0.5
+                    && (color?.blueComponent ?? 0) > 0.5
+            })
+        }
+        let previousRows = try paintedCaretRows()
+        textView.insertNewline(nil)
+        let newRows = try paintedCaretRows()
+        #expect(!previousRows.isEmpty)
+        #expect(!newRows.isEmpty)
+        #expect(previousRows.isDisjoint(with: newRows))
+    }
+
+    @MainActor
+    @Test
+    func returnKeepsTheNewLineVisibleAtTheBottomOfTheEditor() throws {
+        let textView = makeLaidOutEditor(text: String(repeating: "line\n", count: 60))
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 120))
+        LitheTextViewportLayout.applyUnwrappedScrolling(to: textView, in: scrollView)
+        scrollView.documentView = textView
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scrollView
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        textView.isRichText = false
+        window.makeFirstResponder(textView)
+        textView.sizeToFit()
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+        textView.scrollRangeToVisible(textView.selectedRange())
+        let layoutManager = try #require(textView.layoutManager)
+        let textContainer = try #require(textView.textContainer)
+        for _ in 0..<3 {
+            textView.insertNewline(nil)
+            let caret = EditorCaretGeometry.rect(
+                at: textView.selectedRange().location, sourceLength: textView.string.utf16.count,
+                layoutManager: layoutManager, textContainer: textContainer,
+                fallbackLineHeight: layoutManager.defaultLineHeight(for: textView.font!)
+            ).offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+            // AppKit may shift the document frame while resizing it. Compare
+            // both rectangles in text-view coordinates, not clip-view space.
+            let viewport = textView.convert(scrollView.contentView.bounds, from: scrollView.contentView)
+            #expect(caret.minY >= viewport.minY)
+            #expect(caret.maxY <= viewport.maxY + 1)
+        }
+    }
+
+    @MainActor
+    @Test(arguments: ["", "first", "first\n"])
+    func liveEditorReturnKeepsSelectionAndCaretAfterHighlighting(initialText: String) throws {
+        let store = CaretTestStore()
+        let settings = AppSettings(store: store)
+        let services = MacServiceContainer(store: store, settings: settings, moduleLaunchMode: .safeMode).services
+        let model = AppModel(settings: settings, services: services)
+        let document = EditorDocument(
+            url: URL(fileURLWithPath: "/workspace/return.txt"),
+            text: initialText,
+            modificationDate: nil
+        )
+        let textView = makeLaidOutEditor(text: initialText)
+        textView.isRichText = false
+        let coordinator = CodeEditorView.Coordinator(
+            document: document, model: model, markdownScrollPosition: nil,
+            viewportStore: EditorViewportStore()
+        )
+        coordinator.textView = textView
+        textView.delegate = coordinator
+        defer { textView.delegate = nil }
+        let layoutManager = try #require(textView.layoutManager)
+        let textContainer = try #require(textView.textContainer)
+        let fallback = layoutManager.defaultLineHeight(for: textView.font!)
+        textView.setSelectedRange(NSRange(location: initialText.utf16.count, length: 0))
+        var previousY = EditorCaretGeometry.rect(
+            at: textView.selectedRange().location, sourceLength: textView.string.utf16.count,
+            layoutManager: layoutManager, textContainer: textContainer, fallbackLineHeight: fallback
+        ).minY
+        for _ in 0..<3 {
+            textView.insertNewline(nil)
+            let caret = EditorCaretGeometry.rect(
+                at: textView.selectedRange().location, sourceLength: textView.string.utf16.count,
+                layoutManager: layoutManager, textContainer: textContainer, fallbackLineHeight: fallback
+            )
+            #expect(document.text == textView.string)
+            #expect(textView.selectedRange().location == textView.string.utf16.count)
+            #expect(caret.minY > previousY)
+            previousY = caret.minY
+        }
+    }
+
+    @MainActor
+    @Test(arguments: ["", "first", "first\n", "first\nsecond"])
+    func typingReturnMovesTheCaretToEachNewLine(initialText: String) throws {
+        let textView = makeLaidOutEditor(text: initialText)
+        textView.isRichText = false
+        let layoutManager = try #require(textView.layoutManager)
+        let textContainer = try #require(textView.textContainer)
+        let fallback = layoutManager.defaultLineHeight(for: textView.font!)
+        textView.setSelectedRange(NSRange(location: initialText.utf16.count, length: 0))
+        func caretRect() -> NSRect {
+            EditorCaretGeometry.rect(
+                at: textView.selectedRange().location,
+                sourceLength: textView.string.utf16.count,
+                layoutManager: layoutManager,
+                textContainer: textContainer,
+                fallbackLineHeight: fallback
+            )
+        }
+        var previous = caretRect()
+        for _ in 0..<3 {
+            textView.insertNewline(nil)
+            let next = caretRect()
+            #expect(textView.selectedRange().location == textView.string.utf16.count)
+            #expect(next.minY > previous.minY)
+            previous = next
+        }
+    }
+
+    @MainActor
+    @Test
     func caretAfterLastCharacterSitsPastTheFinalGlyphWhenFileHasNoTrailingNewline() throws {
         let textView = makeLaidOutEditor(text: "DP_LOAD_BALANCE_PORT=18081")
         let layoutManager = try #require(textView.layoutManager)
@@ -173,4 +322,13 @@ struct EditorCaretGeometryTests {
         }
         return textView
     }
+}
+
+private final class CaretTestStore: KeyValueStore, @unchecked Sendable {
+    private var values: [String: Any] = [:]
+    func data(forKey key: String) -> Data? { values[key] as? Data }
+    func object(forKey key: String) -> Any? { values[key] }
+    func string(forKey key: String) -> String? { values[key] as? String }
+    func stringArray(forKey key: String) -> [String]? { values[key] as? [String] }
+    func set(_ value: Any?, forKey key: String) { values[key] = value }
 }

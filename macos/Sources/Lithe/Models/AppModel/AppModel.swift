@@ -541,6 +541,9 @@ final class AppModel: ObservableObject, Identifiable {
                 } else if self.standaloneFileURL != nil {
                     self.performCloseStandaloneFile()
                 }
+            },
+            notifyFailure: { [weak self] title, message in
+                self?.showNotification(message, severity: .error, title: title)
             }
         )
         documentFeatureObservation = documentFeature.objectWillChange.sink { [weak self] _ in

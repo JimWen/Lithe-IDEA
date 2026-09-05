@@ -61,6 +61,7 @@ final class DocumentFeatureModel: ObservableObject {
     private var autoSaveEnabledProvider: (@MainActor () -> Bool)?
     private var autoSaveDelayProvider: (@MainActor () -> TimeInterval)?
     private var notify: (@MainActor (String) -> Void)?
+    private var notifyFailure: (@MainActor (String, String) -> Void)?
     private var onDocumentOpened: (@MainActor (EditorDocument) -> Void)?
     private var onDocumentChanged: (@MainActor (EditorDocument) -> Void)?
     private var onDocumentClosed: (@MainActor (EditorDocument) -> Void)?
@@ -103,12 +104,14 @@ final class DocumentFeatureModel: ObservableObject {
         onRecordDiscard: @escaping @MainActor (EditorDocument) -> Void,
         onRecordExternalChanges: @escaping @MainActor ([URL]) -> Void,
         onDocumentCollectionChanged: @escaping @MainActor () -> Void,
-        onProjectCloseReady: @escaping @MainActor () -> Void
+        onProjectCloseReady: @escaping @MainActor () -> Void,
+        notifyFailure: (@MainActor (String, String) -> Void)? = nil
     ) {
         self.workspaceURLProvider = workspaceURLProvider
         self.autoSaveEnabledProvider = autoSaveEnabledProvider
         self.autoSaveDelayProvider = autoSaveDelayProvider
         self.notify = notify
+        self.notifyFailure = notifyFailure
         self.onDocumentOpened = onDocumentOpened
         self.onDocumentChanged = onDocumentChanged
         self.onDocumentClosed = onDocumentClosed
@@ -492,10 +495,11 @@ final class DocumentFeatureModel: ObservableObject {
         } else {
             do {
                 let previousText = document.savedText
-                try saveDocument(document)
-                onRecordSave?(document, previousText)
+                if try saveDocument(document) {
+                    onRecordSave?(document, previousText)
+                }
             } catch {
-                notify?("Could not save \(document.url.lastPathComponent)")
+                reportSaveFailure(document, error: error)
                 return
             }
         }
@@ -526,9 +530,11 @@ final class DocumentFeatureModel: ObservableObject {
         for document in openDocuments where document.isDirty {
             do {
                 let previousText = document.savedText
-                try saveDocument(document)
-                onRecordSave?(document, previousText)
+                if try saveDocument(document) {
+                    onRecordSave?(document, previousText)
+                }
             } catch {
+                reportSaveFailure(document, error: error)
                 return false
             }
         }
@@ -543,11 +549,11 @@ final class DocumentFeatureModel: ObservableObject {
         }
         do {
             let previousText = document.savedText
-            try saveDocument(document)
-            onRecordSave?(document, previousText)
-            notify?("Saved \(document.url.lastPathComponent)")
+            if try saveDocument(document) {
+                onRecordSave?(document, previousText)
+            }
         } catch {
-            notify?("Could not save \(document.url.lastPathComponent)")
+            reportSaveFailure(document, error: error)
         }
     }
 
@@ -565,10 +571,11 @@ final class DocumentFeatureModel: ObservableObject {
             guard !Task.isCancelled, let self, let document, document.isDirty else { return }
             do {
                 let previousText = document.savedText
-                try self.saveDocument(document)
-                self.onRecordSave?(document, previousText)
+                if try self.saveDocument(document) {
+                    self.onRecordSave?(document, previousText)
+                }
             } catch {
-                self.notify?("Could not auto-save \(document.url.lastPathComponent)")
+                self.reportSaveFailure(document, error: error, automatic: true)
             }
             self.autoSaveTasks[document.id] = nil
         }
@@ -686,7 +693,8 @@ final class DocumentFeatureModel: ObservableObject {
         activeDocumentID = preferredDocumentID
     }
 
-    private func saveDocument(_ document: EditorDocument) throws {
+    @discardableResult
+    private func saveDocument(_ document: EditorDocument) throws -> Bool {
         guard !document.isReadOnly else { throw EditorDocument.DocumentError.readOnly }
         let operationID = UUID().uuidString
         let saving = try documentLifecycleDecider.decide(
@@ -694,11 +702,19 @@ final class DocumentFeatureModel: ObservableObject {
             event: .saveStarted(operationID: operationID),
             operationID: operationID
         )
-        guard saving.action == .writeToDisk else {
-            document.applyLifecycleState(saving.state)
+        document.applyLifecycleState(saving.state)
+        switch saving.action {
+        case .writeToDisk:
+            break
+        case .none where saving.state.status == .clean || saving.state.status == .saving:
+            // A repeated Save after auto-save is successful without another write.
+            // An in-flight save retains ownership of its completion and history.
+            return false
+        case .showConflict:
+            throw EditorDocument.DocumentError.externalConflict
+        default:
             throw CocoaError(.userCancelled)
         }
-        document.applyLifecycleState(saving.state)
 
         do {
             if let workspaceURLProvider,
@@ -706,10 +722,11 @@ final class DocumentFeatureModel: ObservableObject {
                let relativePath = workspaceRelativePath(for: document.url, root: workspaceURL),
                operations.writeFile(document.text, at: workspaceURL, relativePath: relativePath) {
                 try completeSave(document, operationID: operationID)
-                return
+                return true
             }
             try fileOperations.writeText(document.text, to: document.url)
             try completeSave(document, operationID: operationID)
+            return true
         } catch let saveError {
             do {
                 let failed = try documentLifecycleDecider.decide(
@@ -727,6 +744,17 @@ final class DocumentFeatureModel: ObservableObject {
                 )
             }
             throw saveError
+        }
+    }
+
+    private func reportSaveFailure(_ document: EditorDocument, error: Error, automatic: Bool = false) {
+        let title = automatic
+            ? "Could not auto-save \(document.displayName)"
+            : "Could not save \(document.displayName)"
+        if let notifyFailure {
+            notifyFailure(title, error.localizedDescription)
+        } else {
+            notify?("\(title): \(error.localizedDescription)")
         }
     }
 

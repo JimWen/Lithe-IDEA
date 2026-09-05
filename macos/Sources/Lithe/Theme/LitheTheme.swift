@@ -412,9 +412,9 @@ enum LitheTheme {
         static let projectTreeSelectionCornerRadius: CGFloat = 4
         static let treeIconSize: CGFloat = 16
         static let treeFontSize: CGFloat = 13.5
-        static let tabHeight: CGFloat = 34
+        static let tabHeight: CGFloat = 40
         static let toolbarHeight: CGFloat = 40
-        static let toolWindowHeaderHeight: CGFloat = 30
+        static let toolWindowHeaderHeight: CGFloat = 40
         static let statusBarHeight: CGFloat = 24
         static let cornerRadius: CGFloat = 5
         static let popupCornerRadius: CGFloat = 10

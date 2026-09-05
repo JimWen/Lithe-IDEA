@@ -1,13 +1,24 @@
 import Foundation
 
 private enum WorkbenchNotificationTiming {
-    static let displayDuration: Duration = .seconds(4)
     static let maximumVisibleCount = 3
+
+    static func displayDuration(for notification: WorkbenchNotification) -> Duration {
+        switch notification.severity {
+        case .error: .seconds(12)
+        case .warning: .seconds(8)
+        case .information, .success: .seconds(4)
+        }
+    }
 }
 
 extension AppModel {
-    func showNotification(_ message: String) {
-        let notification = WorkbenchNotification(message: message)
+    func showNotification(
+        _ message: String,
+        severity: WorkbenchNotificationSeverity = .information,
+        title: String? = nil
+    ) {
+        let notification = WorkbenchNotification(message: message, title: title, severity: severity)
         notifications.insert(notification, at: 0)
         if notifications.count > 100 {
             notifications.removeLast(notifications.count - 100)
@@ -19,11 +30,11 @@ extension AppModel {
             cancelNotificationDismissal(for: removed.id)
         }
         if areNotificationsHovered {
-            notificationRemainingDurations[notification.id] = WorkbenchNotificationTiming.displayDuration
+            notificationRemainingDurations[notification.id] = WorkbenchNotificationTiming.displayDuration(for: notification)
         } else {
             scheduleNotificationDismissal(
                 for: notification,
-                after: WorkbenchNotificationTiming.displayDuration
+                after: WorkbenchNotificationTiming.displayDuration(for: notification)
             )
         }
     }
@@ -45,7 +56,7 @@ extension AppModel {
         } else {
             for notification in activeNotifications {
                 let remaining = notificationRemainingDurations.removeValue(forKey: notification.id)
-                    ?? WorkbenchNotificationTiming.displayDuration
+                    ?? WorkbenchNotificationTiming.displayDuration(for: notification)
                 scheduleNotificationDismissal(for: notification, after: remaining)
             }
         }

@@ -3187,6 +3187,81 @@ private final class DatabaseTestSecureStore: SecureStore, DatabaseSecureStore, @
 @Suite("Editor documents")
 @MainActor
 struct EditorDocumentTests {
+    @Test(arguments: [false, true])
+    func repeatedSaveIsSilentAndWritesOnlyDirtyContent(editBeforeSaving: Bool) async throws {
+        let fixture = try DocumentSaveFixture()
+        defer { fixture.cleanUp() }
+        var notifications: [String] = []
+        var savedRevisions: [String] = []
+        let model = fixture.makeFeature(
+            notify: { notifications.append($0) },
+            recordSave: { _, previous in savedRevisions.append(previous) }
+        )
+        defer { model.reset() }
+        await model.openFileAsync(fixture.file, isReadOnly: false, displayPath: nil, activateWhenReady: true)
+        let document = try #require(model.activeDocument)
+        if editBeforeSaving { document.applyLiveEditorText("changed\n") }
+
+        model.saveActiveDocument()
+        model.saveActiveDocument()
+        try model.save(document)
+
+        #expect(notifications.isEmpty)
+        #expect(savedRevisions == (editBeforeSaving ? ["original\n"] : []))
+        #expect(!document.isDirty)
+        #expect(try String(contentsOf: fixture.file, encoding: .utf8) == document.text)
+    }
+
+    @Test
+    func saveFailureKeepsTheEditorDirtyAndReportsTheUnderlyingError() async throws {
+        let fixture = try DocumentSaveFixture()
+        defer { fixture.cleanUp() }
+        var notifications: [String] = []
+        var saveCount = 0
+        let model = fixture.makeFeature(
+            notify: { notifications.append($0) },
+            recordSave: { _, _ in saveCount += 1 }
+        )
+        defer { model.reset() }
+        await model.openFileAsync(fixture.file, isReadOnly: false, displayPath: nil, activateWhenReady: true)
+        let document = try #require(model.activeDocument)
+        document.applyLiveEditorText("keep this edit")
+        // A removed parent deterministically fails the real filesystem write.
+        document.relocate(to: fixture.root.appendingPathComponent("removed/file.txt"))
+        model.saveActiveDocument()
+
+        #expect(document.isDirty)
+        #expect(document.text == "keep this edit")
+        #expect(document.savedText == "original\n")
+        #expect(saveCount == 0)
+        #expect(notifications.count == 1)
+        #expect(notifications.first?.hasPrefix("Could not save file.txt: ") == true)
+        #expect((notifications.first?.count ?? 0) > "Could not save file.txt: ".count)
+    }
+
+    @Test
+    func savingAnExternalConflictRequiresAnExplicitResolution() async throws {
+        let fixture = try DocumentSaveFixture()
+        defer { fixture.cleanUp() }
+        var notifications: [String] = []
+        let model = fixture.makeFeature(notify: { notifications.append($0) })
+        defer { model.reset() }
+        await model.openFileAsync(fixture.file, isReadOnly: false, displayPath: nil, activateWhenReady: true)
+        let document = try #require(model.activeDocument)
+        document.applyLiveEditorText("editor version")
+        let decision = try RustDocumentLifecycleDecider(core: RustCoreBridge()).decide(
+            state: document.lifecycleState,
+            event: .externalChanged,
+            operationID: "external-change"
+        )
+        document.applyLifecycleState(decision.state)
+        model.saveActiveDocument()
+
+        #expect(document.hasExternalConflict)
+        #expect(try String(contentsOf: fixture.file, encoding: .utf8) == "original\n")
+        #expect(notifications.first?.contains("Keep Editor Version") == true)
+    }
+
     @Test
     func documentTracksDirtyStateAndSaves() throws {
         let url = FileManager.default.temporaryDirectory
@@ -4656,6 +4731,57 @@ struct EditorDocumentTests {
         store.retain(documentIDs: [retainedID])
         #expect(store.state(for: retainedID).selectionLocation == 18)
         #expect(store.state(for: closedID) == EditorViewportState())
+    }
+}
+
+@MainActor
+private struct DocumentSaveFixture {
+    let root: URL
+    let file: URL
+
+    init() throws {
+        #expect(RustCoreBridge().isAvailable)
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("lithe-save-\(UUID().uuidString)")
+        file = root.appendingPathComponent("file.txt")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        do {
+            try "original\n".write(to: file, atomically: true, encoding: .utf8)
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
+    }
+
+    func cleanUp() {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func makeFeature(
+        notify: @escaping @MainActor (String) -> Void,
+        recordSave: @escaping @MainActor (EditorDocument, String) -> Void = { _, _ in }
+    ) -> DocumentFeatureModel {
+        let model = DocumentFeatureModel(
+            operations: EmptyWorkspaceOperations(readFileValue: "original\n"),
+            documentLifecycleDecider: RustDocumentLifecycleDecider(core: RustCoreBridge()),
+            fileOperations: MacWorkspaceFileOperations(),
+            fileStorage: InMemoryFileStorage(),
+            binaryFileViewerRegistry: BinaryFileViewerRegistry()
+        )
+        model.configure(
+            workspaceURLProvider: { root },
+            autoSaveEnabledProvider: { false },
+            autoSaveDelayProvider: { 0 },
+            notify: notify,
+            onDocumentOpened: { _ in },
+            onDocumentChanged: { _ in },
+            onDocumentClosed: { _ in },
+            onRecordSave: recordSave,
+            onRecordDiscard: { _ in },
+            onRecordExternalChanges: { _ in },
+            onDocumentCollectionChanged: {},
+            onProjectCloseReady: {}
+        )
+        return model
     }
 }
 
