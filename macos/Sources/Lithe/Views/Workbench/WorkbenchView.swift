@@ -19,7 +19,7 @@ private enum ActivityBarMetrics {
 
 private enum WorkbenchWorkspaceMetrics {
     static let paneInset: CGFloat = 0
-    static let paneSpacing: CGFloat = 6
+    static let paneSpacing: CGFloat = 1
     static let paneCornerRadius: CGFloat = 10
 }
 
@@ -33,9 +33,6 @@ struct WorkbenchView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarWidth: CGFloat = 320
     @State private var rightSidebarWidth: CGFloat = 380
-    @State private var hoveredRightSidebarContributionID: String?
-    @State private var isRightSidebarPanelHovered = false
-    @State private var rightSidebarDismissTask: Task<Void, Never>?
     @State private var topPaneHeight: CGFloat?
     @State private var isBranchSwitcherPresented = false
     @State private var newBranchReference: GitReference?
@@ -906,18 +903,7 @@ struct WorkbenchView: View {
                     .foregroundStyle(renderer.isSelected(model) ? LitheTheme.primaryText : LitheTheme.secondaryText)
                     .help(contribution.title)
                     .accessibilityLabel(contribution.title)
-                    .onHover { isHovering in
-                        if isHovering {
-                            rightSidebarDismissTask?.cancel()
-                            hoveredRightSidebarContributionID = contribution.id
-                            if !renderer.isSelected(model) {
-                                moduleUIRegistry.perform(contribution, model: model)
-                            }
-                        } else {
-                            hoveredRightSidebarContributionID = nil
-                            scheduleRightSidebarDismissal()
-                        }
-                    }
+
                 }
             }
             Button { isPluginPanelPresented.toggle() } label: {
@@ -971,14 +957,7 @@ struct WorkbenchView: View {
                         ? .opacity
                         : .move(edge: .trailing).combined(with: .opacity)
                 )
-                .onHover { isHovering in
-                    isRightSidebarPanelHovered = isHovering
-                    if isHovering {
-                        rightSidebarDismissTask?.cancel()
-                    } else {
-                        scheduleRightSidebarDismissal()
-                    }
-                }
+
             }
             pluginActivityBar
         }
@@ -987,18 +966,6 @@ struct WorkbenchView: View {
             reduceMotion ? nil : .easeOut(duration: 0.14),
             value: isRightSidebarVisible
         )
-    }
-
-    private func scheduleRightSidebarDismissal() {
-        rightSidebarDismissTask?.cancel()
-        rightSidebarDismissTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 60_000_000)
-            guard !Task.isCancelled,
-                  hoveredRightSidebarContributionID == nil,
-                  !isRightSidebarPanelHovered else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.10)) {
-            }
-        }
     }
 
     private var isRightSidebarVisible: Bool {
@@ -1504,16 +1471,16 @@ private struct WorkbenchWorkspaceSplitView<Sidebar: View, Editor: View, BottomTo
                             .frame(width: resolvedSidebarWidth)
                             .frame(maxHeight: .infinity)
                             .workbenchPaneChrome(
-                                background: hasWorkbenchBackground ? Color.clear : LitheTheme.editor,
+                                background: hasWorkbenchBackground ? Color.clear : LitheTheme.sidebar,
                                 surrounding: hasWorkbenchBackground ? Color.clear : LitheTheme.titlebar,
-                                roundsCorners: !hasWorkbenchBackground
+                                roundsCorners: false
                             )
                         editor
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .workbenchPaneChrome(
                                 background: hasWorkbenchBackground ? Color.clear : LitheTheme.editor,
                                 surrounding: hasWorkbenchBackground ? Color.clear : LitheTheme.titlebar,
-                                roundsCorners: !hasWorkbenchBackground
+                                roundsCorners: false
                             )
                     }
                     .padding(.horizontal, WorkbenchWorkspaceMetrics.paneInset)
@@ -1538,7 +1505,7 @@ private struct WorkbenchWorkspaceSplitView<Sidebar: View, Editor: View, BottomTo
                             .workbenchPaneChrome(
                                 background: hasWorkbenchBackground ? Color.clear : LitheTheme.editor,
                                 surrounding: hasWorkbenchBackground ? Color.clear : LitheTheme.titlebar,
-                                roundsCorners: !hasWorkbenchBackground
+                                roundsCorners: false
                             )
                             .padding(.horizontal, WorkbenchWorkspaceMetrics.paneInset)
                             .padding(.bottom, WorkbenchWorkspaceMetrics.paneInset)

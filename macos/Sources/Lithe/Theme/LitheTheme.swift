@@ -417,7 +417,7 @@ enum LitheTheme {
         static let projectTabHeight: CGFloat = 30
         static let toolbarHeight: CGFloat = 40
         static let toolWindowHeaderHeight: CGFloat = 40
-        static let statusBarHeight: CGFloat = 24
+        static let statusBarHeight: CGFloat = 28
         static let cornerRadius: CGFloat = 5
         static let popupCornerRadius: CGFloat = 10
         static let controlCornerRadius: CGFloat = 6

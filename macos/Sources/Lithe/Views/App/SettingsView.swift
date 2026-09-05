@@ -226,7 +226,7 @@ struct SettingsView: View {
     }
 
     private var generalSettings: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             group("Appearance") {
                 row("Color theme") {
                     LitheSettingsSelect(
@@ -494,7 +494,7 @@ struct SettingsView: View {
     }
 
     private var editorSettings: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             group("Display") {
                 row("Font size") {
                     LitheSettingsStepper(
@@ -568,7 +568,7 @@ struct SettingsView: View {
     }
 
     private var aiSettings: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             group("AI provider") {
                 if settings.commitMessageAI.providers.isEmpty {
                     Text("No AI provider is configured yet.")
@@ -1066,7 +1066,7 @@ struct SettingsView: View {
     }
 
     private var updatesSettings: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             group("Application version") {
                 row("Current version") {
                     Text(updateChecker.currentVersion)

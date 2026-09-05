@@ -53,12 +53,12 @@ struct LitheSettingsSearchField: View {
 }
 
 struct LitheSettingsSelect<Value: Hashable>: View {
+    @Environment(\.locale) private var locale
     @Binding private var selection: Value
     private let options: [Value]
     private let width: CGFloat
     private let accessibilityLabel: String
     private let title: (Value) -> String
-    @State private var isPresented = false
 
     init(
         selection: Binding<Value>,
@@ -75,74 +75,58 @@ struct LitheSettingsSelect<Value: Hashable>: View {
     }
 
     var body: some View {
-        Button {
-            isPresented.toggle()
-        } label: {
-            HStack(spacing: 8) {
-                Text(LocalizedStringKey(title(selection)))
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(LitheTheme.primaryText)
-                    .lineLimit(1)
-
-                Spacer(minLength: 8)
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(LitheTheme.secondaryText)
-                    .rotationEffect(.degrees(isPresented ? 180 : 0))
-            }
-            .padding(.horizontal, 9)
-            .frame(width: width, height: 30, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: LitheTheme.Metrics.controlCornerRadius)
-                    .fill(LitheTheme.settingsControlBackground)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: LitheTheme.Metrics.controlCornerRadius)
-                    .stroke(isPresented ? LitheTheme.inputFocusBorder : LitheTheme.inputBorder, lineWidth: 1)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .lithePointer()
-        .accessibilityLabel(Text(LocalizedStringKey(accessibilityLabel)))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            VStack(spacing: 2) {
-                ForEach(options, id: \.self) { option in
-                    Button {
-                        selection = option
-                        isPresented = false
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(LitheTheme.accent)
-                                .frame(width: 14)
-                                .opacity(selection == option ? 1 : 0)
-
-                            Text(LocalizedStringKey(title(option)))
-                                .font(.system(size: 12.5))
-                                .foregroundStyle(LitheTheme.primaryText)
-                                .lineLimit(1)
-
-                            Spacer(minLength: 8)
-                        }
-                        .padding(.horizontal, 8)
-                        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-                        .litheRowHover(
-                            isActive: selection == option,
-                            activeBackground: LitheTheme.subtleSelection
-                        )
-                        .contentShape(Rectangle())
+        Menu {
+            ForEach(options, id: \.self) { option in
+                Button {
+                    selection = option
+                } label: {
+                    HStack {
+                        Text(verbatim: localizedTitle(option))
+                        if selection == option { Image(systemName: "checkmark") }
                     }
-                    .buttonStyle(LitheTreeRowButtonStyle())
-                    .lithePointer()
                 }
             }
-            .padding(5)
-            .frame(width: width)
-            .lithePopupChrome(cornerRadius: LitheTheme.Metrics.controlCornerRadius)
+        } label: {
+            Text(verbatim: localizedTitle(selection))
+                .lineLimit(1)
         }
+        .font(.system(size: 13))
+        .foregroundStyle(LitheTheme.primaryText)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        // AppKit extracts the native menu label. Size and chrome must wrap
+        // the menu itself instead of being discarded inside that label.
+        .padding(.leading, 9)
+        .frame(width: width, height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: LitheTheme.Metrics.controlCornerRadius)
+                .fill(LitheTheme.settingsControlBackground)
+        )
+        .overlay(alignment: .trailing) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(LitheTheme.secondaryText)
+                .padding(.trailing, 9)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: LitheTheme.Metrics.controlCornerRadius)
+                .stroke(LitheTheme.inputBorder, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .contentShape(Rectangle())
+        .lithePointer()
+        .accessibilityLabel(Text(LocalizedStringKey(accessibilityLabel)))
+    }
+
+    private func localizedTitle(_ option: Value) -> String {
+        // Native menu windows may resolve their own system locale. Resolve
+        // labels using the settings page's language before crossing that boundary.
+        let bundle = Bundle.main.path(forResource: locale.identifier, ofType: "lproj")
+            .flatMap(Bundle.init(path:)) ?? .main
+        let key = title(option)
+        return bundle.localizedString(forKey: key, value: key, table: nil)
     }
 }
 
