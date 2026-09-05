@@ -5,11 +5,61 @@ import SwiftUI
 /// Session ownership remains unchanged when AppKit merges or detaches tabs.
 @MainActor
 final class ProjectWindowPresentation: ObservableObject {
+    @MainActor
     private final class WindowReference {
         weak var window: NSWindow?
         weak var observedGroup: NSWindowTabGroup?
         var groupObservation: NSKeyValueObservation?
-        init(_ window: NSWindow) { self.window = window }
+        private weak var newTabButton: NSControl?
+        private var windowUpdateObserver: NSObjectProtocol?
+
+        init(_ window: NSWindow) {
+            self.window = window
+            windowUpdateObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didUpdateNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.hideNewTabButton() }
+            }
+        }
+
+        private func hideNewTabButton() {
+            guard let window else { return }
+            if let newTabButton, newTabButton.window === window {
+                if !newTabButton.isHidden { newTabButton.isHidden = true }
+                if newTabButton.isEnabled { newTabButton.isEnabled = false }
+                return
+            }
+            guard window.tabGroup?.isTabBarVisible == true,
+                  let frame = window.contentView?.superview else { return }
+
+            // AppKit exposes no add-tab visibility property. Identify only the
+            // native control's action, then use NSView.isHidden; never invoke
+            // private APIs or remove AppKit-owned views/constraints. AppKit may
+            // route through its internal forwarding action instead of the public
+            // responder action. If that changes, leave unknown controls intact.
+            func findButton(in view: NSView) -> NSControl? {
+                guard view !== window.contentView else { return nil }
+                if let control = view as? NSControl, let action = control.action,
+                   action == #selector(NSResponder.newWindowForTab(_:)) ||
+                   NSStringFromSelector(action) == "_newTabWithinWindow:" {
+                    return control
+                }
+                for child in view.subviews {
+                    if let button = findButton(in: child) { return button }
+                }
+                return nil
+            }
+            newTabButton = findButton(in: frame)
+            if let newTabButton {
+                newTabButton.isHidden = true
+                newTabButton.isEnabled = false
+                newTabButton.setAccessibilityElement(false)
+            }
+        }
+
+        deinit {
+            if let windowUpdateObserver { NotificationCenter.default.removeObserver(windowUpdateObserver) }
+        }
     }
 
     private var windows: [UUID: WindowReference] = [:]
