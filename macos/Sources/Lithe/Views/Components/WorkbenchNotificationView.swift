@@ -22,6 +22,7 @@ extension WorkbenchNotificationSeverity {
 
 struct WorkbenchNotificationContent: View {
     let notification: WorkbenchNotification
+    var maximumMessageLines: Int? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -35,11 +36,13 @@ struct WorkbenchNotificationContent: View {
                     Text(LocalizedStringKey(title))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(LitheTheme.primaryText)
+                        .lineLimit(2)
                 }
                 Text(LocalizedStringKey(notification.message))
                     .font(.system(size: 13))
                     .foregroundStyle(LitheTheme.primaryText)
                     .textSelection(.enabled)
+                    .lineLimit(maximumMessageLines)
             }
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -51,14 +54,28 @@ struct WorkbenchNotificationContent: View {
 /// actionable failures remain readable and are also retained in Notifications.
 struct WorkbenchNotificationStack: View {
     @EnvironmentObject private var model: AppModel
+    @State private var expandedNotification: WorkbenchNotification?
 
     var body: some View {
         if !model.activeNotifications.isEmpty {
             VStack(alignment: .trailing, spacing: 8) {
                 ForEach(model.activeNotifications) { notification in
                     HStack(alignment: .top, spacing: 4) {
-                        WorkbenchNotificationContent(notification: notification)
-                            .padding(.vertical, 4)
+                        VStack(alignment: .leading, spacing: 6) {
+                            WorkbenchNotificationContent(notification: notification, maximumMessageLines: 4)
+                            if notification.severity == .error || notification.message.count > 100
+                                || notification.message.contains("\n") {
+                                Button("Details") {
+                                    expandedNotification = notification
+                                    model.setNotificationStackHovered(true)
+                                }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 12))
+                                .foregroundStyle(LitheTheme.accent)
+                                .padding(.leading, 30)
+                            }
+                        }
+                        .padding(.vertical, 4)
                         Button {
                             model.dismissNotification(notification.id)
                         } label: {
@@ -81,7 +98,18 @@ struct WorkbenchNotificationStack: View {
                     .accessibilityElement(children: .contain)
                 }
             }
-            .onHover { model.setNotificationStackHovered($0) }
+            .onHover { model.setNotificationStackHovered($0 || expandedNotification != nil) }
+            .popover(item: $expandedNotification, arrowEdge: .leading) { notification in
+                ScrollView {
+                    WorkbenchNotificationContent(notification: notification)
+                        .padding(16)
+                }
+                .frame(width: 420, height: 280)
+                .background(LitheTheme.notificationBackground)
+            }
+            .onChange(of: expandedNotification?.id) { id in
+                if id == nil { model.setNotificationStackHovered(false) }
+            }
             .padding(.trailing, model.workspaceURL == nil ? 12 : WorkbenchLayoutMetrics.rightActivityBarWidth + 12)
             .padding(.bottom, model.workspaceURL == nil ? 12 : LitheTheme.Metrics.statusBarHeight + 12)
         }

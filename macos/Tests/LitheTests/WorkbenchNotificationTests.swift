@@ -6,6 +6,26 @@ import Testing
 @MainActor
 struct WorkbenchNotificationTests {
     @Test
+    func errorDetailsRemainAvailableAfterThePopupIsDismissed() {
+        let store = WorkbenchNotificationTestStore()
+        let settings = AppSettings(store: store)
+        let model = AppModel(settings: settings, services: MacServiceContainer(
+            store: store, settings: settings, moduleLaunchMode: .safeMode
+        ).services)
+        defer { model.clearNotifications() }
+        let details = String(repeating: "The file is read-only.\n", count: 40)
+        model.showNotification(details, severity: .error, title: "Could not save file.txt")
+        let notification = model.activeNotifications.first
+        #expect(notification?.title == "Could not save file.txt")
+        #expect(notification?.severity == .error)
+        #expect(notification?.message == details)
+        if let id = notification?.id { model.dismissNotification(id) }
+        #expect(model.activeNotifications.isEmpty)
+        #expect(model.notifications.first?.message == details)
+        #expect(model.notifications.first?.severity == .error)
+    }
+
+    @Test
     func notificationsAreNewestFirstReadableBoundedAndClearable() {
         let store = WorkbenchNotificationTestStore()
         let settings = AppSettings(store: store)

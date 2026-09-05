@@ -1269,7 +1269,7 @@ struct CodeEditorView: NSViewRepresentable {
                     textView.window?.makeFirstResponder(textView)
                     model.showNotification("Saved image to \(result.relativePath)")
                 } catch {
-                    model.showNotification("Could not paste image: \(error.localizedDescription)")
+                    model.showNotification(error.localizedDescription, severity: .error, title: "Could not paste image")
                 }
             }
             return true

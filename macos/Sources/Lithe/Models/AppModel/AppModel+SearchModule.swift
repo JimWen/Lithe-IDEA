@@ -125,7 +125,7 @@ extension AppModel {
         searchFeature.clearProjectReplacementPreview()
         selectedProjectReplacementPaths = []
         await refreshWorkspace()
-        if !result.failedFiles.isEmpty { showNotification("Could not replace in \(result.failedFiles.count) file(s)") }
+        if !result.failedFiles.isEmpty { showNotification("Could not replace in \(result.failedFiles.count) file(s)", severity: .error) }
         else if result.changedFiles > 0 { showNotification("Replaced text in \(result.changedFiles) file(s)") }
     }
 

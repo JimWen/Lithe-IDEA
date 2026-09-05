@@ -371,7 +371,7 @@ extension AppModel {
                 try saveDocument(activeDocument)
                 recordSave(activeDocument, previousText: previousText)
             } catch {
-                showNotification("Could not save \(activeDocument.url.lastPathComponent)")
+                showNotification(error.localizedDescription, severity: .error, title: "Could not save \(activeDocument.url.lastPathComponent)")
                 return
             }
         }
@@ -670,7 +670,7 @@ extension AppModel {
                 projectFiles: projectFiles,
                 workspaceURL: workspaceURL
             ) else {
-                showNotification("Could not find the Java source for \(configuration.name)")
+                showNotification("Could not find the Java source for \(configuration.name)", severity: .error)
                 return
             }
             sourceURL = resolved
@@ -856,7 +856,7 @@ extension AppModel {
                     try saveDocument(document)
                     recordSave(document, previousText: previousText)
                 } catch {
-                    showNotification("Could not save \(document.url.lastPathComponent)")
+                    showNotification(error.localizedDescription, severity: .error, title: "Could not save \(document.url.lastPathComponent)")
                     return
                 }
             }
@@ -1197,7 +1197,7 @@ extension AppModel {
                 try saveDocument(document)
                 recordSave(document, previousText: previousText)
             } catch {
-                showNotification("Could not save \(document.url.lastPathComponent)")
+                showNotification(error.localizedDescription, severity: .error, title: "Could not save \(document.url.lastPathComponent)")
                 return
             }
         }
@@ -1866,7 +1866,7 @@ extension AppModel {
             }
             return true
         } catch {
-            showNotification("Could not apply language edit: \(error.localizedDescription)")
+            showNotification(error.localizedDescription, severity: .error, title: "Could not apply language edit")
             return false
         }
     }
