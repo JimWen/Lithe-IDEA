@@ -33,9 +33,9 @@ private enum MarkdownViewMode: String, CaseIterable, Identifiable, Equatable {
 
     var symbolName: String {
         switch self {
-        case .editor: "pencil.line"
+        case .editor: "text.alignleft"
         case .split: "rectangle.split.2x1"
-        case .preview: "doc.richtext"
+        case .preview: "photo"
         }
     }
 }
@@ -56,7 +56,6 @@ struct EditorAreaView: View {
     @State private var markdownViewModes: [UUID: MarkdownViewMode] = [:]
     @State private var markdownScrollPositions: [UUID: MarkdownScrollPosition] = [:]
     @State private var editorViewportStore = EditorViewportStore()
-    @State private var hoveredMarkdownMode: MarkdownViewMode?
     @State private var resolvedJavaDocumentIconKinds: [String: LitheIconKind] = [:]
 
     var body: some View {
@@ -164,13 +163,13 @@ struct EditorAreaView: View {
         HStack(alignment: .top, spacing: 0) {
             editorTabLayout
                 .frame(maxWidth: .infinity, alignment: .leading)
+            EditorOpenTabsMenu(selectedTab: selectedTab)
             if let document = model.activeDocument,
                model.activeEditorTerminalSession == nil,
                isMarkdownFile(document),
                splitDocumentID == nil {
                 markdownModePicker
             }
-            EditorOpenTabsMenu(selectedTab: selectedTab)
         }
         .frame(minHeight: LitheTheme.Metrics.tabHeight, alignment: .top)
         .overlay(alignment: .bottom) {
@@ -1004,52 +1003,28 @@ struct EditorAreaView: View {
     }
 
     private var markdownModePicker: some View {
-        HStack(spacing: 1) {
+        HStack(spacing: 2) {
             ForEach(MarkdownViewMode.allCases) { mode in
                 let isSelected = selectedMarkdownMode == mode
-                let isHovered = hoveredMarkdownMode == mode
-
                 Button {
                     selectMarkdownMode(mode)
                 } label: {
                     Image(systemName: mode.symbolName)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(isSelected || isHovered ? LitheTheme.primaryText : LitheTheme.secondaryText)
-                        .frame(width: 29, height: 20)
-                        .background(
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(
-                                    isSelected
-                                        ? LitheTheme.selection.opacity(0.82)
-                                        : (isHovered ? LitheTheme.hoverBackground : .clear)
-                                )
-                        )
-                        .opacity(isSelected || isHovered ? 1 : 0.72)
-                        .contentShape(Rectangle())
+                        .font(.system(size: LitheTheme.Metrics.toolbarIconSize))
+                        .foregroundStyle(LitheTheme.secondaryText)
+                        .frame(width: 24, height: 24)
+                        .litheRowHover(isActive: isSelected, cornerRadius: 4,
+                            activeBackground: LitheTheme.hoverBackground)
                 }
                 .buttonStyle(.plain)
                 .lithePointer()
                 .help(mode.title)
-                .onHover { isHovering in
-                    if isHovering {
-                        hoveredMarkdownMode = mode
-                    } else if hoveredMarkdownMode == mode {
-                        hoveredMarkdownMode = nil
-                    }
-                }
+                .accessibilityLabel(mode.title)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
-        .padding(2)
-        .background(
-            RoundedRectangle(cornerRadius: LitheTheme.Metrics.cornerRadius)
-                .fill(LitheTheme.inputBackground)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: LitheTheme.Metrics.cornerRadius)
-                .stroke(LitheTheme.divider, lineWidth: 1)
-        }
-        .frame(width: 104, height: 26)
-        .padding(.horizontal, 7)
+        .padding(.horizontal, 6)
+        .frame(height: LitheTheme.Metrics.tabHeight)
     }
 
     private var selectedMarkdownMode: MarkdownViewMode {

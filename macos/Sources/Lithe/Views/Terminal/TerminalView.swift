@@ -67,6 +67,7 @@ struct TerminalView: View {
                 }
             } label: {
                 Image(systemName: "chevron.down")
+                    .font(.system(size: 10))
             }
             .menuStyle(.borderlessButton)
             .lithePointer()
@@ -98,6 +99,7 @@ struct TerminalView: View {
                 }
             } label: {
                 LitheSystemIcon(systemImage: "ellipsis.vertical")
+                    .font(.system(size: LitheTheme.Metrics.toolbarIconSize))
             }
             .menuStyle(.borderlessButton)
             .lithePointer()

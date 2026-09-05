@@ -22,7 +22,6 @@ struct SplitHandleView: View {
     @State private var isHovering = false
     @State private var isDragging = false
     @State private var dragScheduler = LitheDragUpdateScheduler()
-    @State private var cursor = SplitHandleCursor()
 
     init(
         axis: LitheSplitAxis,
@@ -60,7 +59,7 @@ struct SplitHandleView: View {
                 .onChanged { value in
                     if !isDragging {
                         isDragging = true
-                        cursor.update(isResizing: true, cursor: resizeCursor)
+                        resizeCursor.set()
                         onDragStarted()
                     }
                     let currentTranslation = axis == .horizontal ? value.translation.width : value.translation.height
@@ -78,18 +77,17 @@ struct SplitHandleView: View {
                         : value.translation.height
                     dragScheduler.cancel()
                     isDragging = false
-                    cursor.update(isResizing: isHovering, cursor: resizeCursor)
+                    if isHovering { resizeCursor.set() }
                     onDragEnded(finalTranslation)
                 }
         )
         .onHover { isInside in
             guard isInside != isHovering else { return }
             isHovering = isInside
-            cursor.update(isResizing: isInside || isDragging, cursor: resizeCursor)
         }
+        .background(SplitHandleCursorRegion(cursor: resizeCursor))
         .onDisappear {
             dragScheduler.cancel()
-            cursor.update(isResizing: false, cursor: resizeCursor)
         }
         .help(axis == .horizontal ? "Drag left or right to resize" : "Drag up or down to resize")
         .accessibilityLabel(axis == .horizontal ? "Horizontal pane resize handle" : "Vertical pane resize handle")
@@ -139,17 +137,47 @@ struct SplitHandleView: View {
     }
 }
 
-private final class SplitHandleCursor {
-    private var isResizing = false
+/// Native text and terminal views reset the cursor while moving across a
+/// divider. Register the entire hit region with AppKit instead of pushing a
+/// cursor only once when SwiftUI reports a hover transition.
+struct SplitHandleCursorRegion: NSViewRepresentable {
+    let cursor: NSCursor
 
-    @MainActor
-    func update(isResizing newValue: Bool, cursor: NSCursor) {
-        guard newValue != isResizing else { return }
-        isResizing = newValue
-        if newValue {
-            cursor.push()
-        } else {
-            NSCursor.pop()
+    func makeNSView(context: Context) -> CursorView { CursorView(cursor: cursor) }
+
+    func updateNSView(_ view: CursorView, context: Context) {
+        view.cursor = cursor
+        view.window?.invalidateCursorRects(for: view)
+    }
+
+    final class CursorView: NSView {
+        var cursor: NSCursor
+        private var tracking: NSTrackingArea?
+
+        init(cursor: NSCursor) {
+            self.cursor = cursor
+            super.init(frame: .zero)
         }
+
+        required init?(coder: NSCoder) { nil }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: cursor)
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let tracking { removeTrackingArea(tracking) }
+            let area = NSTrackingArea(rect: .zero,
+                options: [.activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved, .cursorUpdate],
+                owner: self, userInfo: nil)
+            addTrackingArea(area)
+            tracking = area
+        }
+
+        override func cursorUpdate(with event: NSEvent) { cursor.set() }
+        override func mouseEntered(with event: NSEvent) { cursor.set() }
+        override func mouseMoved(with event: NSEvent) { cursor.set() }
     }
 }

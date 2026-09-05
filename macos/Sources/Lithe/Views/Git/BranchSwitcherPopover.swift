@@ -4,11 +4,11 @@ import LitheGitModule
 struct BranchSwitcherPopover: View {
     enum Metrics {
         static let popupWidth: CGFloat = 375
-        static let searchBarHeight: CGFloat = 56
-        static let actionRowHeight: CGFloat = 30
+        static let searchBarHeight: CGFloat = 40
+        static let actionRowHeight: CGFloat = 28
         static let branchRowHeight: CGFloat = 28
         static let branchGroupHeaderHeight: CGFloat = 24
-        static let branchListHeight: CGFloat = 240
+        static let branchListHeight: CGFloat = 280
     }
 
     @EnvironmentObject private var model: AppModel
@@ -34,14 +34,7 @@ struct BranchSwitcherPopover: View {
             branchList
         }
         .frame(width: Metrics.popupWidth, alignment: .leading)
-        .litheRoundedControlBackground(
-            LitheTheme.popupBackground,
-            cornerRadius: LitheTheme.Metrics.popupCornerRadius
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: LitheTheme.Metrics.popupCornerRadius)
-                .stroke(LitheTheme.panelBorder, lineWidth: 1)
-        }
+        .background(LitheTheme.popupBackground)
         .onAppear { searchFocused = true }
     }
 
@@ -70,14 +63,7 @@ struct BranchSwitcherPopover: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 30)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(LitheTheme.popupBackground)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(LitheTheme.panelBorder, lineWidth: 1)
-                    }
-            )
+
 
             Button(action: onManageBranches) {
                 LitheSystemIcon(systemImage: "arrow.up.left.and.arrow.down.right")
@@ -93,8 +79,7 @@ struct BranchSwitcherPopover: View {
             .foregroundStyle(LitheTheme.secondaryText)
             .help("Git branch options")
         }
-        .padding(.leading, 13)
-        .padding(.trailing, 13)
+        .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: Metrics.searchBarHeight)
         .background {
@@ -219,7 +204,7 @@ struct BranchSwitcherPopover: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 12))
+                    .font(.system(size: LitheTheme.Metrics.toolbarIconSize))
                     .foregroundStyle(LitheTheme.secondaryText)
                     .frame(width: 18)
                 Text(LocalizedStringKey(title))

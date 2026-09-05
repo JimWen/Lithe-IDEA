@@ -6,6 +6,8 @@ struct GitLogView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.controlActiveState) private var controlActiveState
+    @State private var hoveredToolTab: GitToolTab?
     @State private var localExpanded = true
     @State private var remoteExpanded = true
     @State private var tagsExpanded = true
@@ -326,13 +328,6 @@ struct GitLogView: View {
 
     private var toolWindowHeader: some View {
         HStack(spacing: 4) {
-            LitheIDEAIcon(
-                resourcePath: "toolwindows/toolWindowVcs.svg",
-                size: 14,
-                fallbackSystemImage: "point.3.connected.trianglepath.dotted"
-            )
-            .foregroundStyle(LitheTheme.secondaryText)
-
             Text("Git")
                 .font(GitVisual.title)
                 .foregroundStyle(LitheTheme.primaryText)
@@ -344,8 +339,7 @@ struct GitLogView: View {
             )
             gitToolTabButton(
                 .worktrees,
-                title: "Worktrees",
-                detail: model.gitRepositoryRoot?.path
+                title: "Worktrees"
             )
             gitToolTabButton(.console, title: "Console")
 
@@ -384,6 +378,7 @@ struct GitLogView: View {
             .menuStyle(.borderlessButton)
             .lithePointer()
             .frame(width: 28, height: 28)
+            .menuIndicator(.hidden)
             .help("Git tool window actions")
 
             Spacer(minLength: 12)
@@ -398,7 +393,7 @@ struct GitLogView: View {
         }
         .padding(.leading, 12)
         .padding(.trailing, 7)
-        .frame(height: 32)
+        .frame(height: LitheTheme.Metrics.toolWindowHeaderHeight)
         .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.toolHeader)
         .overlay(alignment: .bottom) {
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
@@ -434,7 +429,7 @@ struct GitLogView: View {
                 .lineLimit(1)
                 .padding(.leading, 9)
                 .padding(.trailing, showsCloseButton ? 4 : 9)
-                .frame(height: 27)
+                .frame(height: LitheTheme.Metrics.toolWindowHeaderHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -447,7 +442,7 @@ struct GitLogView: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 8.5, weight: .semibold))
                         .foregroundStyle(LitheTheme.secondaryText)
-                        .frame(width: 20, height: 27)
+                        .frame(width: 20, height: LitheTheme.Metrics.toolWindowHeaderHeight)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -455,12 +450,15 @@ struct GitLogView: View {
                 .help("Close Git console")
             }
         }
-        .background(isSelected ? LitheTheme.subtleSelection : .clear)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
-        .overlay {
-            RoundedRectangle(cornerRadius: 5)
-                .stroke(isSelected ? LitheTheme.inputFocusBorder.opacity(0.72) : .clear, lineWidth: 1)
+        .background(hoveredToolTab == tab ? LitheTheme.hoverBackground : .clear)
+        .overlay(alignment: .bottom) {
+            if isSelected {
+                Rectangle()
+                    .fill(controlActiveState == .inactive ? LitheTheme.secondaryText.opacity(0.6) : LitheTheme.tabUnderline)
+                    .frame(height: LitheTheme.Metrics.tabUnderlineHeight)
+            }
         }
+        .onHover { hoveredToolTab = $0 ? tab : nil }
     }
 
     private var gitConsolePane: some View {

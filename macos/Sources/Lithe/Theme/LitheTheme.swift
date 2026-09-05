@@ -418,6 +418,8 @@ enum LitheTheme {
         static let tabUnderlineHeight: CGFloat = 3
         static let projectTabFontSize: CGFloat = 12
         static let projectTabHeight: CGFloat = 30
+        static let toolbarIconSize: CGFloat = 14
+        static let toolbarButtonSize: CGFloat = 28
         static let toolbarHeight: CGFloat = 40
         static let toolWindowHeaderHeight: CGFloat = 40
         static let statusBarHeight: CGFloat = 28
@@ -465,8 +467,9 @@ struct LitheIconButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .font(.system(size: LitheTheme.Metrics.toolbarIconSize, weight: .regular))
             .foregroundStyle(LitheTheme.toolWindowText)
-            .frame(width: 28, height: 28)
+            .frame(width: LitheTheme.Metrics.toolbarButtonSize, height: LitheTheme.Metrics.toolbarButtonSize)
             .background(
                 RoundedRectangle(cornerRadius: LitheTheme.Metrics.cornerRadius)
                     .fill(

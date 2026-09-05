@@ -43,9 +43,8 @@ struct EditorOpenTabsMenu: View {
                 .help(entry.detail)
             }
         } label: {
-            Image(systemName: "ellipsis")
-                .rotationEffect(.degrees(90))
-                .font(.system(size: 13, weight: .semibold))
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(LitheTheme.secondaryText)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
