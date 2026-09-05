@@ -288,7 +288,7 @@ fn detected_services_produce_runnable_launch_plans() {
 #[test]
 fn every_builtin_detector_produces_a_launch_plan() {
     let root = temporary_root("detect-all-launch-plans");
-    for directory in ["node", "python", "rust/src", "go", "gradle", "maven"] {
+    for directory in ["node", "python", "rust/src", "go", "gradle"] {
         fs::create_dir_all(root.join(directory)).unwrap();
     }
     fs::write(
@@ -315,17 +315,7 @@ fn every_builtin_detector_produces_a_launch_plan() {
     fs::write(root.join("go/main.go"), "package main\nfunc main() {}\n").unwrap();
     fs::write(
         root.join("gradle/build.gradle"),
-        "plugins { id 'org.springframework.boot' version '3.2.0' }\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>root</artifactId><packaging>pom</packaging><modules><module>maven</module></modules></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join("maven/pom.xml"),
-        "<project><artifactId>maven-app</artifactId><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
+        "plugins { id 'application' version '3.2.0' }\n",
     )
     .unwrap();
     fs::write(
@@ -351,7 +341,7 @@ fn every_builtin_detector_produces_a_launch_plan() {
     fs::create_dir_all(root.join(".lithe/toolchains")).unwrap();
     fs::write(
         root.join(".lithe/toolchains/requirements.json"),
-        r#"{"version":1,"toolchains":{"project-jdk":{"type":"java"},"project-maven":{"type":"maven","java":"project-jdk"},"project-gradle":{"type":"gradle","java":"project-jdk"}}}"#,
+        r#"{"version":1,"toolchains":{"project-jdk":{"type":"java"},"project-gradle":{"type":"gradle","java":"project-jdk"}}}"#,
     )
     .unwrap();
 
@@ -362,8 +352,7 @@ fn every_builtin_detector_produces_a_launch_plan() {
         ("python.script", "python.script:python/python-app"),
         ("cargo.binary", "cargo.binary:rust/rust-app"),
         ("go.main", "go.main:go/go"),
-        ("gradle.service", "gradle.service:gradle/bootRun"),
-        ("spring-boot.maven", "spring-boot.maven:maven-app"),
+        ("gradle.application", "gradle.application:gradle/run"),
         ("make.target", "make.target:serve"),
         ("just.recipe", "just.recipe:watch"),
     ] {
@@ -448,13 +437,8 @@ fn detectors_extend_a_java_project_without_disturbing_its_configurations() {
     )
     .unwrap();
     fs::write(
-        root.join("backend-api/pom.xml"),
-        "<project><artifactId>backend-api</artifactId><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
-    )
-    .unwrap();
-    fs::write(
         module.join("BackendApplication.java"),
-        "package com.demo;\n@SpringBootApplication\npublic class BackendApplication { public static void main(String[] a) {} }\n",
+        "package com.demo;\n\npublic class BackendApplication { public static void main(String[] a) {} }\n",
     )
     .unwrap();
     fs::write(
@@ -485,7 +469,7 @@ fn detectors_extend_a_java_project_without_disturbing_its_configurations() {
         .collect::<Vec<_>>();
 
     assert!(
-        ids.contains(&"spring-boot.maven:backend-api".to_string()),
+        ids.contains(&"java-main:com.demo.BackendApplication".to_string()),
         "{ids:?}"
     );
     assert!(
@@ -493,44 +477,41 @@ fn detectors_extend_a_java_project_without_disturbing_its_configurations() {
         "{ids:?}"
     );
     // The Java entries stay toolchain-backed; only the detected ones are
-    // process-based. A regression here would send npm through Maven.
+    // process-based. A regression here would send npm through Java.
     let java = configurations
         .iter()
-        .find(|item| item["id"] == "spring-boot.maven:backend-api")
+        .find(|item| item["id"] == "java-main:com.demo.BackendApplication")
         .unwrap();
     assert!(java["command"].is_null());
-    assert_eq!(java["toolchains"]["maven"], "project-maven");
-    // The plugin says the module is a service; the annotation is still the only
-    // place its main class is named, so the two judgements have to meet.
+    assert_eq!(java["toolchains"]["java"], "project-jdk");
+    // Source scanning retains the declared main class without a build framework.
     assert_eq!(
-        java["extensions"]["maven"]["mainClass"],
+        java["extensions"]["java"]["mainClass"],
         "com.demo.BackendApplication"
     );
 
     fs::remove_dir_all(root).unwrap();
 }
 
-/// A Gradle Spring Boot project is the second most common way a Java service is
-/// built, and it carries no pom for the Java scan to read. Without a detector the
-/// service list is empty and the project looks unsupported.
+/// A Gradle application is runnable through its declared application plugin.
 #[test]
-fn gradle_detector_finds_a_spring_boot_service() {
+fn gradle_detector_finds_an_application() {
     let root = temporary_root("detect-gradle-boot");
     fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("build.gradle"),
-        "plugins {\n  id 'org.springframework.boot' version '3.2.0'\n  id 'java'\n}\n",
+        "plugins {\n  id 'application' version '3.2.0'\n  id 'java'\n}\n",
     )
     .unwrap();
 
     let boot = generated_configurations(&root)
         .into_iter()
-        .find(|item| item["id"] == "gradle.service:bootRun")
+        .find(|item| item["id"] == "gradle.application:run")
         .unwrap();
 
     assert_eq!(boot["command"], "gradle");
-    assert_eq!(boot["args"], serde_json::json!(["bootRun"]));
-    assert_eq!(boot["execution"], "service");
+    assert_eq!(boot["args"], serde_json::json!(["run"]));
+    assert_eq!(boot["execution"], "application");
     assert_eq!(boot["cwd"], ".");
     assert_eq!(boot["source"], "build.gradle");
 
@@ -545,15 +526,15 @@ fn gradle_detector_reads_the_kotlin_dsl() {
     fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("build.gradle.kts"),
-        "plugins {\n  id(\"org.springframework.boot\") version \"3.2.0\"\n}\n",
+        "plugins {\n  id(\"application\") version \"3.2.0\"\n}\n",
     )
     .unwrap();
 
     let boot = generated_configurations(&root)
         .into_iter()
-        .find(|item| item["id"] == "gradle.service:bootRun")
+        .find(|item| item["id"] == "gradle.application:run")
         .unwrap();
-    assert_eq!(boot["execution"], "service");
+    assert_eq!(boot["execution"], "application");
     assert_eq!(boot["source"], "build.gradle.kts");
 
     fs::remove_dir_all(root).unwrap();
@@ -574,7 +555,7 @@ fn gradle_detector_runs_subproject_tasks_from_the_build_root() {
     .unwrap();
     fs::write(
         root.join("services/orders/build.gradle"),
-        "plugins {\n  id 'org.springframework.boot'\n}\n",
+        "plugins {\n  id 'application'\n}\n",
     )
     .unwrap();
     fs::write(
@@ -586,7 +567,7 @@ fn gradle_detector_runs_subproject_tasks_from_the_build_root() {
     let configurations = generated_configurations(&root);
     let orders = configurations
         .iter()
-        .find(|item| item["id"] == "gradle.service:services:orders")
+        .find(|item| item["id"] == "gradle.application:services:orders")
         .unwrap_or_else(|| {
             panic!(
                 "missing orders service in {:?}",
@@ -597,16 +578,13 @@ fn gradle_detector_runs_subproject_tasks_from_the_build_root() {
             )
         });
 
-    assert_eq!(
-        orders["args"],
-        serde_json::json!([":services:orders:bootRun"])
-    );
+    assert_eq!(orders["args"], serde_json::json!([":services:orders:run"]));
     assert_eq!(orders["cwd"], ".");
-    assert_eq!(orders["execution"], "service");
+    assert_eq!(orders["execution"], "application");
 
     let shipping = configurations
         .iter()
-        .find(|item| item["provider"] == "gradle.application")
+        .find(|item| item["id"] == "gradle.application:services:shipping")
         .unwrap();
     assert_eq!(
         shipping["args"],
@@ -630,23 +608,23 @@ fn gradle_detector_keeps_same_named_modules_under_different_parents() {
     for module in ["internal/orders", "public/orders"] {
         fs::write(
             root.join(module).join("build.gradle"),
-            "plugins {\n  id 'org.springframework.boot'\n}\n",
+            "plugins {\n  id 'application'\n}\n",
         )
         .unwrap();
     }
 
     let arguments = generated_configurations(&root)
         .iter()
-        .filter(|item| item["provider"] == "gradle.service")
+        .filter(|item| item["provider"] == "gradle.application")
         .map(|item| item["args"][0].as_str().unwrap().to_string())
         .collect::<Vec<_>>();
 
     assert!(
-        arguments.contains(&":internal:orders:bootRun".to_string()),
+        arguments.contains(&":internal:orders:run".to_string()),
         "{arguments:?}"
     );
     assert!(
-        arguments.contains(&":public:orders:bootRun".to_string()),
+        arguments.contains(&":public:orders:run".to_string()),
         "{arguments:?}"
     );
 
@@ -686,7 +664,7 @@ fn gradle_detector_ignores_commented_plugins() {
     fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("build.gradle"),
-        "plugins {\n  // id 'org.springframework.boot'\n  id 'java-library'\n}\n",
+        "plugins {\n  // id 'application'\n  id 'java-library'\n}\n",
     )
     .unwrap();
 
@@ -712,7 +690,7 @@ fn gradle_projects_require_a_jdk_without_replacing_the_path_command() {
     fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("build.gradle"),
-        "plugins {\n  id 'org.springframework.boot'\n}\n",
+        "plugins {\n  id 'application'\n}\n",
     )
     .unwrap();
     fs::write(root.join("gradlew"), "#!/bin/sh\n").unwrap();
@@ -737,7 +715,7 @@ fn gradle_projects_require_a_jdk_without_replacing_the_path_command() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|item| item["provider"] == "gradle.service")
+        .find(|item| item["provider"] == "gradle.application")
         .unwrap();
     assert_eq!(configuration["command"], "gradle");
     assert_eq!(configuration["toolchains"]["java"], "project-jdk");
@@ -753,7 +731,7 @@ fn nested_gradle_service_declares_the_jdk_requirement_from_its_consumer() {
     fs::write(root.join("settings.gradle"), "include 'services:orders'\n").unwrap();
     fs::write(
         root.join("services/orders/build.gradle"),
-        "plugins {\n  id 'org.springframework.boot'\n}\n",
+        "plugins {\n  id 'application'\n}\n",
     )
     .unwrap();
 
@@ -1023,476 +1001,6 @@ fn python_detector_labels_a_declared_django_project() {
     assert_eq!(runserver["extensions"]["python"]["framework"], "django");
     assert_eq!(runserver["confidence"], "declared");
     assert_eq!(runserver["execution"], "service");
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// `spring-boot-maven-plugin` is what makes `spring-boot:run` work, so it -- not
-/// an annotation in a source file -- is what decides a module is a service. The
-/// configuration runs Maven from the reactor root and addresses the module with
-/// `-pl`, which is why `cwd` stays `.` while the module lives in `extensions`.
-#[test]
-fn maven_detector_finds_the_module_that_applies_the_boot_plugin() {
-    let root = temporary_root("detect-maven-boot");
-    fs::create_dir_all(root.join("backend")).unwrap();
-    fs::create_dir_all(root.join("shared-lib")).unwrap();
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>platform</artifactId><packaging>pom</packaging><modules><module>backend</module><module>shared-lib</module></modules></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join("backend/pom.xml"),
-        "<project><artifactId>backend</artifactId><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join("shared-lib/pom.xml"),
-        "<project><artifactId>shared-lib</artifactId></project>",
-    )
-    .unwrap();
-
-    let configurations = generated_configurations(&root);
-    let service = configurations
-        .iter()
-        .find(|item| item["id"] == "spring-boot.maven:backend")
-        .unwrap();
-
-    assert_eq!(service["execution"], "service");
-    assert_eq!(service["provider"], "spring-boot.maven");
-    assert_eq!(service["confidence"], "declared");
-    assert_eq!(service["extensions"]["maven"]["module"], "backend");
-    // Maven is reached through the project binding, not a program on PATH: the
-    // build may be driven by `./mvnw` rather than an installed `mvn`.
-    assert!(service["command"].is_null());
-    assert_eq!(service["toolchains"]["maven"], "project-maven");
-    assert_eq!(service["toolchains"]["java"], "project-jdk");
-    assert_eq!(service["debug"]["adapter"], "jdwp");
-    assert_eq!(service["cwd"], ".");
-    // The evidence is the module's own pom, which is what the "why is this here"
-    // affordance points at.
-    assert_eq!(service["source"], "backend/pom.xml");
-    // A library module applies no boot plugin and is not runnable.
-    assert!(
-        !configurations
-            .iter()
-            .any(|item| item["id"] == "spring-boot.maven:shared-lib"),
-        "{configurations:?}"
-    );
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Maven modules are declared, not discovered. The shared walk prunes directories
-/// named `build`, `out`, `target` and `dist` because they normally hold generated
-/// output -- but `<modules>` names its directories explicitly, so a module may
-/// legitimately live in one. Reading the graph is what makes this module visible.
-#[test]
-fn maven_detector_reads_modules_the_directory_walk_prunes() {
-    let root = temporary_root("detect-maven-pruned-name");
-    fs::create_dir_all(root.join("build")).unwrap();
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>root</artifactId><packaging>pom</packaging><modules><module>build</module></modules></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join("build/pom.xml"),
-        "<project><artifactId>builder-service</artifactId><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
-    )
-    .unwrap();
-
-    let service = generated_configurations(&root)
-        .into_iter()
-        .find(|item| item["id"] == "spring-boot.maven:builder-service")
-        .unwrap();
-
-    assert_eq!(service["extensions"]["maven"]["module"], "build");
-    assert_eq!(service["source"], "build/pom.xml");
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// `<pluginManagement>` pins a version for children without applying anything,
-/// and `<reporting>` plugins never run. Counting either would list a library
-/// module as a service, and running it would fail with a Maven error.
-#[test]
-fn maven_detector_ignores_plugins_that_are_declared_but_not_applied() {
-    let root = temporary_root("detect-maven-plugin-management");
-    fs::create_dir_all(&root).unwrap();
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>lib</artifactId><build><pluginManagement><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId><version>3.2.0</version></plugin></plugins></pluginManagement></build></project>",
-    )
-    .unwrap();
-
-    assert!(
-        !generated_configurations(&root)
-            .iter()
-            .any(|item| item["provider"] == "spring-boot.maven"),
-        "pluginManagement must not make a module runnable"
-    );
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// A `pom`-packaging module aggregates children and produces no artifact, so a
-/// boot plugin declared there configures them rather than describing a service of
-/// its own. Listing the aggregator would offer a run that cannot start.
-#[test]
-fn maven_detector_skips_the_aggregator_that_configures_its_children() {
-    let root = temporary_root("detect-maven-aggregator");
-    fs::create_dir_all(root.join("service-a")).unwrap();
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>parent</artifactId><packaging>pom</packaging><modules><module>service-a</module></modules><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join("service-a/pom.xml"),
-        "<project><artifactId>service-a</artifactId><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
-    )
-    .unwrap();
-
-    let ids = generated_configurations(&root)
-        .into_iter()
-        .filter(|item| item["provider"] == "spring-boot.maven")
-        .map(|item| item["id"].as_str().unwrap().to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(ids, vec!["spring-boot.maven:service-a".to_string()]);
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Every Spring Boot configuration shares one `cwd`, so the name is what keeps
-/// two modules apart during dedup. `artifactId` is only unique per `groupId`, so
-/// where two modules share one, both fall back to their path -- otherwise one of
-/// two real services would silently disappear from the panel.
-#[test]
-fn maven_detector_keeps_modules_that_share_an_artifact_id() {
-    let root = temporary_root("detect-maven-artifact-collision");
-    fs::create_dir_all(root.join("team-a/gateway")).unwrap();
-    fs::create_dir_all(root.join("team-b/gateway")).unwrap();
-    let boot = "<build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build>";
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>root</artifactId><packaging>pom</packaging><modules><module>team-a/gateway</module><module>team-b/gateway</module></modules></project>",
-    )
-    .unwrap();
-    for team in ["team-a", "team-b"] {
-        fs::write(
-            root.join(team).join("gateway/pom.xml"),
-            format!("<project><artifactId>gateway</artifactId>{boot}</project>"),
-        )
-        .unwrap();
-    }
-
-    let ids = generated_configurations(&root)
-        .into_iter()
-        .filter(|item| item["provider"] == "spring-boot.maven")
-        .map(|item| item["id"].as_str().unwrap().to_string())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        ids,
-        vec![
-            "spring-boot.maven:team-a/gateway".to_string(),
-            "spring-boot.maven:team-b/gateway".to_string()
-        ]
-    );
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Ids are the join key for the team and local override layers. The old
-/// annotation judge read only the files in `request.paths`, so the same project
-/// produced a different document depending on which files the caller happened to
-/// pass, and every override written against the previous ids came loose. Reading
-/// the declared graph makes generation depend on the project alone.
-#[test]
-fn maven_detector_produces_the_same_ids_whatever_paths_the_caller_passes() {
-    let root = temporary_root("detect-maven-stable-ids");
-    let sources = root.join("backend/src/main/java/com/demo");
-    fs::create_dir_all(&sources).unwrap();
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>root</artifactId><packaging>pom</packaging><modules><module>backend</module></modules></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join("backend/pom.xml"),
-        "<project><artifactId>backend</artifactId><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
-    )
-    .unwrap();
-    fs::write(
-        sources.join("DemoApplication.java"),
-        "package com.demo;\n@SpringBootApplication\npublic class DemoApplication { public static void main(String[] a) {} }\n",
-    )
-    .unwrap();
-
-    let service_ids = |paths: Value| {
-        let response: Value = serde_json::from_str(&execute_json(
-            &serde_json::json!({
-                "id": "generate",
-                "command": "runConfig.generate",
-                "payload": {"root": root, "paths": paths}
-            })
-            .to_string(),
-        ))
-        .unwrap();
-        assert_eq!(response["ok"], true, "{response}");
-        response["data"]["generated"]["configurations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|item| item["execution"] == "service")
-            .map(|item| item["id"].as_str().unwrap().to_string())
-            .collect::<Vec<_>>()
-    };
-
-    let without_paths = service_ids(serde_json::json!([]));
-    let with_paths = service_ids(serde_json::json!([
-        "backend/src/main/java/com/demo/DemoApplication.java"
-    ]));
-
-    assert_eq!(
-        without_paths,
-        vec!["spring-boot.maven:backend".to_string()],
-        "{without_paths:?}"
-    );
-    assert_eq!(with_paths, without_paths);
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Which framework a module runs is decided by the plugin it applies, and each
-/// framework needs its own provider because their goals take arguments under
-/// different property names. One reactor holding all three proves the detector
-/// distinguishes them rather than labelling everything Spring Boot.
-#[test]
-fn maven_detector_separates_the_frameworks_by_the_plugin_each_module_applies() {
-    let root = temporary_root("detect-maven-frameworks");
-    for module in ["boot-api", "quarkus-api", "micronaut-api", "plain-lib"] {
-        fs::create_dir_all(root.join(module)).unwrap();
-    }
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>platform</artifactId><packaging>pom</packaging><modules><module>boot-api</module><module>quarkus-api</module><module>micronaut-api</module><module>plain-lib</module></modules></project>",
-    )
-    .unwrap();
-    for (module, plugin) in [
-        ("boot-api", "spring-boot-maven-plugin"),
-        ("quarkus-api", "quarkus-maven-plugin"),
-        ("micronaut-api", "micronaut-maven-plugin"),
-    ] {
-        fs::write(
-            root.join(module).join("pom.xml"),
-            format!("<project><artifactId>{module}</artifactId><build><plugins><plugin><artifactId>{plugin}</artifactId></plugin></plugins></build></project>"),
-        )
-        .unwrap();
-    }
-    fs::write(
-        root.join("plain-lib/pom.xml"),
-        "<project><artifactId>plain-lib</artifactId></project>",
-    )
-    .unwrap();
-
-    let configurations = generated_configurations(&root);
-    for (id, provider, module) in [
-        (
-            "spring-boot.maven:boot-api",
-            "spring-boot.maven",
-            "boot-api",
-        ),
-        ("quarkus.maven:quarkus-api", "quarkus.maven", "quarkus-api"),
-        (
-            "micronaut.maven:micronaut-api",
-            "micronaut.maven",
-            "micronaut-api",
-        ),
-    ] {
-        let service = configurations
-            .iter()
-            .find(|item| item["id"] == id)
-            .unwrap_or_else(|| panic!("{id} missing from {configurations:?}"));
-        assert_eq!(service["provider"], provider);
-        assert_eq!(service["execution"], "service");
-        assert_eq!(service["confidence"], "declared");
-        assert_eq!(service["extensions"]["maven"]["module"], module);
-        // Every framework here runs through Maven, never a program on PATH.
-        assert!(service["command"].is_null(), "{service:?}");
-        assert_eq!(service["toolchains"]["maven"], "project-maven");
-        assert_eq!(service["toolchains"]["java"], "project-jdk");
-        assert_eq!(service["source"], format!("{module}/pom.xml"));
-    }
-    // A module applying none of the three plugins has no goal to start.
-    assert!(
-        !configurations
-            .iter()
-            .any(|item| item["name"] == "plain-lib" && item["execution"] == "service"),
-        "{configurations:?}"
-    );
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Each plugin invented its own property names for the same three things, so the
-/// goal name alone is not enough: Spring's `-Dspring-boot.run.*` passed to
-/// `quarkus:dev` is silently ignored and the service starts with none of the
-/// user's arguments.
-#[test]
-fn framework_launch_plans_use_each_goal_s_own_property_names() {
-    let root = temporary_root("launch-maven-frameworks");
-    fs::create_dir_all(root.join(".lithe/run")).unwrap();
-    // `resolve` disables a configuration whose module is missing, so the module
-    // directory has to exist for the plan to be reachable at all.
-    fs::create_dir_all(root.join("api")).unwrap();
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>demo</artifactId></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[
-            {"id":"quarkus","name":"Quarkus","provider":"quarkus.maven","execution":"service","confidence":"declared","toolchains":{"java":"project-jdk","maven":"project-maven"},"cwd":".","debug":{"adapter":"jdwp"},"extensions":{"maven":{"module":"api","jvmArguments":["-Xmx2g"],"programArguments":["--dev"]}}},
-            {"id":"micronaut","name":"Micronaut","provider":"micronaut.maven","execution":"service","confidence":"declared","toolchains":{"java":"project-jdk","maven":"project-maven"},"cwd":".","debug":{"adapter":"jdwp"},"extensions":{"maven":{"module":"api","jvmArguments":["-Xmx2g"],"programArguments":["--dev"]}}}
-        ]}"#,
-    )
-    .unwrap();
-
-    let arguments = |id: &str, debug_port: Value| {
-        let plan: Value = serde_json::from_str(&execute_json(
-            &serde_json::json!({
-                "id": "plan",
-                "command": "runConfig.createLaunchPlan",
-                "payload": {"root": root, "configurationId": id, "debugPort": debug_port}
-            })
-            .to_string(),
-        ))
-        .unwrap();
-        assert_eq!(plan["ok"], true, "{plan}");
-        // Maven is the executable for every framework goal.
-        assert_eq!(plan["data"]["executable"]["toolchain"], "project-maven");
-        plan["data"]["arguments"].clone()
-    };
-
-    assert_eq!(
-        arguments("quarkus", Value::Null),
-        serde_json::json!([
-            "-B",
-            "-ntp",
-            "-pl",
-            "api",
-            "-am",
-            "-Djvm.args=-Xmx2g",
-            "-Dquarkus.args=--dev",
-            "quarkus:dev"
-        ])
-    );
-    assert_eq!(
-        arguments("micronaut", Value::Null),
-        serde_json::json!([
-            "-B",
-            "-ntp",
-            "-pl",
-            "api",
-            "-am",
-            "-Dmn.jvmArgs=-Xmx2g",
-            "-Dmn.appArgs=--dev",
-            "mn:run"
-        ])
-    );
-
-    // Both goals start the debug agent themselves given a port. Injecting JDWP
-    // into the JVM arguments as well would leave two agents contending for one
-    // port, and the service would fail to bind rather than start.
-    let quarkus = arguments("quarkus", serde_json::json!(5005));
-    assert_eq!(quarkus[5], "-Djvm.args=-Xmx2g");
-    assert_eq!(quarkus[7], "-Ddebug=5005");
-    // Suspend so a breakpoint in initialisation is still reachable: Quarkus dev
-    // mode does not suspend by default.
-    assert_eq!(quarkus[8], "-Dsuspend=y");
-    assert!(
-        !quarkus.to_string().contains("agentlib:jdwp"),
-        "{quarkus:?}"
-    );
-
-    let micronaut = arguments("micronaut", serde_json::json!(5005));
-    assert_eq!(micronaut[7], "-Dmn.debug=true");
-    assert_eq!(micronaut[8], "-Dmn.debug.port=5005");
-    assert_eq!(micronaut[9], "-Dmn.debug.suspend=true");
-    assert!(
-        !micronaut.to_string().contains("agentlib:jdwp"),
-        "{micronaut:?}"
-    );
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Only Spring Boot's goal accepts a main class. Quarkus and Micronaut resolve it
-/// from the build, so passing one would be ignored -- and the annotation scan
-/// must not graft a `@SpringBootApplication` class onto another framework's
-/// module either.
-#[test]
-fn only_spring_boot_carries_a_main_class_into_its_goal() {
-    let root = temporary_root("launch-maven-main-class");
-    let sources = root.join("api/src/main/java/com/demo");
-    fs::create_dir_all(&sources).unwrap();
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>platform</artifactId><packaging>pom</packaging><modules><module>api</module></modules></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join("api/pom.xml"),
-        "<project><artifactId>api</artifactId><build><plugins><plugin><artifactId>quarkus-maven-plugin</artifactId></plugin></plugins></build></project>",
-    )
-    .unwrap();
-    // A stray annotated class in a Quarkus module: still a runnable main class,
-    // but not something to hand to `quarkus:dev`.
-    fs::write(
-        sources.join("DemoApplication.java"),
-        "package com.demo;\n@SpringBootApplication\npublic class DemoApplication { public static void main(String[] a) {} }\n",
-    )
-    .unwrap();
-
-    // The path is passed explicitly because the annotation scan only reads the
-    // sources the caller hands it -- which is the whole reason the plugin, not
-    // the annotation, decides what is a service.
-    let response: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "generate",
-            "command": "runConfig.generate",
-            "payload": {
-                "root": root,
-                "paths": ["api/src/main/java/com/demo/DemoApplication.java"]
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(response["ok"], true, "{response}");
-    let configurations = response["data"]["generated"]["configurations"]
-        .as_array()
-        .cloned()
-        .unwrap();
-    let service = configurations
-        .iter()
-        .find(|item| item["id"] == "quarkus.maven:api")
-        .unwrap_or_else(|| panic!("{configurations:?}"));
-    assert!(
-        service["extensions"]["maven"]["mainClass"].is_null(),
-        "{service:?}"
-    );
-    // The class stays runnable on its own terms rather than disappearing.
-    assert!(
-        configurations
-            .iter()
-            .any(|item| item["id"] == "java-main:com.demo.DemoApplication"),
-        "{configurations:?}"
-    );
 
     fs::remove_dir_all(root).unwrap();
 }

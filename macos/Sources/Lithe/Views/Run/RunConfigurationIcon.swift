@@ -26,10 +26,8 @@ struct RunConfigurationIcon: View {
         switch kind {
         case .currentFile:
             return .plainText
-        case .mavenFramework, .javaMain:
+        case .javaMain:
             return .javaGeneric
-        case .mavenModule:
-            return .maven
         case .process(let provider):
             switch provider.split(separator: ".").first.map(String.init) {
             case "npm", "node", "bun", "deno":
@@ -42,8 +40,6 @@ struct RunConfigurationIcon: View {
                 return .goSource
             case "cargo", "rust":
                 return .rustSource
-            case "maven":
-                return .maven
             case "gradle":
                 return .gradle
             case "java":

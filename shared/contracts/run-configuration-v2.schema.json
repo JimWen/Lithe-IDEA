@@ -3,18 +3,34 @@
   "$id": "https://lithe.dev/contracts/run-configuration-v2.schema.json",
   "title": "Lithe Run Configuration Document v2",
   "type": "object",
-  "required": ["version", "configurations"],
+  "required": [
+    "version",
+    "configurations"
+  ],
   "properties": {
-    "version": { "const": 2 },
+    "version": {
+      "const": 2
+    },
     "generator": {
       "type": "object",
-      "required": ["fingerprint"],
+      "required": [
+        "fingerprint"
+      ],
       "properties": {
-        "fingerprint": { "type": "string", "pattern": "^sha256:" },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:"
+        },
         "inputs": {
           "type": "object",
-          "propertyNames": { "type": "string", "minLength": 1 },
-          "additionalProperties": { "type": "string", "pattern": "^sha256:" }
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^sha256:"
+          }
         }
       },
       "additionalProperties": false
@@ -26,15 +42,9 @@
         "java": {
           "type": "object",
           "properties": {
-            "homePath": { "type": "string" }
-          },
-          "additionalProperties": false
-        },
-        "maven": {
-          "type": "object",
-          "properties": {
-            "executablePath": { "type": "string" },
-            "javaHomePath": { "type": "string" }
+            "homePath": {
+              "type": "string"
+            }
           },
           "additionalProperties": false
         }
@@ -43,7 +53,9 @@
     },
     "configurations": {
       "type": "array",
-      "items": { "$ref": "#/$defs/configuration" }
+      "items": {
+        "$ref": "#/$defs/configuration"
+      }
     }
   },
   "$defs": {
@@ -53,41 +65,102 @@
     },
     "configuration": {
       "type": "object",
-      "required": ["id", "provider"],
+      "required": [
+        "id",
+        "provider"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "name": { "type": "string", "minLength": 1 },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
         "provider": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$"
         },
-        "execution": { "enum": ["application", "service", "task", "group"] },
-        "command": { "type": "string", "minLength": 1 },
-        "args": { "type": "array", "items": { "type": "string" } },
-        "cwd": { "$ref": "#/$defs/relativePath" },
+        "execution": {
+          "enum": [
+            "application",
+            "service",
+            "task",
+            "group"
+          ]
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "$ref": "#/$defs/relativePath"
+        },
         "env": {
           "type": "object",
-          "propertyNames": { "type": "string", "minLength": 1 },
-          "additionalProperties": { "type": "string" }
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
         },
-        "confidence": { "enum": ["native", "declared", "heuristic"] },
-        "toolchains": { "type": "object", "additionalProperties": { "type": "string" } },
+        "confidence": {
+          "enum": [
+            "native",
+            "declared",
+            "heuristic"
+          ]
+        },
+        "toolchains": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "debug": {
           "type": "object",
-          "required": ["adapter"],
+          "required": [
+            "adapter"
+          ],
           "properties": {
-            "adapter": { "type": "string", "minLength": 1 }
+            "adapter": {
+              "type": "string",
+              "minLength": 1
+            }
           },
           "additionalProperties": false
         },
-        "members": { "type": "array", "items": { "type": "string" } },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "extensions": {
           "type": "object",
-          "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
-          "additionalProperties": { "type": "object" }
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "additionalProperties": {
+            "type": "object"
+          }
         },
-        "disabled": { "type": "boolean" },
-        "source": { "type": "string" }
+        "disabled": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     }

@@ -8,11 +8,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 const VERSION: u32 = 2;
 const LEGACY_VERSION: u32 = 1;
-const GENERATOR_REVISION: &str = "3";
+const GENERATOR_REVISION: &str = "4";
 /// Toolchain requirements and `project.json` are separate documents that happen
 /// to live under `.lithe`. Their schema did not change with run-config v2, so
 /// they keep their own version and must not be validated against `VERSION`.
@@ -57,7 +57,7 @@ pub struct ResolveRequest {
 pub struct ToolchainCandidate {
     /// Host-stable candidate identifier referenced by resolved configurations.
     pub id: String,
-    /// Toolchain role such as `java` or `maven`, not a display label.
+    /// Toolchain role such as `java` or `runtime`, not a display label.
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(default)]
@@ -81,9 +81,6 @@ pub struct LaunchPlanRequest {
     /// Host-owned local layer. When present, Core uses it instead of `.lithe/run/local.json`.
     #[serde(default)]
     pub local_document: Option<Value>,
-    /// Project Maven defaults supplied by the native host for Maven-backed plans.
-    #[serde(default)]
-    pub maven_context: Option<crate::project::MavenLaunchContextRequest>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,10 +89,6 @@ pub struct LaunchPlanRequest {
 pub struct ToolchainPaths {
     #[serde(default)]
     pub java_home_path: String,
-    #[serde(default)]
-    pub maven_executable_path: String,
-    #[serde(default)]
-    pub maven_java_home_path: String,
     /// Explicit executables for generic runtime toolchain IDs such as `project-node`.
     #[serde(default)]
     pub runtime_executable_paths: BTreeMap<String, String>,
@@ -120,18 +113,7 @@ pub struct UpdateOptionsRequest {
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
     #[serde(default)]
-    pub maven_profiles: Vec<String>,
-    /// Per-configuration Maven test policy. `None` inherits the project context;
-    /// `Some(false)` must remain distinct so a test configuration can override
-    /// a project-wide Skip Tests default.
-    #[serde(default)]
-    pub maven_skip_tests: Option<bool>,
-    #[serde(default)]
     pub java_home_path: String,
-    #[serde(default)]
-    pub maven_executable_path: String,
-    #[serde(default)]
-    pub maven_java_home_path: String,
     /// When present, `updateOptions` writes the document-level global toolchain
     /// into the local layer instead of patching one configuration.
     #[serde(default)]
@@ -139,23 +121,6 @@ pub struct UpdateOptionsRequest {
     /// Host-owned local layer used when `scope` is `local` and when resolving first.
     #[serde(default)]
     pub local_document: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-/// Request to add an explicitly user-authored run configuration.
-pub struct CreateUserConfigurationRequest {
-    pub root: String,
-    /// Persistence layer: `project` for shared configuration or `local` for this host.
-    pub scope: String,
-    pub name: String,
-    /// UI configuration kind mapped to a namespaced provider during creation.
-    #[serde(rename = "type")]
-    pub kind: String,
-    #[serde(default)]
-    pub module: String,
-    #[serde(default)]
-    pub main_class: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -199,13 +164,12 @@ fn migrate_configuration_value(item: &mut Value) {
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_else(|| "java.current-file".to_string());
 
-    let mut maven = serde_json::Map::new();
+    let mut java = serde_json::Map::new();
     for (legacy_key, target_key) in [
         ("mainClass", "mainClass"),
         ("module", "module"),
         ("jvmArguments", "jvmArguments"),
         ("programArguments", "programArguments"),
-        ("mavenProfiles", "profiles"),
     ] {
         if let Some(value) = object.remove(legacy_key) {
             let is_empty = value
@@ -213,26 +177,23 @@ fn migrate_configuration_value(item: &mut Value) {
                 .map(|items| items.is_empty())
                 .unwrap_or(false);
             if !value.is_null() && !is_empty {
-                maven.insert(target_key.to_string(), value);
+                java.insert(target_key.to_string(), value);
             }
         }
     }
     if let Some(working_directory) = object.remove("workingDirectory") {
         object.insert("cwd".to_string(), working_directory);
     }
-    if !maven.is_empty() {
+    if !java.is_empty() {
         object
             .entry("extensions")
             .or_insert_with(|| json!({}))
             .as_object_mut()
-            .map(|extensions| extensions.insert("maven".to_string(), Value::Object(maven)));
+            .map(|extensions| extensions.insert("java".to_string(), Value::Object(java)));
     }
 
     let execution = match legacy_type.as_str() {
         "java.current-file" => "application",
-        // A framework goal starts something long-running; a bare Maven goal
-        // runs to completion.
-        provider if framework_goal(provider).is_some() => "service",
         _ => "task",
     };
     object.insert("provider".to_string(), json!(legacy_type));
@@ -264,7 +225,7 @@ pub struct DebugCapability {
 pub struct RunConfiguration {
     pub id: String,
     pub name: String,
-    /// Open namespaced discriminator, e.g. `maven.module`, `npm.script`.
+    /// Open namespaced discriminator, e.g. `cargo.command`, `npm.script`.
     /// Deliberately not an enum: new ecosystems must not require a contract change.
     pub provider: String,
     #[serde(default)]
@@ -285,7 +246,7 @@ pub struct RunConfiguration {
     pub debug: Option<DebugCapability>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<String>,
-    /// Ecosystem-specific payload keyed by namespace (`maven`, `npm`, ...).
+    /// Ecosystem-specific payload keyed by namespace (`java`, `npm`, ...).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, Value>,
     #[serde(default)]
@@ -299,8 +260,7 @@ fn dot() -> String {
     ".".to_string()
 }
 
-/// Accessors for the `maven` extension namespace. Keeps JDWP and Spring Boot
-/// launch assembly working after the fields moved out of the common shape.
+/// Accessors for Java launch metadata outside the common configuration shape.
 impl RunConfiguration {
     pub fn extension_string(&self, namespace: &str, key: &str) -> Option<String> {
         self.extensions
@@ -311,11 +271,11 @@ impl RunConfiguration {
     }
 
     pub fn main_class(&self) -> Option<String> {
-        self.extension_string("maven", "mainClass")
+        self.extension_string("java", "mainClass")
     }
 
     pub fn module(&self) -> Option<String> {
-        self.extension_string("maven", "module")
+        self.extension_string("java", "module")
     }
 }
 
@@ -434,118 +394,51 @@ pub fn generate(request: GenerateRequest) -> Result<Value, CoreError> {
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
-    let maven_root = crate::project::maven_root(&root, &paths)?;
-    let maven_relative_path = maven_root
-        .as_ref()
-        .map(|(_, relative_path)| relative_path.as_str());
     let has_java_sources = paths
         .iter()
         .any(|path| path.to_lowercase().ends_with(".java"));
-    let has_maven_project = maven_relative_path.is_some()
-        || root.join("mvnw").is_file()
-        || root.join("mvnw.cmd").is_file();
-    // A Gradle build needs the same JDK requirement as Maven, and its sources may
-    // be Kotlin or Groovy rather than Java, so the build files count on their own.
     let has_gradle_project = ["build.gradle", "build.gradle.kts", "gradlew"]
         .iter()
         .any(|name| root.join(name).is_file());
-    let has_java_ecosystem = has_java_sources || has_maven_project || has_gradle_project;
-    let configured_module_paths = request
-        .module_paths
-        .into_iter()
-        .map(|path| workspace_maven_path(maven_relative_path, &path))
-        .collect();
-    let module_paths = inferred_maven_module_paths(&root, &paths, configured_module_paths);
     let scanned = crate::languages::run_configurations(JavaRunConfigurationsRequest {
         root: request.root.clone(),
         paths,
-        module_paths,
+        module_paths: request.module_paths,
     })?;
-    let annotated_main_classes = scanned
-        .main_classes
-        .iter()
-        .filter(|value| value.is_spring_boot)
-        .map(|value| (value.path.clone(), value.qualified_name.clone()))
-        .collect::<Vec<_>>();
-    let mut maven_owners = BTreeMap::<Option<String>, Option<(PathBuf, String)>>::new();
     let configurations = scanned
         .configurations
         .into_iter()
-        .map(|value| -> Result<RunConfiguration, CoreError> {
-            let provider = match value.kind.as_str() {
-                "javaMain" | "springBoot" => "java.main",
-                "mavenModule" => "maven.module",
-                _ => "java.current-file",
-            };
-            let id = java_configuration_id(&value);
-            let owner_key = value.module_path.clone();
-            let maven_owner = if let Some(owner) = maven_owners.get(&owner_key) {
-                owner.clone()
-            } else {
-                let owner = maven_owner_for_module(
-                    &root,
-                    maven_root.as_ref(),
-                    value.module_path.as_deref(),
-                )?;
-                maven_owners.insert(owner_key, owner.clone());
-                owner
-            };
-            let owner_relative_path = maven_owner
-                .as_ref()
-                .map(|(_, relative_path)| relative_path.as_str());
-            let mut maven = serde_json::Map::new();
-            let module_path = value
-                .module_path
-                .as_deref()
-                .map(|path| maven_module_path(owner_relative_path, path))
-                .unwrap_or_else(|| ".".to_string());
-            maven.insert("module".to_string(), json!(module_path));
-            if let Some(main_class) = value.main_class.as_ref() {
-                maven.insert("mainClass".to_string(), json!(main_class));
-            }
-            let source_path = value.source_path;
-            // Maven ownership is per entry: one workspace can contain standalone
-            // Java files or multiple independent reactors in the same request.
-            let uses_maven_toolchain = maven_owner.is_some() && provider != "java.current-file";
-            let mut toolchains = BTreeMap::new();
-            toolchains.insert("java".to_string(), "project-jdk".to_string());
-            if uses_maven_toolchain {
-                toolchains.insert("maven".to_string(), "project-maven".to_string());
-            }
-            let mut extensions = BTreeMap::new();
-            extensions.insert("maven".to_string(), Value::Object(maven));
-            extensions.insert(
-                "java".to_string(),
-                json!({ "source": source_path, "sourceSet": value.source_set }),
-            );
-            Ok(RunConfiguration {
-                id,
+        .map(|value| {
+            let source = value.source_path;
+            RunConfiguration {
+                id: value.id,
                 name: value.name,
-                provider: provider.to_string(),
-                execution: match provider {
-                    "java.main" | "java.current-file" => Execution::Application,
-                    _ => Execution::Task,
-                },
+                provider: "java.main".to_string(),
+                execution: Execution::Application,
                 command: None,
                 args: Vec::new(),
-                cwd: if provider == "java.current-file" {
-                    ".".to_string()
-                } else {
-                    owner_relative_path.unwrap_or(".").to_string()
-                },
+                cwd: ".".to_string(),
                 env: BTreeMap::new(),
                 confidence: Confidence::Native,
-                toolchains,
-                debug: (provider != "java.main").then(|| DebugCapability {
-                    adapter: "jdwp".to_string(),
-                }),
+                toolchains: [("java".to_string(), "project-jdk".to_string())]
+                    .into_iter()
+                    .collect(),
+                debug: None,
                 members: Vec::new(),
-                extensions,
                 disabled: false,
-                source: Some(source_path),
-            })
+                extensions: [(
+                    "java".to_string(),
+                    json!({
+                        "source": source, "sourceSet": value.source_set,
+                        "mainClass": value.main_class, "module": value.module_path
+                    }),
+                )]
+                .into_iter()
+                .collect(),
+                source: Some(source),
+            }
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect();
     let mut configurations = deduplicate_java_configurations(configurations);
     let java_entry_count = configurations.len();
     if has_java_sources {
@@ -566,36 +459,19 @@ pub fn generate(request: GenerateRequest) -> Result<Value, CoreError> {
                 adapter: "jdwp".to_string(),
             }),
             members: Vec::new(),
-            extensions: [("maven".to_string(), json!({ "module": "." }))]
-                .into_iter()
-                .collect(),
+            extensions: BTreeMap::new(),
             disabled: false,
             source: None,
         });
     }
     let inputs = project_inputs(&root)?;
-    // Detectors run after the Java scan so a Java configuration always keeps its
-    // id: `detected_configurations` skips ids the Java pass already claimed
-    // rather than overwriting them, which would detach team and local overrides.
-    let claimed = configurations
-        .iter()
-        .map(|item| item.id.clone())
-        .collect::<BTreeSet<_>>();
-    let mut detected = detected_configurations(
-        &root,
-        maven_root.as_ref().map(|(path, _)| path.as_path()),
-        &claimed,
-    )?;
-    adopt_annotated_main_classes(&mut detected, &annotated_main_classes, maven_relative_path);
-    // Counts real entry points, not documents: the always-present "Current File"
-    // fallback is excluded so an empty project still reports zero and the UI can
-    // say so, while a detected npm service correctly reports one.
+    let claimed = configurations.iter().map(|item| item.id.clone()).collect();
+    let detected = detected_configurations(&root, &claimed)?;
     let entry_count = java_entry_count + detected.len();
     configurations.extend(detected);
     let requirements = detect_requirements(
         &root,
-        maven_root.as_ref().map(|(path, _)| path.as_path()),
-        has_java_ecosystem,
+        has_java_sources || has_gradle_project,
         &configurations,
     )?;
     let generated = RunConfigurationDocument {
@@ -609,64 +485,6 @@ pub fn generate(request: GenerateRequest) -> Result<Value, CoreError> {
     Ok(
         json!({ "generated": generated, "toolchainRequirements": requirements, "entryCount": entry_count }),
     )
-}
-
-fn workspace_maven_path(maven_root: Option<&str>, path: &str) -> String {
-    match (maven_root, path) {
-        (Some(root), ".") => root.to_string(),
-        (Some(root), path) if root != "." => format!("{root}/{path}"),
-        _ => path.to_string(),
-    }
-}
-
-fn maven_module_path(maven_root: Option<&str>, path: &str) -> String {
-    let Some(root) = maven_root.filter(|root| *root != ".") else {
-        return path.to_string();
-    };
-    if path == root {
-        ".".to_string()
-    } else {
-        path.strip_prefix(&(root.to_string() + "/"))
-            .unwrap_or(path)
-            .to_string()
-    }
-}
-
-fn maven_owner_for_module(
-    root: &Path,
-    workspace_maven_root: Option<&(PathBuf, String)>,
-    module_path: Option<&str>,
-) -> Result<Option<(PathBuf, String)>, CoreError> {
-    if let Some(module_path) = module_path {
-        let descriptor = if module_path == "." {
-            "pom.xml".to_string()
-        } else {
-            format!("{module_path}/pom.xml")
-        };
-        return crate::project::maven_root(root, &[descriptor]);
-    }
-
-    // A root-level Maven project has no relative module path. Nested reactors
-    // always contribute at least their reactor directory through module inference.
-    Ok(workspace_maven_root
-        .filter(|(_, relative_path)| relative_path == ".")
-        .cloned())
-}
-
-/// Whether a service is a Spring Boot service is decided by the build, not by an
-/// annotation: `spring-boot-maven-plugin` is what makes `spring-boot:run` work at
-/// all, and the Maven detector reads it from the declared module graph. The scan
-/// keeps finding main classes -- that is genuinely per-file work -- it just no
-/// longer decides what is a service.
-///
-/// The annotation is still the only place a *main class* is named, so a scanned
-/// `spring:<qualified-name>` becomes `java-main:<qualified-name>`: the same class
-/// is still directly runnable, and the id says which judge produced it.
-fn java_configuration_id(value: &crate::protocol::JavaRunConfigurationResponse) -> String {
-    match (value.kind.as_str(), value.main_class.as_deref()) {
-        ("springBoot", Some(main_class)) => format!("java-main:{main_class}"),
-        _ => value.id.clone(),
-    }
 }
 
 /// Keeps stable ids for the usual one-module case while preserving same-named
@@ -712,53 +530,6 @@ fn java_module_identity(module: Option<&str>) -> String {
     }
 }
 
-/// Copies a scanned `@SpringBootApplication` class onto the module that declares
-/// the Maven plugin.
-///
-/// The detector knows a module is a service but not which class boots it, and
-/// `spring-boot:run` resolves the main class itself when none is given. Naming it
-/// explicitly is still worth doing: a module with two candidate classes otherwise
-/// fails at launch time with a Maven error rather than starting the one the editor
-/// already found.
-fn adopt_annotated_main_classes(
-    configurations: &mut [RunConfiguration],
-    annotated: &[(String, String)],
-    maven_root: Option<&str>,
-) {
-    for configuration in configurations
-        .iter_mut()
-        .filter(|item| item.provider == "spring-boot.maven")
-    {
-        let Some(module) = configuration.module() else {
-            continue;
-        };
-        // Exactly one candidate under the module, or none: two classes in one
-        // module is ambiguous, and guessing would start the wrong service.
-        let mut matches = annotated
-            .iter()
-            .filter(|(path, _)| within_maven_module(path, &module, maven_root))
-            .map(|(_, qualified_name)| qualified_name);
-        let Some(main_class) = matches.next() else {
-            continue;
-        };
-        if matches.next().is_some() {
-            continue;
-        }
-        let maven = configuration
-            .extensions
-            .entry("maven".to_string())
-            .or_insert_with(|| json!({}));
-        if let Some(object) = maven.as_object_mut() {
-            object.insert("mainClass".to_string(), json!(main_class));
-        }
-    }
-}
-
-fn within_maven_module(path: &str, module: &str, maven_root: Option<&str>) -> bool {
-    let workspace_module = workspace_maven_path(maven_root, module);
-    workspace_module == "." || path.starts_with(&format!("{workspace_module}/"))
-}
-
 /// Translates detector output into the run-configuration contract.
 ///
 /// Nearly every detection is process-based: the detector resolved the command,
@@ -767,10 +538,9 @@ fn within_maven_module(path: &str, module: &str, maven_root: Option<&str>) -> bo
 /// transfers executable ownership to toolchains carries no command.
 fn detected_configurations(
     root: &Path,
-    maven_root: Option<&Path>,
     claimed: &BTreeSet<String>,
 ) -> Result<Vec<RunConfiguration>, CoreError> {
-    Ok(super::detectors::detect_all(root, maven_root)?
+    Ok(super::detectors::detect_all(root)?
         .into_iter()
         .map(|item| RunConfiguration {
             id: item.id(),
@@ -792,51 +562,6 @@ fn detected_configurations(
         .filter(|item| !claimed.contains(&item.id))
         .filter(|item| validate_configuration(item).is_ok())
         .collect())
-}
-
-fn inferred_maven_module_paths(
-    root: &Path,
-    paths: &[String],
-    configured: Vec<String>,
-) -> Vec<String> {
-    let mut modules = configured.into_iter().collect::<BTreeSet<_>>();
-    for path in paths {
-        if !path.to_lowercase().ends_with(".java") {
-            continue;
-        }
-        let Some(relative) = normalize_project_relative(path) else {
-            continue;
-        };
-        let mut directory = root.join(relative).parent().map(Path::to_path_buf);
-        while let Some(candidate) = directory {
-            if candidate == root {
-                break;
-            }
-            if candidate.join("pom.xml").is_file() {
-                if let Ok(relative) = candidate.strip_prefix(root) {
-                    modules.insert(relative.to_string_lossy().replace('\\', "/"));
-                }
-                break;
-            }
-            directory = candidate.parent().map(Path::to_path_buf);
-        }
-    }
-    modules.into_iter().collect()
-}
-
-fn normalize_project_relative(value: &str) -> Option<PathBuf> {
-    let path = Path::new(value);
-    if path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return None;
-    }
-    Some(path.to_path_buf())
 }
 
 fn is_nested_checkout_path(value: &str) -> bool {
@@ -879,6 +604,20 @@ pub fn resolve(request: ResolveRequest) -> Result<Value, CoreError> {
         }
     }
     let mut configurations = merge_values(&generated, &team, &local)?;
+    // Old generated layers may outlive a product upgrade. Retire only the
+    // removed providers; unrelated process configurations remain usable.
+    configurations.retain(|configuration| {
+        let retired = configuration.provider == "maven.module"
+            || configuration.provider.ends_with(".maven");
+        if retired {
+            diagnostics.push(json!({
+                "id": configuration.id,
+                "code": "unsupportedProvider",
+                "message": "This build no longer supports this provider; regenerate run configurations"
+            }));
+        }
+        !retired
+    });
     normalize_runtime_consumption(&mut configurations);
     let global_toolchain = local.get("toolchain").cloned();
     if let Some(toolchain) = global_toolchain.as_ref() {
@@ -900,7 +639,11 @@ pub fn resolve(request: ResolveRequest) -> Result<Value, CoreError> {
             continue;
         }
         if let Some(module) = configuration.module().filter(|value| value != ".") {
-            let workspace_module = workspace_maven_path(Some(&configuration.cwd), &module);
+            let workspace_module = if configuration.cwd == "." {
+                module.clone()
+            } else {
+                format!("{}/{}", configuration.cwd, module)
+            };
             if !project_directory_exists(&root, &workspace_module) {
                 configuration.disabled = true;
                 diagnostics.push(json!({
@@ -961,12 +704,8 @@ pub fn resolve(request: ResolveRequest) -> Result<Value, CoreError> {
 
 fn apply_global_toolchain(configurations: &mut [RunConfiguration], toolchain: &Value) {
     let java_home = toolchain["java"]["homePath"].as_str().unwrap_or("");
-    let maven_executable = toolchain["maven"]["executablePath"].as_str().unwrap_or("");
-    let maven_java_home = toolchain["maven"]["javaHomePath"].as_str().unwrap_or("");
     for configuration in configurations {
-        if !configuration.toolchains.contains_key("java")
-            && !configuration.toolchains.contains_key("maven")
-        {
+        if !configuration.toolchains.contains_key("java") {
             continue;
         }
         let java = configuration
@@ -975,8 +714,6 @@ fn apply_global_toolchain(configurations: &mut [RunConfiguration], toolchain: &V
             .or_insert_with(|| json!({}));
         if let Some(object) = java.as_object_mut() {
             insert_toolchain_default(object, "homePath", java_home);
-            insert_toolchain_default(object, "mavenExecutablePath", maven_executable);
-            insert_toolchain_default(object, "mavenJavaHomePath", maven_java_home);
         }
     }
 }
@@ -1051,11 +788,7 @@ fn update_toolchain_document(
     let mut document = local_layer_document(root, local_document)?;
     validate_version_value(&document)?;
     document["toolchain"] = json!({
-        "java": { "homePath": toolchain.java_home_path },
-        "maven": {
-            "executablePath": toolchain.maven_executable_path,
-            "javaHomePath": toolchain.maven_java_home_path
-        }
+        "java": { "homePath": toolchain.java_home_path }
     });
     Ok(document)
 }
@@ -1110,13 +843,9 @@ fn update_configuration_options(
         .ok_or_else(|| {
             CoreError::new(ErrorCode::InvalidRequest, "Run configuration was not found")
         })?;
-    let uses_maven_capability = is_maven_backed(provider);
+    let uses_java_capability = is_java_launch(provider);
     let java_home_path =
         normalize_scoped_toolchain_path(&root, &request.scope, &request.java_home_path)?;
-    let maven_executable_path =
-        normalize_scoped_toolchain_path(&root, &request.scope, &request.maven_executable_path)?;
-    let maven_java_home_path =
-        normalize_scoped_toolchain_path(&root, &request.scope, &request.maven_java_home_path)?;
     let working_directory = if request.working_directory.trim().is_empty() {
         None
     } else {
@@ -1147,17 +876,8 @@ fn update_configuration_options(
     if !java_home_path.is_empty() {
         java_extension.insert("homePath".to_string(), json!(java_home_path));
     }
-    if !maven_executable_path.is_empty() {
-        java_extension.insert(
-            "mavenExecutablePath".to_string(),
-            json!(maven_executable_path),
-        );
-    }
-    if !maven_java_home_path.is_empty() {
-        java_extension.insert("mavenJavaHomePath".to_string(), json!(maven_java_home_path));
-    }
-    if uses_maven_capability {
-        let mut maven_extension = serde_json::Map::from_iter([
+    if uses_java_capability {
+        let java_arguments = serde_json::Map::from_iter([
             (
                 "jvmArguments".to_string(),
                 json!(split_arguments(&request.jvm_arguments)),
@@ -1166,24 +886,14 @@ fn update_configuration_options(
                 "programArguments".to_string(),
                 json!(split_arguments(&request.arguments)),
             ),
-            (
-                "profiles".to_string(),
-                json!(request.maven_profiles.into_iter().collect::<BTreeSet<_>>()),
-            ),
         ]);
-        if let Some(skip_tests) = request.maven_skip_tests {
-            maven_extension.insert("skipTests".to_string(), json!(skip_tests));
-        }
-        let mut extensions =
-            serde_json::Map::from_iter([("maven".to_string(), Value::Object(maven_extension))]);
-        if !java_extension.is_empty() {
-            extensions.insert("java".to_string(), Value::Object(java_extension));
-        }
-        patch["extensions"] = Value::Object(extensions);
-    } else if !java_extension.is_empty() {
+        java_extension.extend(java_arguments);
         patch["extensions"] = json!({ "java": java_extension });
     } else {
         patch["args"] = json!(split_arguments(&request.arguments));
+        if !java_extension.is_empty() {
+            patch["extensions"] = json!({ "java": java_extension });
+        }
     }
     if let Some(existing) = configurations
         .iter_mut()
@@ -1198,9 +908,6 @@ fn update_configuration_options(
         remove_java_toolchain_overrides(target)?;
         if working_directory.is_none() {
             target.remove("cwd");
-        }
-        if uses_maven_capability && request.maven_skip_tests.is_none() {
-            remove_maven_skip_tests_override(target);
         }
         for (key, value) in patch.as_object_mut().expect("patch is an object") {
             if key == "extensions" {
@@ -1240,7 +947,7 @@ fn remove_java_toolchain_overrides(
                 "Run configuration Java extension must be an object",
             )
         })?;
-        for key in ["homePath", "mavenExecutablePath", "mavenJavaHomePath"] {
+        for key in ["homePath"] {
             java.remove(key);
         }
         if java.is_empty() {
@@ -1253,129 +960,8 @@ fn remove_java_toolchain_overrides(
     Ok(())
 }
 
-fn remove_maven_skip_tests_override(configuration: &mut serde_json::Map<String, Value>) {
-    let Some(maven) = configuration
-        .get_mut("extensions")
-        .and_then(Value::as_object_mut)
-        .and_then(|extensions| extensions.get_mut("maven"))
-        .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
-    maven.remove("skipTests");
-}
-
-/// Creates a user configuration while preserving stable IDs in existing layers.
-pub fn create_user_configuration(
-    request: CreateUserConfigurationRequest,
-) -> Result<Value, CoreError> {
-    let root = existing_root(&request.root)?;
-    let relative = scope_document(&request.scope)?;
-    let name = request.name.trim();
-    if name.is_empty() {
-        return Err(CoreError::new(
-            ErrorCode::InvalidRequest,
-            "Configuration name is required",
-        ));
-    }
-    let configuration_kind = match request.kind.as_str() {
-        "springBoot" => "spring-boot.maven",
-        "quarkus" => "quarkus.maven",
-        "micronaut" => "micronaut.maven",
-        "mavenModule" => "maven.module",
-        _ => {
-            return Err(CoreError::new(
-                ErrorCode::NotSupported,
-                "Only Maven framework and Maven Module configurations can be created",
-            ));
-        }
-    };
-    let module = normalize_project_directory(
-        &root,
-        if request.module.trim().is_empty() {
-            "."
-        } else {
-            request.module.trim()
-        },
-        true,
-    )?;
-    let main_class = request.main_class.trim();
-    if configuration_kind == "spring-boot.maven" {
-        if main_class.is_empty() {
-            return Err(CoreError::new(
-                ErrorCode::InvalidRequest,
-                "Spring Boot main class is required",
-            ));
-        }
-        if !main_class_exists(&root, main_class)? {
-            return Err(CoreError::new(
-                ErrorCode::InvalidRequest,
-                "Spring Boot main class source does not exist",
-            )
-            .with_details(main_class));
-        }
-    }
-    let mut existing_ids = std::collections::BTreeSet::new();
-    for source in [
-        "run/generated.json",
-        "run/configurations.json",
-        "run/local.json",
-    ] {
-        if let Some(document) = read_document_value(&root, source)? {
-            validate_version_value(&document)?;
-            existing_ids.extend(configuration_ids(&document)?.into_keys());
-        }
-    }
-    let id = unique_user_configuration_id(name, &existing_ids);
-    let mut document = read_document_value(&root, relative)?
-        .unwrap_or_else(|| json!({"version": VERSION, "configurations": []}));
-    validate_version_value(&document)?;
-    let configurations = document["configurations"]
-        .as_array_mut()
-        .ok_or_else(|| CoreError::new(ErrorCode::ParseFailed, "configurations must be an array"))?;
-    let mut maven = json!({
-        "module": module,
-        "jvmArguments": [],
-        "programArguments": [],
-        "profiles": []
-    });
-    if !main_class.is_empty() {
-        maven["mainClass"] = json!(main_class);
-    }
-    let configuration = json!({
-        "id": id,
-        "name": name,
-        "provider": configuration_kind,
-        // A framework goal starts something long-running; a bare Maven goal runs to
-        // completion.
-        "execution": if framework_goal(configuration_kind).is_some() { "service" } else { "task" },
-        "confidence": "native",
-        "toolchains": {"java": "project-jdk", "maven": "project-maven"},
-        "debug": {"adapter": "jdwp"},
-        "extensions": {"maven": maven}
-    });
-    configurations.push(configuration);
-    configurations.sort_by(|left, right| {
-        left["id"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(right["id"].as_str().unwrap_or(""))
-    });
-    Ok(json!({
-        "id": id,
-        "document": serde_json::to_string_pretty(&document).expect("document should encode")
-    }))
-}
-
 /// Resolves one configuration into the exact executable, arguments, and environment.
 pub fn create_launch_plan(request: LaunchPlanRequest) -> Result<Value, CoreError> {
-    let workspace_root = existing_root(&request.root)?;
-    let has_explicit_cwd_override = configuration_override_has_key(
-        &workspace_root,
-        request.local_document.as_ref(),
-        &request.configuration_id,
-        "cwd",
-    )?;
     let resolved = resolve(ResolveRequest {
         root: request.root.clone(),
         toolchain_candidates: Vec::new(),
@@ -1387,17 +973,7 @@ pub fn create_launch_plan(request: LaunchPlanRequest) -> Result<Value, CoreError
         .ok_or_else(|| {
             CoreError::new(ErrorCode::InvalidRequest, "Run configuration was not found")
         })?;
-    if config["disabled"].as_bool().unwrap_or(false) {
-        return Err(CoreError::new(
-            ErrorCode::InvalidRequest,
-            "Run configuration is disabled",
-        ));
-    }
     let provider = config["provider"].as_str().unwrap_or("");
-
-    // A configuration carrying its own `command` is process-based: the detector
-    // already resolved what to run, so there is nothing ecosystem-specific to
-    // assemble. Dispatching here keeps the Java branches below untouched.
     if let Some(command) = config["command"].as_str().filter(|value| !value.is_empty()) {
         return process_launch_plan(config, command);
     }
@@ -1407,239 +983,64 @@ pub fn create_launch_plan(request: LaunchPlanRequest) -> Result<Value, CoreError
     {
         return toolchain_process_launch_plan(config, toolchain);
     }
-    if !is_maven_backed(provider) {
+    if !is_java_launch(provider) {
         return Err(CoreError::new(
             ErrorCode::InvalidRequest,
             "Run provider must declare a command or runtime toolchain",
         )
         .with_details(provider));
     }
-
-    let maven = &config["extensions"]["maven"];
-    let mut jvm_arguments = maven["jvmArguments"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let program_arguments = maven["programArguments"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let mut arguments = Vec::new();
-    let is_current = provider == "java.current-file";
-    let is_java_main = provider == "java.main";
-    let uses_maven_toolchain = config["toolchains"]["maven"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty());
-    let goal = framework_goal(provider);
-    // A framework that owns its own debug agent takes a port instead of raw JVM
-    // flags, so JDWP must not also be forced into `jvmArguments`: two agents on
-    // one port fail to bind and the service never starts.
-    let jvm_agent_debug = goal.map_or(true, |goal| matches!(goal.debug, FrameworkDebug::JvmAgent));
-    if let Some(port) = request.debug_port.filter(|_| jvm_agent_debug) {
-        jvm_arguments.insert(
+    let java = &config["extensions"]["java"];
+    let mut arguments = java["jvmArguments"].as_array().cloned().unwrap_or_default();
+    if let Some(port) = request.debug_port {
+        arguments.insert(
             0,
             json!(format!(
                 "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:{port}"
             )),
         );
-        jvm_arguments.insert(1, json!("-Duser.language=en"));
-        jvm_arguments.insert(2, json!("-Duser.country=US"));
+        arguments.insert(1, json!("-Duser.language=en"));
+        arguments.insert(2, json!("-Duser.country=US"));
     }
-    if is_current {
-        arguments.extend(jvm_arguments);
+    let source = if provider == "java.current-file" {
         if let Some(class_path) = request.class_path.filter(|value| !value.is_empty()) {
             arguments.extend([json!("--class-path"), json!(class_path)]);
         }
-        let current_file = request.current_file.ok_or_else(|| {
-            CoreError::new(
-                ErrorCode::InvalidRequest,
-                "Current File requires a Java source path",
-            )
-        })?;
-        if invalid_relative_path(&current_file) || !current_file.to_lowercase().ends_with(".java") {
-            return Err(CoreError::new(
-                ErrorCode::InvalidRequest,
-                "Current Java source path is invalid",
-            ));
-        }
-        arguments.push(json!(current_file));
-        arguments.extend(program_arguments);
-    } else if is_java_main && uses_maven_toolchain {
-        if request.maven_context.is_none() {
-            arguments.extend([json!("-B"), json!("-ntp")]);
-            if let Some(module) = maven["module"].as_str().filter(|m| *m != ".") {
-                arguments.extend([json!("-pl"), json!(module), json!("-am")]);
-            }
-        }
-        let main = maven["mainClass"].as_str().ok_or_else(|| {
-            CoreError::new(
-                ErrorCode::InvalidRequest,
-                "Java application is missing its main class",
-            )
-        })?;
-        arguments.push(json!(format!("-Dexec.mainClass={main}")));
-        let uses_test_classpath = uses_java_test_source_set(config);
-        if uses_test_classpath {
-            // Exec Maven Plugin excludes test output and dependencies by default.
-            arguments.push(json!("-Dexec.classpathScope=test"));
-        }
-        if !program_arguments.is_empty() {
-            arguments.push(json!(format!(
-                "-Dexec.args={}",
-                string_arguments(&program_arguments)
-            )));
-        }
-        if uses_test_classpath {
-            arguments.push(json!("test-compile"));
-        }
-        arguments.push(json!("org.codehaus.mojo:exec-maven-plugin:3.5.0:java"));
-    } else if is_java_main {
-        arguments.extend(jvm_arguments);
-        let source = config["extensions"]["java"]["source"]
-            .as_str()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                CoreError::new(
-                    ErrorCode::InvalidRequest,
-                    "Java application is missing its source path",
-                )
-            })?;
-        if invalid_relative_path(source) || !source.to_lowercase().ends_with(".java") {
-            return Err(CoreError::new(
-                ErrorCode::InvalidRequest,
-                "Java source path is invalid",
-            ));
-        }
-        if crate::project::maven_root(&workspace_root, &[source.to_string()])?.is_some() {
-            return Err(CoreError::new(
-                ErrorCode::InvalidRequest,
-                "Java application belongs to a Maven project; regenerate run configurations",
-            )
-            .with_details(source));
-        }
-        arguments.push(json!(source));
-        arguments.extend(program_arguments);
+        request.current_file
     } else {
-        // `maven.module` has no framework goal: it runs whatever goals the
-        // configuration names, so only the reactor selection applies.
-        if request.maven_context.is_none() {
-            arguments.extend([json!("-B"), json!("-ntp")]);
-            if let Some(module) = maven["module"].as_str().filter(|m| *m != ".") {
-                arguments.extend([json!("-pl"), json!(module), json!("-am")]);
-            }
-            if let Some(profiles) = maven["profiles"].as_array().filter(|p| !p.is_empty()) {
-                arguments.extend([
-                    json!("-P"),
-                    json!(profiles
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(",")),
-                ]);
-            }
-        }
-        if let Some(goal) = goal {
-            arguments.extend(framework_arguments(
-                goal,
-                maven,
-                &jvm_arguments,
-                &program_arguments,
-                request.debug_port,
-            ));
-            arguments.push(json!(goal.goal));
-        }
+        java["source"].as_str().map(str::to_string)
     }
-    let executable_kind = if is_current || (is_java_main && !uses_maven_toolchain) {
-        "java"
-    } else {
-        "maven"
-    };
-    let executable_toolchain = config["toolchains"][executable_kind]
-        .as_str()
-        .ok_or_else(|| {
-            CoreError::new(
-                ErrorCode::InvalidRequest,
-                "Run configuration is missing its executable toolchain",
-            )
-            .with_details(executable_kind)
-        })?;
-    let java_toolchain = config["toolchains"]["java"]
-        .as_str()
-        .unwrap_or("project-jdk");
-    let mut working_directory = config["cwd"].as_str().unwrap_or(".").to_string();
-    let has_explicit_working_directory = working_directory != "." || has_explicit_cwd_override;
-    if executable_kind == "maven" {
-        if let Some(mut context) = request.maven_context {
-            if let Some(profiles) = maven["profiles"]
-                .as_array()
-                .filter(|items| !items.is_empty())
-            {
-                context.profiles = profiles
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect();
-            }
-            if let Some(skip_tests) = maven.get("skipTests").and_then(Value::as_bool) {
-                context.skip_tests = skip_tests;
-            }
-            let module = maven["module"].as_str().map(str::to_string);
-            let trailing_arguments = arguments
-                .into_iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect();
-            let shared_plan = crate::project::launch_plan_with_arguments(
-                request.root,
-                context,
-                module,
-                trailing_arguments,
-                true,
-            )?;
-            arguments = shared_plan
-                .arguments
-                .into_iter()
-                .map(Value::String)
-                .collect();
-            if !has_explicit_working_directory {
-                working_directory = shared_plan.working_directory;
-            }
-        }
+    .ok_or_else(|| {
+        CoreError::new(
+            ErrorCode::InvalidRequest,
+            "Java application requires a source path",
+        )
+    })?;
+    if invalid_relative_path(&source) || !source.to_lowercase().ends_with(".java") {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "Java source path is invalid",
+        ));
     }
-    Ok(json!({
-        "executable": { "toolchain": executable_toolchain },
-        "arguments": arguments,
-        "workingDirectory": working_directory,
-        "environment": {
-            "JAVA_HOME": { "toolchain": java_toolchain, "property": "home" }
-        }
-    }))
-}
-
-/// Returns whether a user-owned layer explicitly sets one configuration key.
-///
-/// Generated `cwd: "."` is the schema default and may inherit the selected
-/// reactor. A project or local `cwd: "."`, however, is an intentional override
-/// and must keep the workspace root.
-fn configuration_override_has_key(
-    root: &Path,
-    provided_local: Option<&Value>,
-    configuration_id: &str,
-    key: &str,
-) -> Result<bool, CoreError> {
-    let team = read_document_value(root, "run/configurations.json")?
-        .unwrap_or_else(|| json!({"version": VERSION, "configurations": []}));
-    let local = local_layer_document(root, provided_local.cloned())?;
-    for document in [&team, &local] {
-        validate_version_value(document)?;
-        if document["configurations"]
+    arguments.push(json!(source));
+    arguments.extend(
+        java["programArguments"]
             .as_array()
-            .and_then(|items| items.iter().find(|item| item["id"] == configuration_id))
-            .is_some_and(|item| item.get(key).is_some())
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+            .cloned()
+            .unwrap_or_default(),
+    );
+    let toolchain = config["toolchains"]["java"].as_str().ok_or_else(|| {
+        CoreError::new(
+            ErrorCode::InvalidRequest,
+            "Run configuration is missing its executable toolchain",
+        )
+    })?;
+    Ok(json!({
+        "executable": { "toolchain": toolchain }, "arguments": arguments,
+        "workingDirectory": config["cwd"].as_str().unwrap_or("."),
+        "environment": { "JAVA_HOME": { "toolchain": toolchain, "property": "home" } },
+        "env": config["env"].as_object().cloned().unwrap_or_default()
+    }))
 }
 
 /// Providers the launch layer assembles a JVM command line for, rather than
@@ -1648,132 +1049,8 @@ fn configuration_override_has_key(
 /// These are the providers whose `Detected` names toolchains instead of a
 /// command, so `create_launch_plan` has to know each one. Every other ecosystem
 /// is dispatched from the configuration itself and needs no entry here.
-fn is_maven_backed(provider: &str) -> bool {
-    matches!(provider, "java.current-file" | "java.main" | "maven.module")
-        || framework_goal(provider).is_some()
-}
-
-fn uses_java_test_source_set(configuration: &Value) -> bool {
-    match configuration["extensions"]["java"]["sourceSet"].as_str() {
-        Some("test") => true,
-        Some(_) => false,
-        // Generated documents from older versions predate the explicit source
-        // set. Preserve their launch behavior until regeneration replaces them.
-        None => configuration["extensions"]["java"]["source"]
-            .as_str()
-            .is_some_and(|source| {
-                let normalized = source.to_ascii_lowercase();
-                normalized.starts_with("src/test/") || normalized.contains("/src/test/")
-            }),
-    }
-}
-
-/// How a framework's Maven goal expects a debugger to be attached.
-#[derive(Clone, Copy, PartialEq)]
-enum FrameworkDebug {
-    /// The goal forwards JVM arguments verbatim, so JDWP goes in among them.
-    JvmAgent,
-    /// The goal starts the agent itself, given a port. `properties` are appended
-    /// in order with the port substituted for `{port}`.
-    Managed(&'static [&'static str]),
-}
-
-/// A framework's `mvn` goal and the property names its arguments travel under.
-///
-/// Each plugin invented its own names for the same three things, so the goal name
-/// alone is not enough to launch one: passing Spring's `-Dspring-boot.run.*` to
-/// `quarkus:dev` is silently ignored and the service starts with none of the
-/// user's arguments. Grouping the names with the goal keeps that mapping in one
-/// place per framework.
-struct FrameworkGoal {
-    goal: &'static str,
-    /// Property carrying JVM arguments as one space-joined string.
-    jvm_arguments: &'static str,
-    /// Property carrying application arguments as one space-joined string.
-    program_arguments: &'static str,
-    /// Property naming the main class, where the goal accepts one. Quarkus and
-    /// Micronaut resolve it from the build instead, so only Spring Boot has one.
-    main_class: Option<&'static str>,
-    debug: FrameworkDebug,
-}
-
-/// Verified against each plugin's own goal documentation: Spring Boot's
-/// `spring-boot:run`, Quarkus' `DevMojo` (`${jvm.args}`, `${quarkus.args}`,
-/// `${debug}`, `${suspend}`), and the Micronaut plugin's `run` mojo (`mn.jvmArgs`,
-/// `mn.appArgs`, `mn.debug*`).
-fn framework_goal(provider: &str) -> Option<&'static FrameworkGoal> {
-    const SPRING_BOOT: FrameworkGoal = FrameworkGoal {
-        goal: "spring-boot:run",
-        jvm_arguments: "spring-boot.run.jvmArguments",
-        program_arguments: "spring-boot.run.arguments",
-        main_class: Some("spring-boot.run.main-class"),
-        debug: FrameworkDebug::JvmAgent,
-    };
-    // Quarkus dev mode already listens on 5005 without suspending. An explicit
-    // port plus `suspend=y` matches what the IDE needs: the debugger must be
-    // attached before the service gets past startup, or breakpoints in
-    // initialisation never hit.
-    const QUARKUS: FrameworkGoal = FrameworkGoal {
-        goal: "quarkus:dev",
-        jvm_arguments: "jvm.args",
-        program_arguments: "quarkus.args",
-        main_class: None,
-        debug: FrameworkDebug::Managed(&["-Ddebug={port}", "-Dsuspend=y"]),
-    };
-    const MICRONAUT: FrameworkGoal = FrameworkGoal {
-        goal: "mn:run",
-        jvm_arguments: "mn.jvmArgs",
-        program_arguments: "mn.appArgs",
-        main_class: None,
-        debug: FrameworkDebug::Managed(&[
-            "-Dmn.debug=true",
-            "-Dmn.debug.port={port}",
-            "-Dmn.debug.suspend=true",
-        ]),
-    };
-    match provider {
-        "spring-boot.maven" => Some(&SPRING_BOOT),
-        "quarkus.maven" => Some(&QUARKUS),
-        "micronaut.maven" => Some(&MICRONAUT),
-        _ => None,
-    }
-}
-
-/// The `-D` properties that carry a configuration's options into a framework
-/// goal. Order is fixed so a plan is reproducible across calls.
-fn framework_arguments(
-    goal: &FrameworkGoal,
-    maven: &Value,
-    jvm_arguments: &[Value],
-    program_arguments: &[Value],
-    debug_port: Option<u16>,
-) -> Vec<Value> {
-    let mut arguments = Vec::new();
-    if let (Some(property), Some(main)) = (goal.main_class, maven["mainClass"].as_str()) {
-        arguments.push(json!(format!("-D{property}={main}")));
-    }
-    if !jvm_arguments.is_empty() {
-        arguments.push(json!(format!(
-            "-D{}={}",
-            goal.jvm_arguments,
-            string_arguments(jvm_arguments)
-        )));
-    }
-    if !program_arguments.is_empty() {
-        arguments.push(json!(format!(
-            "-D{}={}",
-            goal.program_arguments,
-            string_arguments(program_arguments)
-        )));
-    }
-    if let (Some(port), FrameworkDebug::Managed(properties)) = (debug_port, goal.debug) {
-        arguments.extend(
-            properties
-                .iter()
-                .map(|property| json!(property.replace("{port}", &port.to_string()))),
-        );
-    }
-    arguments
+fn is_java_launch(provider: &str) -> bool {
+    matches!(provider, "java.current-file" | "java.main")
 }
 
 /// Launch plan for configurations that name their own executable.
@@ -1828,14 +1105,6 @@ fn toolchain_process_launch_plan(config: &Value, toolchain: &str) -> Result<Valu
         "environment": {},
         "env": config["env"].as_object().cloned().unwrap_or_default()
     }))
-}
-
-fn string_arguments(values: &[Value]) -> String {
-    values
-        .iter()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn validate_version_value(document: &Value) -> Result<(), CoreError> {
@@ -1986,7 +1255,7 @@ fn normalize_runtime_consumption(configurations: &mut [RunConfiguration]) {
 
 /// Deep-merges the `extensions` object one namespace at a time.
 ///
-/// A shallow insert would let a layer that touches a single maven key drop the
+/// A shallow insert would let a layer that touches a single extension key drop the
 /// whole npm namespace it never mentioned.
 fn merge_extensions(
     target: &mut serde_json::Map<String, Value>,
@@ -2187,45 +1456,6 @@ fn project_directory_exists(root: &Path, value: &str) -> bool {
     canonical_target.is_dir() && canonical_target.starts_with(canonical_root)
 }
 
-fn unique_user_configuration_id(
-    name: &str,
-    existing_ids: &std::collections::BTreeSet<String>,
-) -> String {
-    let mut slug = String::new();
-    let mut separator = false;
-    for character in name.to_lowercase().chars() {
-        if character.is_alphanumeric() {
-            slug.push(character);
-            separator = false;
-        } else if !slug.is_empty() {
-            separator = true;
-        }
-        if separator && !slug.ends_with('-') {
-            slug.push('-');
-        }
-    }
-    let slug = slug.trim_matches('-');
-    let base = format!(
-        "user:{}",
-        if slug.is_empty() {
-            "configuration"
-        } else {
-            slug
-        }
-    );
-    if !existing_ids.contains(&base) {
-        return base;
-    }
-    let mut suffix = 2;
-    loop {
-        let candidate = format!("{base}-{suffix}");
-        if !existing_ids.contains(&candidate) {
-            return candidate;
-        }
-        suffix += 1;
-    }
-}
-
 fn split_arguments(input: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut current = String::new();
@@ -2366,7 +1596,6 @@ fn read_local_toolchains(root: &Path) -> Result<Option<Value>, CoreError> {
 
 fn detect_requirements(
     root: &Path,
-    maven_root: Option<&Path>,
     has_java_ecosystem: bool,
     configurations: &[RunConfiguration],
 ) -> Result<ToolchainRequirementsDocument, CoreError> {
@@ -2378,35 +1607,10 @@ fn detect_requirements(
         version: None,
         java: None,
     };
-    let mut maven = ToolchainRequirement {
-        kind: "maven".to_string(),
-        minimum_version: None,
-        preferred_vendor: None,
-        wrapper: None,
-        version: None,
-        java: Some("project-jdk".to_string()),
-    };
-    let maven_root = maven_root.unwrap_or(root);
-    let pom = maven_root.join("pom.xml");
-    if let Ok(text) = fs::read_to_string(pom) {
-        let re = regex::Regex::new(r"(?:maven.compiler.release|maven.compiler.source|maven.compiler.target|java.version)\s*>?\s*[:=]?\s*([0-9]+)").unwrap();
-        jdk.minimum_version = re
-            .captures(&text)
-            .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
-    }
-    if let Some((version, vendor)) =
-        declared_java_version(maven_root).or_else(|| declared_java_version(root))
-    {
+    if let Some((version, vendor)) = declared_java_version(root) {
         jdk.minimum_version = Some(version);
         jdk.preferred_vendor = vendor;
     }
-    if maven_root.join("mvnw").exists() {
-        maven.wrapper = Some("./mvnw".to_string());
-    }
-    // Wrapper distribution is a floor for system Maven, not an exact pin. A
-    // newer installed Maven (for example 3.9.x against a 3.6.x wrapper URL)
-    // remains valid for launch planning and run diagnostics.
-    maven.minimum_version = maven_wrapper_version(maven_root);
     let mut toolchains = BTreeMap::new();
     let consumes = |toolchain: &str| {
         configurations.iter().any(|configuration| {
@@ -2418,9 +1622,6 @@ fn detect_requirements(
     };
     if has_java_ecosystem || consumes("project-jdk") {
         toolchains.insert("project-jdk".to_string(), jdk);
-    }
-    if maven_root.join("pom.xml").is_file() || maven_root.join("mvnw").is_file() {
-        toolchains.insert("project-maven".to_string(), maven);
     }
     if consumes("project-node") {
         toolchains.insert(
@@ -2488,12 +1689,11 @@ fn toolchain_diagnostics(
             .as_deref()
             .or(requirement.version.as_deref());
         if let Some(required) = required_version {
-            // Maven wrapper properties historically landed in `version`. Treat
-            // that field as a minimum for Maven so already-written requirement
-            // documents do not block newer system Maven installs.
-            let treat_as_minimum = requirement.minimum_version.is_some()
-                || (requirement.kind == "maven" && requirement.version.is_some());
-            if !version_satisfies(&candidate.version, required, treat_as_minimum) {
+            if !version_satisfies(
+                &candidate.version,
+                required,
+                requirement.minimum_version.is_some(),
+            ) {
                 append_toolchain_diagnostics(
                     &mut diagnostics,
                     &consumer_ids,
@@ -2657,10 +1857,7 @@ fn fingerprint_input(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
         Some(
-            "pom.xml"
-                | "mvnw"
-                | "maven-wrapper.properties"
-                | ".java-version"
+            ".java-version"
                 | ".sdkmanrc"
                 | "mise.toml"
                 | "package.json"
@@ -2794,20 +1991,6 @@ fn vendor_from_version(value: &str) -> Option<String> {
     } else {
         None
     }
-}
-
-fn maven_wrapper_version(root: &Path) -> Option<String> {
-    let text = fs::read_to_string(
-        root.join(".mvn")
-            .join("wrapper")
-            .join("maven-wrapper.properties"),
-    )
-    .ok()?;
-    regex::Regex::new(r"apache-maven-([0-9]+(?:\.[0-9]+)+)-bin\.(?:zip|tar\.gz)")
-        .ok()?
-        .captures(&text)
-        .and_then(|capture| capture.get(1))
-        .map(|value| value.as_str().to_string())
 }
 
 fn main_class_exists(root: &Path, main_class: &str) -> Result<bool, CoreError> {

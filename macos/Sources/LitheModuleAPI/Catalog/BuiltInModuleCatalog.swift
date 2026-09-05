@@ -110,7 +110,6 @@ public enum BuiltInModuleCatalog {
             ModuleContribution(id: "debug.session", kind: .toolWindow, title: "Debug", icon: "ladybug", order: 700, actionID: "debug.toggle", rendererID: "debug.session")
         ],
         .execution: [
-            ModuleContribution(id: "execution.maven", kind: .toolWindow, title: "Maven", icon: "shippingbox", order: 400, actionID: "execution.maven.toggle", rendererID: "execution.maven", visibility: ["projectKind": "maven"]),
             ModuleContribution(id: "execution.run", kind: .toolWindow, title: "Run", icon: "play.rectangle", order: 500, actionID: "execution.run.toggle", rendererID: "execution.run"),
             ModuleContribution(id: "execution.tests", kind: .toolWindow, title: "Tests", icon: "checkmark.seal", order: 600, actionID: "execution.tests.toggle", rendererID: "execution.tests")
         ],
@@ -196,7 +195,6 @@ public enum BuiltInPluginCatalog {
 /// module graph and become available only when their signed package exists.
 public enum OfficialPluginCatalog {
     private static let goLanguageID = "go"
-    public static let linuxDoSupportModuleID = ModuleID("dev.lithe.community.linux-do")
 
     public static let manifests: [PluginManifest] = [
         PluginManifest(
@@ -248,43 +246,6 @@ public enum OfficialPluginCatalog {
                 executionModuleID: .languageExecutionExtension(goLanguageID),
                 testingModuleID: .languageExecutionExtension(goLanguageID)
             )]
-        ),
-        PluginManifest(
-            id: PluginID("dev.lithe.plugin.linux-do-support"),
-            displayName: "LINUX DO Support",
-            version: BuiltInPluginCatalog.hostVersion,
-            hostCompatibility: PluginHostCompatibility(
-                minimum: BuiltInPluginCatalog.hostVersion,
-                maximumExclusive: PluginVersion(major: 0, minor: 4, patch: 0)
-            ),
-            vendor: BuiltInPluginCatalog.vendor,
-            entrypoint: PluginEntrypoint(
-                kind: .nativeBundle,
-                bundleIdentifier: "dev.lithe.plugin.linux-do-support.bundle",
-                principalClass: "LitheLinuxDoSupportPluginEntrypoint",
-                bundlePath: "LinuxDoSupport.bundle"
-            ),
-            modules: [
-                PluginModuleDeclaration(
-                    manifest: ModuleManifest(
-                        id: linuxDoSupportModuleID,
-                        displayName: "LINUX DO",
-                        scope: .application,
-                        defaultState: .disabled,
-                        activationPolicy: .onDemand
-                    ),
-                    contributions: [ModuleContribution(
-                        id: "community.linux-do",
-                        kind: .toolWindow,
-                        title: "LINUX DO",
-                        icon: "bubble.left.and.bubble.right",
-                        placement: .rightSidebar,
-                        order: 100,
-                        actionID: "community.linux-do.toggle",
-                        rendererID: "community.linux-do.browser"
-                    )]
-                )
-            ]
         )
     ]
 

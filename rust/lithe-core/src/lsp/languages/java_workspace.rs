@@ -28,9 +28,6 @@ const BUILD_FILE_NAMES: &[&str] = &[
     "gradle.properties",
     "gradlew",
     "gradlew.bat",
-    "mvnw",
-    "mvnw.cmd",
-    "pom.xml",
     "settings.gradle",
     "settings.gradle.kts",
 ];
@@ -78,7 +75,7 @@ pub(crate) enum JavaWorkspaceChangeKind {
     Ignored,
     /// A Java document synchronized through versioned LSP document events.
     Source,
-    /// Maven or Gradle structure that requires a debounced project refresh.
+    /// Gradle structure that requires a debounced project refresh.
     BuildConfiguration,
     /// A workspace file that does not affect the Java project model.
     Other,
@@ -125,9 +122,6 @@ pub(crate) struct JdtWorkspaceFingerprintRequest {
     /// Root build descriptors observed without recursive filesystem traversal.
     #[serde(default)]
     pub build_files: Vec<JdtBuildFileObservation>,
-    /// Names of direct child directories that contain a Maven descriptor.
-    #[serde(default)]
-    pub direct_maven_modules: Vec<String>,
     /// JDT LS version resolved by the platform package adapter.
     pub jdtls_version: String,
 }
@@ -200,20 +194,14 @@ pub(crate) fn jdt_workspace_fingerprint(
             ),
         );
     }
-    let modules = request
-        .direct_maven_modules
-        .into_iter()
-        .map(|module| normalize_module_name(&module))
-        .collect::<Result<BTreeSet<_>, _>>()?;
     let build_files = build_files
         .into_iter()
         .map(|(path, (modified, size))| format!("{path}@{modified}:{size}"))
         .collect::<Vec<_>>()
         .join(",");
-    let modules = modules.into_iter().collect::<Vec<_>>().join(",");
 
     Ok(JdtWorkspaceFingerprintResponse {
-        workspace_fingerprint: format!("build={build_files}|modules={modules}|jdtls={version}"),
+        workspace_fingerprint: format!("build={build_files}|jdtls={version}"),
     })
 }
 
@@ -305,19 +293,6 @@ fn normalize_relative_path(path: &str) -> Result<String, CoreError> {
     Ok(normalized.to_string())
 }
 
-fn normalize_module_name(value: &str) -> Result<String, CoreError> {
-    let normalized = value.trim();
-    if normalized.is_empty() || normalized.contains(['/', '\\']) || matches!(normalized, "." | "..")
-    {
-        return Err(CoreError::new(
-            ErrorCode::InvalidRequest,
-            "Direct Maven module names must be single path components.",
-        )
-        .with_details(value.to_string()));
-    }
-    Ok(normalized.to_string())
-}
-
 fn classify_change(path: &str) -> JavaWorkspaceChangeKind {
     if is_ignored(path) {
         JavaWorkspaceChangeKind::Ignored
@@ -349,9 +324,9 @@ fn is_build_configuration(path: &str) -> bool {
         .map(|component| component.to_ascii_lowercase())
         .unwrap_or_default();
     BUILD_FILE_NAMES.contains(&file_name.as_str())
-        || components.iter().any(|component| {
-            component.eq_ignore_ascii_case(".mvn") || component.eq_ignore_ascii_case("gradle")
-        })
+        || components
+            .iter()
+            .any(|component| component.eq_ignore_ascii_case("gradle"))
 }
 
 #[cfg(test)]
@@ -379,17 +354,10 @@ mod tests {
                     modified_unix_milliseconds: 1,
                     size_bytes: 1,
                 }],
-                direct_maven_modules: Vec::new(),
                 jdtls_version: "1.38.0".to_string(),
             },
             JdtWorkspaceFingerprintRequest {
                 build_files: Vec::new(),
-                direct_maven_modules: vec!["nested/core".to_string()],
-                jdtls_version: "1.38.0".to_string(),
-            },
-            JdtWorkspaceFingerprintRequest {
-                build_files: Vec::new(),
-                direct_maven_modules: Vec::new(),
                 jdtls_version: "  ".to_string(),
             },
         ] {

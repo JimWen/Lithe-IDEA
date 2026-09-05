@@ -324,7 +324,7 @@ mod tests {
     fn progress(signature: &str, percentage: u64) -> JdtImportProgress {
         JdtImportProgress {
             activity_signature: signature.to_string(),
-            phase: Some("Importing Maven project(s)".to_string()),
+            phase: Some("Importing workspace project(s)".to_string()),
             percentage: Some(percentage),
             current_project: Some("module-a".to_string()),
             download: None,

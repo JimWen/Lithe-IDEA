@@ -40,10 +40,6 @@ struct RunConfigurationEditorView: View {
                     if effectiveCapabilities.contains(.environment) {
                         environmentSection
                     }
-                    if effectiveCapabilities.contains(.mavenSkipTests)
-                        || (effectiveCapabilities.contains(.mavenProfiles) && !feature.mavenProfiles.isEmpty) {
-                        mavenOptionsSection
-                    }
                 }
                 .padding(18)
             }
@@ -160,7 +156,7 @@ struct RunConfigurationEditorView: View {
                 summaryRow(title: "Main class", value: mainClass)
             }
             if let modulePath = configuration.modulePath {
-                summaryRow(title: "Maven module", value: modulePath)
+                summaryRow(title: "Module", value: modulePath)
             }
         }
     }
@@ -183,21 +179,6 @@ struct RunConfigurationEditorView: View {
                     chooseDirectory: { chooseDirectory(for: \.javaHomePath) }
                 )
             }
-            if configuration.kind.isMavenBacked {
-                pathRow(
-                    title: "Maven home or executable",
-                    placeholder: "Use project default",
-                    text: stringBinding(\.mavenExecutablePath),
-                    chooseDirectory: { chooseFileOrDirectory(for: \.mavenExecutablePath) },
-                    chooseHelp: "Choose Maven executable or home"
-                )
-                pathRow(
-                    title: "Maven JDK Home",
-                    placeholder: "Use project default",
-                    text: stringBinding(\.mavenJavaHomePath),
-                    chooseDirectory: { chooseDirectory(for: \.mavenJavaHomePath) }
-                )
-            }
             pathRow(
                 title: "Working directory",
                 placeholder: "Use project or file directory",
@@ -217,21 +198,6 @@ struct RunConfigurationEditorView: View {
                     chooseDirectory: { chooseProjectToolchainDirectory(for: \.javaHomePath) }
                 )
             }
-            if configuration.kind.isMavenBacked {
-                pathRow(
-                    title: "Maven home or executable",
-                    placeholder: "Use mvnw or detected Maven",
-                    text: projectToolchainBinding(\.mavenExecutablePath),
-                    chooseDirectory: { chooseProjectToolchainFileOrDirectory(for: \.mavenExecutablePath) },
-                    chooseHelp: "Choose Maven executable or home"
-                )
-                pathRow(
-                    title: "Maven JDK Home",
-                    placeholder: "Use project JDK",
-                    text: projectToolchainBinding(\.mavenJavaHomePath),
-                    chooseDirectory: { chooseProjectToolchainDirectory(for: \.mavenJavaHomePath) }
-                )
-            }
         }
     }
 
@@ -240,15 +206,13 @@ struct RunConfigurationEditorView: View {
             if effectiveCapabilities.contains(.javaVMArguments) {
                 argumentField(
                     title: "VM options",
-                    placeholder: "-Xmx1g -Dserver.port=8080",
+                    placeholder: "-Xmx1g",
                     text: stringBinding(\.vmArguments)
                 )
             }
             argumentField(
                 title: "Program arguments",
-                placeholder: configuration.kind.isMavenBacked
-                    ? "--spring.profiles.active=dev"
-                    : "Arguments passed to the program",
+                placeholder: "Arguments passed to the program",
                 text: stringBinding(\.arguments)
             )
         }
@@ -268,40 +232,6 @@ struct RunConfigurationEditorView: View {
             Text("One NAME=value entry per line")
                 .font(.system(size: 10.5))
                 .foregroundStyle(LitheTheme.secondaryText)
-        }
-    }
-
-    private var mavenOptionsSection: some View {
-        section(title: "Maven") {
-            if effectiveCapabilities.contains(.mavenSkipTests) {
-                Picker("Tests", selection: Binding(
-                    get: { options.mavenSkipTests },
-                    set: { options.mavenSkipTests = $0 }
-                )) {
-                    Text("Project default").tag(Bool?.none)
-                    Text("Run tests").tag(Bool?.some(false))
-                    Text("Skip tests").tag(Bool?.some(true))
-                }
-                .pickerStyle(.segmented)
-            }
-            if effectiveCapabilities.contains(.mavenProfiles) {
-                ForEach(feature.mavenProfiles) { profile in
-                    Toggle(isOn: profileBinding(for: profile)) {
-                        HStack(spacing: 0) {
-                            Text(profile.id)
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .toggleStyle(.checkbox)
-                    .lithePointer()
-                    .font(.system(size: 12))
-                    .foregroundStyle(LitheTheme.primaryText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
         }
     }
 
@@ -382,18 +312,6 @@ struct RunConfigurationEditorView: View {
         )
     }
 
-    private func profileBinding(for profile: MavenProfile) -> Binding<Bool> {
-        Binding(
-            get: { options.activeProfiles.contains(profile.id) },
-            set: { enabled in
-                if enabled {
-                    options.activeProfiles.insert(profile.id)
-                } else {
-                    options.activeProfiles.remove(profile.id)
-                }
-            }
-        )
-    }
 
     private func chooseDirectory(for keyPath: WritableKeyPath<RunOptions, String>) {
         presentPathPicker(.directory(keyPath))
@@ -452,8 +370,6 @@ struct RunConfigurationEditorView: View {
         var scopedOptions = options
         for keyPath in [
             \.javaHomePath,
-            \.mavenExecutablePath,
-            \.mavenJavaHomePath,
             \.workingDirectoryPath
         ] as [WritableKeyPath<RunOptions, String>] {
             let value = scopedOptions[keyPath: keyPath].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -518,8 +434,6 @@ struct RunConfigurationEditorView: View {
     ) -> RunOptions {
         var overrides = options
         if overrides.javaHomePath == defaults.javaHomePath { overrides.javaHomePath = "" }
-        if overrides.mavenExecutablePath == defaults.mavenExecutablePath { overrides.mavenExecutablePath = "" }
-        if overrides.mavenJavaHomePath == defaults.mavenJavaHomePath { overrides.mavenJavaHomePath = "" }
         return overrides
     }
 

@@ -83,7 +83,6 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
         }
         let configurations: [EffectiveRunConfiguration] = payload.configurations.map { value in
             let kind = configurationKind(value.provider)
-            let maven = value.maven
             let java = value.extensions?.java
             return EffectiveRunConfiguration(
                 configuration: RunConfiguration(
@@ -91,18 +90,14 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
                     name: value.name,
                     kind: kind,
                     execution: value.execution.flatMap(RunConfigurationExecution.init(rawValue:)),
-                    modulePath: maven?.module == "." ? nil : maven?.module,
-                    mainClass: maven?.mainClass
+                    modulePath: java?.module == "." ? nil : java?.module,
+                    mainClass: java?.mainClass
                 ),
                 options: RunOptions(
                     javaHomePath: java?.homePath ?? "",
                     workingDirectoryPath: (value.cwd ?? ".") == "." ? "" : (value.cwd ?? "."),
-                    vmArguments: (maven?.jvmArguments ?? []).joined(separator: " "),
-                    programArguments: (maven?.programArguments ?? value.args ?? []).joined(separator: " "),
-                    activeProfiles: Set(maven?.profiles ?? []),
-                    mavenSkipTests: maven?.skipTests,
-                    mavenExecutablePath: java?.mavenExecutablePath ?? "",
-                    mavenJavaHomePath: java?.mavenJavaHomePath ?? "",
+                    vmArguments: (java?.jvmArguments ?? []).joined(separator: " "),
+                    programArguments: (java?.programArguments ?? value.args ?? []).joined(separator: " "),
                     environment: value.env ?? [:]
                 ),
                 source: RunConfigurationSource(rawValue: value.source ?? "generated") ?? .generated
@@ -113,12 +108,11 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
             diagnostics: diagnostics(from: payload.diagnostics),
             defaultConfigurationID: payload.defaultRunConfiguration,
             projectToolchain: ProjectToolchainSelection(
-                javaHomePath: payload.toolchain?.java?.homePath ?? "",
-                mavenExecutablePath: payload.toolchain?.maven?.executablePath ?? "",
-                mavenJavaHomePath: payload.toolchain?.maven?.javaHomePath ?? ""
+                javaHomePath: payload.toolchain?.java?.homePath ?? ""
             )
         )
     }
+
 
     func launchPlan(
         at projectURL: URL,
@@ -127,32 +121,13 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
         classPath: String?,
         debugPort: Int?
     ) throws -> SharedLaunchPlan {
-        try launchPlan(
-            at: projectURL,
-            configurationID: configurationID,
-            currentFile: currentFile,
-            classPath: classPath,
-            debugPort: debugPort,
-            mavenContext: nil
-        )
-    }
-
-    func launchPlan(
-        at projectURL: URL,
-        configurationID: String,
-        currentFile: String?,
-        classPath: String?,
-        debugPort: Int?,
-        mavenContext: MavenLaunchContext?
-    ) throws -> SharedLaunchPlan {
         let value: RustCoreBridge.LaunchPlanPayload
         switch core.createLaunchPlan(
             at: projectURL,
             configurationID: configurationID,
             currentFile: currentFile,
             classPath: classPath,
-            debugPort: debugPort,
-            mavenContext: mavenContext
+            debugPort: debugPort
         ) {
         case .success(let payload): value = payload
         case .failure(let error): throw RunConfigurationOperationFailure(message: error.userMessage)
@@ -243,19 +218,6 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
         }
     }
 
-    func createConfiguration(_ draft: RunConfigurationDraft, at projectURL: URL) throws -> String {
-        let root = projectURL.standardizedFileURL
-        let fileName = draft.scope == .local ? "local.json" : "configurations.json"
-        let url = root.appendingPathComponent(".lithe/run/\(fileName)")
-        let mutation = try documentMutator.createConfigurationDocument(at: root, draft: draft)
-        guard let id = mutation.configurationID else {
-            throw MacRunConfigurationStoreError.invalidConfiguration(
-                "The shared core did not return a configuration ID."
-            )
-        }
-        try writeMutation(mutation, to: url, root: root)
-        return id
-    }
 
     /// Converts the legacy per-project UserDefaults values into local-only JSON once.
     /// Existing values are retained as a rollback source for one release cycle.
@@ -312,12 +274,7 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
             let ignore = "run/local.json\n**/*.tmp\n"
             if !storage.fileExists(at: ignoreURL) { try atomicWrite(Data(ignore.utf8), to: ignoreURL, root: root) }
             if !storage.fileExists(at: manifestURL) {
-                // A framework service is what the user most likely wants to
-                // start first, whichever framework the project uses.
-                let frameworkProviders = Set(MavenFrameworkKind.allCases.map(\.provider))
-                let defaultID = result.generated.configurations
-                    .first(where: { frameworkProviders.contains($0.provider) })?.id
-                    ?? result.generated.configurations.first?.id
+                let defaultID = result.generated.configurations.first?.id
                 var manifest: [String: Any] = ["version": 1]
                 if let defaultID { manifest["defaultRunConfiguration"] = defaultID }
                 try writeJSONObject(manifest, to: manifestURL, root: root)
@@ -379,18 +336,13 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
         let key = "lithe.project-runtime.\(projectKey)"
         guard let data = preferences.data(forKey: key),
               let settings = try? JSONDecoder().decode(ProjectRuntimeSettings.self, from: data) else { return }
-        let mavenExecutable = settings.mavenHomeSelection == .custom && !settings.mavenHomePath.isEmpty
-            ? URL(fileURLWithPath: settings.mavenHomePath).appendingPathComponent("bin/mvn").path
-            : (settings.mavenHomeSelection == .wrapper ? "./mvnw" : "")
-        guard !settings.javaHomePath.isEmpty || !mavenExecutable.isEmpty || !settings.mavenJavaHomePath.isEmpty else { return }
+        guard !settings.javaHomePath.isEmpty else { return }
         for id in configurationIDs {
             let legacyKey = "lithe.java-run-options.\(projectKey).\(id)"
             var options = preferences.data(forKey: legacyKey)
                 .flatMap { try? JSONDecoder().decode(RunOptions.self, from: $0) }
                 ?? RunOptions()
             options.javaHomePath = settings.javaHomePath
-            options.mavenExecutablePath = mavenExecutable
-            options.mavenJavaHomePath = settings.mavenJavaHomePath
             let mutation = try documentMutator.updateOptionsDocument(
                 at: root,
                 configurationID: id,
@@ -497,13 +449,7 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
         switch value {
         case "java.current-file": .currentFile
         case "java.main": .javaMain
-        case "maven.module": .mavenModule
-        default:
-            if let framework = MavenFrameworkKind.allCases.first(where: { $0.provider == value }) {
-                .mavenFramework(framework)
-            } else {
-                .process(provider: value)
-            }
+        default: .process(provider: value)
         }
     }
 }
@@ -535,12 +481,6 @@ private struct RustRunConfigurationDocumentMutator: RunConfigurationDocumentMuta
         ).get())
     }
 
-    func createConfigurationDocument(
-        at projectURL: URL,
-        draft: RunConfigurationDraft
-    ) throws -> RunConfigurationDocumentMutation {
-        try mutation(from: core.createUserRunConfiguration(at: projectURL, draft: draft).get())
-    }
 
     private func mutation(
         from payload: RustCoreBridge.RunConfigurationMutationPayload

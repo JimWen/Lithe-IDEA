@@ -8,9 +8,8 @@ const SETTINGS_FILES: &[&str] = &["settings.gradle", "settings.gradle.kts"];
 
 /// Plugin ids that make a project a long-running service, paired with the task
 /// the plugin contributes. A build file may apply several, so the first match in
-/// this order wins: `bootRun` supersedes the plain `run` it is built on.
+/// this order wins before considering the generic application plugin.
 const SERVICE_PLUGINS: &[(&str, &str)] = &[
-    ("org.springframework.boot", "bootRun"),
     ("io.quarkus", "quarkusDev"),
     ("io.micronaut.application", "run"),
 ];
@@ -59,7 +58,7 @@ pub fn detect(ctx: &DirectoryContext) -> Vec<Detected> {
 ///
 /// Gradle only resolves task paths from the directory holding the wrapper and
 /// settings file, so a subproject cannot run from its own directory: the build
-/// runs at the root and names the task `:module:bootRun`.
+/// runs at the root and names the task `:module:run`.
 struct Invocation {
     /// Project-relative directory the command runs in.
     cwd: String,
@@ -172,8 +171,8 @@ fn service_plugin(text: &str) -> Option<(&'static str, &'static str)> {
 }
 
 /// Recognises both plugin syntaxes without parsing Groovy or Kotlin:
-/// `id 'org.springframework.boot'` in a `plugins` block, and the legacy
-/// `apply plugin: 'org.springframework.boot'`. Commented-out lines are skipped
+/// `id 'application'` in a `plugins` block, and the legacy
+/// `apply plugin: 'application'`. Commented-out lines are skipped
 /// so a disabled plugin does not contribute a configuration.
 fn applies_plugin(text: &str, plugin: &str) -> bool {
     text.lines()
@@ -188,8 +187,8 @@ fn applies_plugin(text: &str, plugin: &str) -> bool {
                     format!("\"{plugin}\""),
                     format!("'{plugin}'"),
                     // Kotlin accessor form: `kotlin("jvm")` style shorthands are
-                    // not plugin ids, but `alias(libs.plugins.spring.boot)` and
-                    // bare `org.springframework.boot` do appear unquoted.
+                    // not plugin ids, but `alias(libs.plugins.application)` and
+                    // bare `application` do appear unquoted.
                     format!(" {plugin} "),
                 ]
                 .iter()

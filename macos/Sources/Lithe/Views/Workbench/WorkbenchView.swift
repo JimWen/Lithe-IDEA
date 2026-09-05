@@ -69,7 +69,6 @@ struct WorkbenchView: View {
     @EnvironmentObject private var projectSessions: ProjectSessionManager
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @StateObject private var linuxDoWebSession = LinuxDoAnonymousWebSession()
     @State private var sidebarWidth: CGFloat = 320
     @State private var rightSidebarWidth: CGFloat = 380
     @State private var hoveredRightSidebarContributionID: String?
@@ -1132,7 +1131,6 @@ struct WorkbenchView: View {
                     model: model
                 )
                 .equatable()
-                .environmentObject(linuxDoWebSession)
                 .frame(width: rightSidebarWidth)
                 .frame(maxHeight: .infinity)
                 .workbenchPaneChrome(
@@ -1181,7 +1179,6 @@ struct WorkbenchView: View {
                   hoveredRightSidebarContributionID == nil,
                   !isRightSidebarPanelHovered else { return }
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.10)) {
-                model.isDiscourseCommunityVisible = false
             }
         }
     }
@@ -1308,8 +1305,6 @@ struct WorkbenchView: View {
                 Group {
                     if model.isReferencesVisible {
                         LanguageReferencesView()
-                    } else if model.isSpringVisible {
-                        SpringEndpointsView()
                     } else {
                         moduleUIRegistry.selectedToolContent(
                             from: model.activityBarContributions,
@@ -1351,7 +1346,7 @@ struct WorkbenchView: View {
     }
 
     private var isBottomToolVisible: Bool {
-        model.isGitLogVisible || model.isTerminalVisible || model.isReferencesVisible || model.isProblemsVisible || model.isMavenVisible || model.isSpringVisible || model.isDebugVisible || model.isRunVisible || model.isTestsVisible
+        model.isGitLogVisible || model.isTerminalVisible || model.isReferencesVisible || model.isProblemsVisible || model.isDebugVisible || model.isRunVisible || model.isTestsVisible
     }
 
     private var statusBar: some View {

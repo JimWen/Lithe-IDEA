@@ -21,9 +21,6 @@ struct DebugLaunchSourceResolver {
         }
 
         return configurations.first {
-            !$0.usesCurrentEditorFile && $0.kind.mavenFramework != nil
-                && $0.kind.capabilities.contains(.jdwpDebug)
-        } ?? configurations.first {
             !$0.usesCurrentEditorFile && $0.kind == .javaMain
                 && $0.kind.capabilities.contains(.jdwpDebug)
         } ?? selected

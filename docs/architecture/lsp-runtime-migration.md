@@ -127,7 +127,7 @@ Primary files:
 
 ### 4. Provider convergence and legacy deletion
 
-- Keep Maven, Run, Debug, JDK discovery, and local lightweight parsing outside
+- Keep Run, Debug, JDK discovery, and local lightweight parsing outside
   the LSP runtime.
 - Put JDTLS launch arguments, Java configuration responses, and virtual source
   semantics behind the Rust provider adapter.

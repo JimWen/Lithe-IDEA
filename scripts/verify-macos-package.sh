@@ -4,115 +4,14 @@ set -euo pipefail
 ROOT_DIR="${0:A:h:h}"
 cd "$ROOT_DIR"
 
-java_debug_server_version="$(
-    /usr/bin/plutil -extract javaDebugServerVersion raw -o - third_party/jdtls/manifest.json
-)"
-java_debug_plugin_name="com.microsoft.java.debug.plugin-$java_debug_server_version.jar"
-java_test_extension_version="$(
-    /usr/bin/plutil -extract javaTestExtensionVersion raw -o - third_party/jdtls/manifest.json
-)"
-java_test_plugin_name="com.microsoft.java.test.plugin-$java_test_extension_version.jar"
-java_test_runner_name="com.microsoft.java.test.runner-jar-with-dependencies.jar"
-
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/lithe-package-verification.XXXXXX")
 trap 'rm -rf -- "$temporary_directory"' EXIT
-jdtls_root="$temporary_directory/jdtls"
-arm64_jdk_root="$temporary_directory/jdk-arm64"
-x86_64_jdk_root="$temporary_directory/jdk-x86_64"
 dist_root="$temporary_directory/dist"
 package_log="$temporary_directory/package.log"
 dmg_log="$temporary_directory/dmg.log"
 
-# The package smoke test validates assembly rather than third-party downloads.
-# This fixture satisfies prepare-jdtls.sh's production layout checks while
-# keeping CI deterministic and independent of the Eclipse download service.
-mkdir -p \
-    "$jdtls_root/plugins" \
-    "$jdtls_root/config_mac_arm" \
-    "$jdtls_root/config_mac" \
-    "$jdtls_root/config_win" \
-    "$jdtls_root/bin" \
-    "$jdtls_root/lombok" \
-    "$jdtls_root/java-debug" \
-    "$jdtls_root/java-test/extensions" \
-    "$jdtls_root/java-test/runner"
-cat > "$jdtls_root/bin/jdtls" <<'LAUNCHER'
-#!/bin/zsh
-java_agent_argument="-javaagent:../lombok/lombok.jar"
-print -r -- "$java_agent_argument"
-LAUNCHER
-chmod +x "$jdtls_root/bin/jdtls"
-cat > "$jdtls_root/bin/jdtls.ps1" <<'LAUNCHER'
-$javaAgentArgument = "-javaagent:../lombok/lombok.jar"
-Write-Output $javaAgentArgument
-LAUNCHER
-: > "$jdtls_root/lombok/lombok.jar"
-: > "$jdtls_root/lombok/LICENSE-MIT.txt"
-: > "$jdtls_root/plugins/org.eclipse.equinox.launcher_1.0.0.jar"
-: > "$jdtls_root/java-debug/$java_debug_plugin_name"
-: > "$jdtls_root/java-debug/LICENSE-EPL-1.0.txt"
-java_test_extension_bundles=(
-    "junit-jupiter-api_5.9.3.jar"
-    "junit-jupiter-engine_5.9.3.jar"
-    "junit-jupiter-migrationsupport_5.9.3.jar"
-    "junit-jupiter-params_5.9.3.jar"
-    "junit-platform-commons_1.9.3.jar"
-    "junit-platform-engine_1.9.3.jar"
-    "junit-platform-launcher_1.9.3.jar"
-    "junit-platform-runner_1.9.3.jar"
-    "junit-platform-suite-api_1.9.3.jar"
-    "junit-platform-suite-commons_1.9.3.jar"
-    "junit-platform-suite-engine_1.9.3.jar"
-    "junit-vintage-engine_5.9.3.jar"
-    "org.apiguardian.api_1.1.2.jar"
-    "org.eclipse.jdt.junit4.runtime_1.3.0.v20220609-1843.jar"
-    "org.eclipse.jdt.junit5.runtime_1.1.100.v20220907-0450.jar"
-    "org.opentest4j_1.2.0.jar"
-    "org.jacoco.core_0.8.12.202403310830.jar"
-    "$java_test_plugin_name"
-)
-for bundle in "${java_test_extension_bundles[@]}"; do
-    : > "$jdtls_root/java-test/extensions/$bundle"
-done
-: > "$jdtls_root/java-test/runner/$java_test_runner_name"
-: > "$jdtls_root/java-test/LICENSE-MIT.txt"
-
-for missing_configuration in config_mac_arm config_mac; do
-    broken_jdtls_root="$temporary_directory/jdtls-missing-$missing_configuration"
-    cp -R "$jdtls_root" "$broken_jdtls_root"
-    rm -rf -- "$broken_jdtls_root/$missing_configuration"
-    failure_log="$temporary_directory/missing-$missing_configuration.log"
-    if env -u LITHE_ARCH \
-        LITHE_JDTLS_ROOT="$broken_jdtls_root" \
-        LITHE_JDK_ROOT="$temporary_directory/invalid-jdk" \
-        scripts/package-app.sh > "$failure_log" 2>&1; then
-        print -u2 -- "Default universal packaging accepted JDTLS without $missing_configuration"
-        exit 1
-    fi
-    if ! grep -Fq "JDTLS $missing_configuration configuration is missing" "$failure_log"; then
-        print -u2 -- "Default universal packaging did not validate $missing_configuration before building"
-        cat "$failure_log" >&2
-        exit 1
-    fi
-done
-
-cat > "$temporary_directory/java.c" <<'SOURCE'
-int main(void) { return 0; }
-SOURCE
-for jdk_arch in arm64 x86_64; do
-    jdk_root="$temporary_directory/jdk-$jdk_arch"
-    mkdir -p "$jdk_root/bin" "$jdk_root/lib"
-    xcrun clang -arch "$jdk_arch" "$temporary_directory/java.c" -o "$jdk_root/bin/java"
-    cat > "$jdk_root/release" <<'RELEASE'
-JAVA_VERSION="21.0.0"
-RELEASE
-done
-
 env -u LITHE_ARCH -u LITHE_JDK_ROOT \
     LITHE_DIST_ROOT="$dist_root" \
-    LITHE_JDTLS_ROOT="$jdtls_root" \
-    LITHE_JDK_ARM64_ROOT="$arm64_jdk_root" \
-    LITHE_JDK_X86_64_ROOT="$x86_64_jdk_root" \
     LITHE_CODESIGN_IDENTITY="-" \
     scripts/package-app.sh | tee "$package_log"
 
@@ -139,20 +38,6 @@ required_resources=(
     "$app_path/Contents/Info.plist"
     "$app_path/Contents/Resources/Lithe_Lithe.bundle"
     "$app_path/Contents/Resources/SwiftTerm_SwiftTerm.bundle/Shaders.metal"
-    "$app_path/Contents/Resources/LanguageServers/jdtls/bin/jdtls"
-    "$app_path/Contents/Resources/LanguageServers/jdtls/plugins/org.eclipse.equinox.launcher_1.0.0.jar"
-    "$app_path/Contents/Resources/LanguageServers/jdtls/config_mac_arm"
-    "$app_path/Contents/Resources/LanguageServers/jdtls/config_mac"
-    "$app_path/Contents/Resources/LanguageServers/jdtls/lombok/lombok.jar"
-    "$app_path/Contents/Resources/LanguageServers/jdtls/java-debug/$java_debug_plugin_name"
-    "$app_path/Contents/Resources/LanguageServers/jdtls/java-debug/LICENSE-EPL-1.0.txt"
-    "$app_path/Contents/Resources/LanguageServers/jdtls/java-test/extensions/$java_test_plugin_name"
-    "$app_path/Contents/Resources/LanguageServers/jdtls/java-test/runner/$java_test_runner_name"
-    "$app_path/Contents/Resources/LanguageServers/jdtls/java-test/LICENSE-MIT.txt"
-    "$app_path/Contents/Resources/LanguageServers/jdk-arm64/bin/java"
-    "$app_path/Contents/Resources/LanguageServers/jdk-arm64/lib"
-    "$app_path/Contents/Resources/LanguageServers/jdk-x86_64/bin/java"
-    "$app_path/Contents/Resources/LanguageServers/jdk-x86_64/lib"
 )
 for resource in "${required_resources[@]}"; do
     if [[ ! -e "$resource" ]]; then
@@ -161,12 +46,15 @@ for resource in "${required_resources[@]}"; do
     fi
 done
 /usr/bin/lipo "$app_path/Contents/MacOS/Lithe" -verify_arch arm64 x86_64
-/usr/bin/lipo \
-    "$app_path/Contents/Resources/LanguageServers/jdk-arm64/bin/java" \
-    -verify_arch arm64
-/usr/bin/lipo \
-    "$app_path/Contents/Resources/LanguageServers/jdk-x86_64/bin/java" \
-    -verify_arch x86_64
+# Java resources must remain absent even when old preparation caches exist.
+for retired_resource in "$app_path/Contents/Resources/LanguageServers"/jdk*(N) \
+    "$app_path/Contents/Resources/LanguageServers/jdtls" \
+    "$app_path/Contents/Resources/OfficialPlugins/dev.lithe.plugin.linux-do-support"; do
+    if [[ -e "$retired_resource" ]]; then
+        print -u2 -- "Retired resource was included: $retired_resource"
+        exit 1
+    fi
+done
 
 plugin_manifests=("$app_path/Contents/Resources/OfficialPlugins"/*/plugin.json(N))
 if (( ${#plugin_manifests[@]} == 0 )); then
@@ -187,5 +75,13 @@ if [[ "$dmg_path" != "$expected_dmg_path" || ! -s "$dmg_path" ]]; then
     exit 1
 fi
 hdiutil imageinfo "$dmg_path" > /dev/null
+
+/usr/bin/ruby -e '
+  require "find"
+  bytes = 0
+  Find.find(ARGV.fetch(0)) { |path| bytes += File.size(path) if File.file?(path) && !File.symlink?(path) }
+  puts "Universal app file bytes: #{bytes}"
+  puts "Universal DMG bytes: #{File.size(ARGV.fetch(1))}"
+' "$app_path" "$dmg_path"
 
 print -- "macOS package and disk image verification passed for the default universal architecture"

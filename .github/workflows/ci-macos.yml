@@ -154,10 +154,9 @@ jobs:
           ./.agents/skills/write-stable-tests/scripts/test-stability-macos.sh \
             --report .artifacts/test-stability/macos-unit.json \
             --suite-timeout-seconds 660 -- \
-            --skip WebKitIntegrationTests \
             --skip GitStatusObservationTests \
             --skip '(LitheDatabaseModuleTests|LitheTests\.LitheCoreLogicTests/database)' \
-            --skip '([Pp]lugin|LitheGoSupportModuleTests|LinuxDo)'
+            --skip '([Pp]lugin|LitheGoSupportModuleTests)'
 
       - name: Run Git status observation tests
         timeout-minutes: 3
@@ -165,15 +164,6 @@ jobs:
           ./scripts/test-macos.sh \
             --skip-build \
             --filter GitStatusObservationTests
-
-      - name: Run WebKit lifecycle integration tests
-        timeout-minutes: 3
-        run: |
-          ./.agents/skills/write-stable-tests/scripts/test-stability-macos.sh \
-            --report .artifacts/test-stability/macos-webkit.json \
-            --max-seconds 60 --suite-timeout-seconds 150 -- \
-            --skip-build \
-            --filter WebKitIntegrationTests
 
       - name: Generate combined Swift test report
         if: always()

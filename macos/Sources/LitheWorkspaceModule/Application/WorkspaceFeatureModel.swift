@@ -966,7 +966,7 @@ package final class WorkspaceFeatureModel: ObservableObject {
             let isLitheConfiguration = url.pathExtension.lowercased() == "json"
                 && url.path.hasPrefix(workspaceURL.appendingPathComponent(".lithe").path + "/")
             return isLitheConfiguration
-                || name == "pom.xml" || name == "build.gradle" || name == "build.gradle.kts"
+                || name == "build.gradle" || name == "build.gradle.kts"
         }
         if requiresProjectServiceReload { await reloadProjectServices?() }
         await requestGitRefreshNow()

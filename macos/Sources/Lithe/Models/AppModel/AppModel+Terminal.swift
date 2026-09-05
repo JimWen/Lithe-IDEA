@@ -36,7 +36,6 @@ extension AppModel {
         isGitLogVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
         isRunVisible = false
         isDebugVisible = false
         if terminalCapability == nil || activeTerminalSession == nil {
@@ -88,7 +87,6 @@ extension AppModel {
         isGitLogVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
         isRunVisible = false
         isDebugVisible = false
         return session
@@ -172,7 +170,6 @@ extension AppModel {
         isGitLogVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
         isRunVisible = false
         isDebugVisible = false
         created.session.focus()

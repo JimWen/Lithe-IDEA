@@ -3,98 +3,6 @@ import Foundation
 import LitheCoreContracts
 import LitheModuleAPI
 
-/// UI-facing projection for Maven state and commands.
-/// The view layer does not depend on MavenService or its process adapter.
-@MainActor
-package final class MavenFeatureModel: ObservableObject {
-    private let service: MavenService
-    private var observation: AnyCancellable?
-
-    package init(service: MavenService) {
-        self.service = service
-        observation = service.objectWillChange.sink { [weak self] _ in
-            self?.objectWillChange.send()
-        }
-    }
-
-    package var project: MavenProject? { service.project }
-    package var projectState: MavenProjectLoadState { service.projectState }
-    package var taskState: MavenTaskState { service.taskState }
-    package var isLoadingProject: Bool { service.isLoadingProject }
-    package var isRunning: Bool { service.isRunning }
-    package var runningTitle: String? { service.runningTitle }
-    package var output: String { service.output }
-    package var issues: [MavenBuildIssue] { service.issues }
-    package var lastExitCode: Int32? { service.lastExitCode }
-    package var availableProfiles: [MavenProfile] { service.availableProfiles }
-    package var selectedProfiles: Set<String> { service.selectedProfiles }
-    package var skipTests: Bool { service.skipTests }
-    package var settingsPath: String? { service.settingsPath }
-    package var localRepositoryPath: String? { service.localRepositoryPath }
-    package var mavenExecutablePath: String? { service.mavenExecutablePath }
-    package var javaHomePath: String? { service.javaHomePath }
-    package var configurationSaveError: String? { service.configurationSaveError }
-    package var isReloadRequired: Bool { service.isReloadRequired }
-    package var launchContext: MavenLaunchContext? { service.launchContext }
-
-    package func loadProject(at workspaceURL: URL, files: [URL], snapshotID: UUID? = nil) async {
-        await service.loadProject(at: workspaceURL, files: files)
-    }
-
-    package func run(phase: MavenLifecyclePhase, module: MavenModule?) {
-        service.run(phase: phase, module: module)
-    }
-
-    package func runCustomGoal(_ value: String, module: MavenModule?) {
-        service.runCustomGoal(value, module: module)
-    }
-
-    package func setSelectedProfiles(_ profiles: Set<String>) {
-        service.setSelectedProfiles(profiles)
-    }
-
-    @discardableResult
-    package func addCustomProfile(_ value: String) -> Bool {
-        service.addCustomProfile(value)
-    }
-
-    package func restoreDefaultProfiles() {
-        service.restoreDefaultProfiles()
-    }
-
-    package func setSkipTests(_ enabled: Bool) {
-        service.setSkipTests(enabled)
-    }
-
-    package func updateLocalConfiguration(
-        settingsPath: String?,
-        localRepositoryPath: String?,
-        mavenExecutablePath: String?,
-        javaHomePath: String?
-    ) {
-        service.updateLocalConfiguration(
-            settingsPath: settingsPath,
-            localRepositoryPath: localRepositoryPath,
-            mavenExecutablePath: mavenExecutablePath,
-            javaHomePath: javaHomePath
-        )
-    }
-
-    package func acknowledgeReload() {
-        service.acknowledgeReload()
-    }
-
-    package func reset() { service.reset() }
-
-    package func stop() {
-        service.stop()
-    }
-
-    package func clearOutput() {
-        service.clearOutput()
-    }
-
-}
 
 /// UI-facing projection for language-neutral run configurations and process sessions.
 package enum RunConfigurationGenerationIntent: Sendable {
@@ -131,7 +39,6 @@ package final class RunFeatureModel: ObservableObject {
     package var runningTitle: String? { service.runningTitle }
     package var output: String { service.output }
     package var lastExitCode: Int32? { service.lastExitCode }
-    package var mavenProfiles: [MavenProfile] { service.mavenProfiles }
     package var moduleSessions: [RunSession] { service.moduleSessions }
     package var portConflicts: [RunPortConflict] { service.portConflicts }
     package var configurationStatus: ProjectRunConfigurationStatus { service.configurationStatus }
@@ -191,10 +98,6 @@ package final class RunFeatureModel: ObservableObject {
         service.resetOptions(for: configuration)
     }
 
-    @discardableResult
-    package func createConfiguration(_ draft: RunConfigurationDraft) -> Bool {
-        service.createConfiguration(draft)
-    }
 
     package func runAllServices() {
         service.runAllServices()
@@ -227,10 +130,9 @@ package final class RunFeatureModel: ObservableObject {
     package func loadProject(
         at workspaceURL: URL,
         files: [URL],
-        mavenProject: MavenProject?,
         snapshotID: UUID? = nil
     ) async {
-        await service.loadProject(at: workspaceURL, files: files, mavenProject: mavenProject, snapshotID: snapshotID)
+        await service.loadProject(at: workspaceURL, files: files, snapshotID: snapshotID)
     }
 
     package func generateRunConfigurations() async {
@@ -266,30 +168,16 @@ package final class RunFeatureModel: ObservableObject {
 /// added here without changing the workspace/UI composition boundary.
 @MainActor
 package final class ProjectDevelopmentFeatureModel {
-    private let mavenFeature: MavenFeatureModel
     private let runFeature: RunFeatureModel
 
-    package init(mavenFeature: MavenFeatureModel, runFeature: RunFeatureModel) {
-        self.mavenFeature = mavenFeature
+    package init(runFeature: RunFeatureModel) {
         self.runFeature = runFeature
     }
 
     package func loadProject(at workspaceURL: URL, files: [URL], snapshotID: UUID? = nil) async {
-        // Maven is one build-system Provider, not a workspace prerequisite.
-        // Avoid scanning every project as Maven; non-Maven ecosystems should
-        // reach the generic run pipeline without paying for Java discovery.
-        let hasMavenDescriptor = files.contains { file in
-            file.lastPathComponent.lowercased() == "pom.xml"
-        }
-        if hasMavenDescriptor {
-            await mavenFeature.loadProject(at: workspaceURL, files: files)
-        } else {
-            mavenFeature.reset()
-        }
         await runFeature.loadProject(
             at: workspaceURL,
             files: files,
-            mavenProject: mavenFeature.project,
             snapshotID: snapshotID
         )
     }

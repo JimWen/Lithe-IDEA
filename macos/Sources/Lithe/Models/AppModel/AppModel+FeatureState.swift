@@ -6,9 +6,6 @@ import LitheSearchModule
 
 extension AppModel {
     var workspaceSnapshotID: UUID? { workspaceFeature.appliedSnapshot?.id }
-    var springEndpoints: [SpringEndpoint] { springFeature.endpoints }
-    var springBeans: [SpringBean] { springFeature.beans }
-    var isIndexingSpring: Bool { springFeature.isIndexing }
     var rootNode: FileNode? { workspaceFeature.rootNode }
     var projectFiles: [URL] { workspaceFeature.projectFiles }
     var projectDirectoryMarks: [String: WorkspaceDirectoryMark] {
@@ -21,15 +18,7 @@ extension AppModel {
     var shouldShowJavaEnvironmentBanner: Bool {
         guard javaEnvironmentReport?.status.requiresAttention == true else { return false }
         return projectFiles.contains { $0.pathExtension.lowercased() == "java" }
-            || hasMavenProject
             || activeDocument?.url.pathExtension.lowercased() == "java"
-    }
-
-    /// Maven is an optional build-system feature. Keeping this capability in
-    /// the generic workspace projection lets the UI hide the Java-only tool
-    /// window for Go, Python, Node, Rust, Gradle-only, and plain projects.
-    var hasMavenProject: Bool {
-        projectFiles.contains { $0.lastPathComponent.lowercased() == "pom.xml" }
     }
 
     var openDocuments: [EditorDocument] { documentFeature.openDocuments }
@@ -383,8 +372,7 @@ extension AppModel {
         case "navigate-forward":
             canNavigateForward
         case "go-to-definition":
-            activeDocument.map { springFeature.handles($0.url) } == true
-                || supportsLanguageServerFeature(.definition)
+            supportsLanguageServerFeature(.definition)
         case "find-usages":
             supportsLanguageServerFeature(.references)
         case "go-to-implementation":
@@ -394,8 +382,8 @@ extension AppModel {
         case "close-project", "search-everywhere", "search-in-project",
              "replace-in-project", "project-local-history", "run", "debug",
              "stop-run", "stop-debug", "toggle-terminal", "toggle-problems",
-             "toggle-maven", "toggle-git-log", "toggle-run", "toggle-tests",
-             "toggle-debug", "view-breakpoints", "spring-endpoints":
+             "toggle-git-log", "toggle-run", "toggle-tests",
+             "toggle-debug", "view-breakpoints":
             workspaceURL != nil
         default:
             false

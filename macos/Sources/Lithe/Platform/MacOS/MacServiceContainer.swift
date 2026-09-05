@@ -57,21 +57,11 @@ final class MacServiceContainer {
         gitWatchContextProvider providedGitWatchContextProvider: (any GitWatchContextProviding)? = nil,
         runExecutableResolver providedRunExecutableResolver: (any RunExecutableResolving)? = nil,
         pluginRuntimeRecovery: MacPluginRuntimeRecoveryCoordinator? = nil,
-        authorizationCallbackRouter providedAuthorizationCallbackRouter: MacExternalAuthorizationCallbackRouter? = nil,
         platformUI providedPlatformUI: (any PlatformUI)? = nil,
         gitPerformanceLogger: (any GitPerformanceLogger)? = nil
     ) {
-        let authorizationCallbackRouter = providedAuthorizationCallbackRouter
-            ?? MacExternalAuthorizationCallbackRouter()
         let rustCore = RustCoreBridge()
-        let mavenRepositoryURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".m2/repository", isDirectory: true)
-        let gradleRepositoryURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".gradle/caches/modules-2/files-2.1", isDirectory: true)
-        let javaMavenOperations = RustJavaMavenOperations(
-            core: rustCore,
-            metadataRepositoryURLs: [mavenRepositoryURL, gradleRepositoryURL]
-        )
+        let javaOperations = RustJavaOperations(core: rustCore)
         let fileStorage = MacFileStorage()
         let directoryMarkStore = WorkspaceDirectoryMarkStore(store: store)
         let runConfigurationStore = MacRunConfigurationStore(
@@ -97,12 +87,6 @@ final class MacServiceContainer {
             git: MacGitHubGitOperations(core: rustCore)
         )
         let platformUI = providedPlatformUI ?? MacPlatformUI()
-        let discourseCommunityService = DiscourseCommunityService(
-            core: rustCore,
-            credentialStore: MacKeychainSecureStore(service: "app.lithe.desktop.linux-do"),
-            platformUI: platformUI,
-            callbackRouter: authorizationCallbackRouter
-        )
         let codexConfigurationSource = MacCodexConfigurationSource()
         let claudeConfigurationSource = MacClaudeConfigurationSource()
         let aiConfigurationSources: [any AIConfigurationSource] = [
@@ -316,19 +300,12 @@ final class MacServiceContainer {
                         metadataResolver: ProcessRunToolchainMetadataResolver(processRunner: processRunner)
                     )
                     let graph = ExecutionFeatureGraph(
-                        maven: MavenService(
-                            runtimeService: runtimeService,
-                            process: MacStreamingProcess(processRegistry: processRegistry, moduleID: .execution),
-                            mavenOperations: javaMavenOperations,
-                            configurationStore: MacMavenConfigurationStore(storage: fileStorage)
-                        ),
                         run: RunService(
                             runtime: runtimeService,
                             process: MacStreamingProcess(processRegistry: processRegistry, moduleID: .execution),
                             processFactory: { MacStreamingProcess(processRegistry: processRegistry, moduleID: .execution) },
                             fileAccess: MacRunFileAccess(storage: fileStorage),
                             preferences: MacRunPreferenceStore(store: store),
-                            serverPortParser: javaMavenOperations,
                             runConfigurationOperations: providedRunConfigurationOperations ?? runConfigurationStore,
                             executableResolver: executableResolver,
                             languageProviderCatalog: languagePackRegistry.catalog,
@@ -524,7 +501,7 @@ final class MacServiceContainer {
             debugBreakpointPersistence: debugBreakpointStore,
             workspaceOperations: workspaceOperations,
             documentLifecycleDecider: RustDocumentLifecycleDecider(core: rustCore),
-            javaMavenOperations: javaMavenOperations,
+            javaOperations: javaOperations,
             markdownRenderer: markdownRenderer,
             markdownImageImporter: markdownImageImporter,
             store: store,
@@ -536,7 +513,6 @@ final class MacServiceContainer {
             githubService: githubService,
             secureStore: secureStore,
             databaseSecureStore: databaseSecureStore,
-            discourseCommunityService: discourseCommunityService,
             credentialResolver: credentialResolver,
             aiConfigurationSources: aiConfigurationSources,
             recentProjectsStore: RecentProjectsStore(store: store),

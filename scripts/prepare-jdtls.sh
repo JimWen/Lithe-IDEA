@@ -121,9 +121,7 @@ validate_output() {
             exit 1
         }
     done
-    [[ -d "$OUTPUT_DIR/config_win" ]] || { print -u2 -- "JDTLS Windows configuration is missing: $OUTPUT_DIR"; exit 1; }
     [[ -x "$OUTPUT_DIR/bin/jdtls" ]] || { print -u2 -- "JDTLS launcher is missing: $OUTPUT_DIR/bin/jdtls"; exit 1; }
-    [[ -f "$OUTPUT_DIR/bin/jdtls.ps1" ]] || { print -u2 -- "JDTLS Windows launcher is missing: $OUTPUT_DIR"; exit 1; }
     [[ -f "$OUTPUT_DIR/lombok/lombok.jar" ]] || { print -u2 -- "JDTLS Lombok agent is missing: $OUTPUT_DIR"; exit 1; }
     [[ -f "$OUTPUT_DIR/lombok/LICENSE-MIT.txt" ]] || { print -u2 -- "JDTLS Lombok license is missing: $OUTPUT_DIR"; exit 1; }
     [[ -f "$OUTPUT_DIR/java-debug/$java_debug_plugin_name" ]] || { print -u2 -- "Java Debug Server plugin is missing: $OUTPUT_DIR"; exit 1; }
@@ -134,9 +132,8 @@ validate_output() {
     [[ -f "$OUTPUT_DIR/java-test/runner/$java_test_runner_name" ]] || { print -u2 -- "Java Test runner is missing: $OUTPUT_DIR"; exit 1; }
     [[ -f "$OUTPUT_DIR/java-test/LICENSE-MIT.txt" ]] || { print -u2 -- "Java Test license is missing: $OUTPUT_DIR"; exit 1; }
     # Wrapper scripts remain available for external/legacy launch plans. The
-    # packaged product launches bundled Java directly with the resources above.
+    # optional Java integration launches bundled Java directly with the resources above.
     grep -Fq -- '-javaagent:' "$OUTPUT_DIR/bin/jdtls" || { print -u2 -- "JDTLS launcher does not load the Lombok agent: $OUTPUT_DIR"; exit 1; }
-    grep -Fq -- '-javaagent:' "$OUTPUT_DIR/bin/jdtls.ps1" || { print -u2 -- "JDTLS Windows launcher does not load the Lombok agent: $OUTPUT_DIR"; exit 1; }
 }
 
 if [[ -n "${LITHE_JDTLS_ROOT:-}" ]]; then
@@ -276,58 +273,6 @@ exec "$JAVA_EXECUTABLE" \
     -jar "$LAUNCHER_JAR" \
     -configuration "$CONFIGURATION" \
     "${SERVER_ARGUMENTS[@]}"
-EOF
-
-cat > "$OUTPUT_DIR/bin/jdtls.ps1" <<'EOF'
-$ErrorActionPreference = "Stop"
-
-$javaExecutable = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME "bin\java.exe" } else { "java" }
-$lombokAgent = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\lombok\lombok.jar"))
-if (-not (Test-Path -LiteralPath $lombokAgent -PathType Leaf)) { throw "JDTLS Lombok agent was not found: $lombokAgent" }
-$jvmArguments = [System.Collections.Generic.List[string]]::new()
-$jvmArguments.Add("-javaagent:$lombokAgent")
-$jvmArguments.Add("--add-modules=ALL-SYSTEM")
-$jvmArguments.Add("--add-opens=java.base/java.util=ALL-UNNAMED")
-$jvmArguments.Add("--add-opens=java.base/java.lang=ALL-UNNAMED")
-$serverArguments = [System.Collections.Generic.List[string]]::new()
-
-for ($index = 0; $index -lt $args.Count; $index++) {
-    $argument = [string]$args[$index]
-    if ($argument -eq "--java-executable") {
-        if ($index + 1 -ge $args.Count) { throw "--java-executable requires a path" }
-        $javaExecutable = [string]$args[++$index]
-    } elseif ($argument.StartsWith("--jvm-arg=")) {
-        $jvmArguments.Add($argument.Substring("--jvm-arg=".Length))
-    } elseif ($argument -eq "--jvm-arg") {
-        if ($index + 1 -ge $args.Count) { throw "--jvm-arg requires a value" }
-        $jvmArguments.Add([string]$args[++$index])
-    } else {
-        $serverArguments.Add($argument)
-    }
-}
-
-$launcherJar = Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot "..\plugins") -Filter "org.eclipse.equinox.launcher_*.jar" |
-    Sort-Object Name |
-    Select-Object -First 1
-if ($null -eq $launcherJar) { throw "JDTLS Equinox launcher was not found" }
-$configuration = Join-Path $PSScriptRoot "..\config_win"
-
-& $javaExecutable @jvmArguments `
-    "-Declipse.application=org.eclipse.jdt.ls.core.id1" `
-    "-Declipse.product=org.eclipse.jdt.ls.core.product" `
-    "-Dosgi.bundles.defaultStartLevel=4" `
-    "-Dlog.protocol=true" `
-    "-Dlog.level=ALL" `
-    "-jar" $launcherJar.FullName `
-    "-configuration" $configuration `
-    @serverArguments
-exit $LASTEXITCODE
-EOF
-
-cat > "$OUTPUT_DIR/bin/jdtls.bat" <<'EOF'
-@echo off
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0jdtls.ps1" %*
-exit /b %ERRORLEVEL%
 EOF
 
 chmod +x "$OUTPUT_DIR/bin/jdtls"

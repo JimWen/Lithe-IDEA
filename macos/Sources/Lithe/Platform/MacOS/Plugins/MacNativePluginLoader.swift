@@ -27,6 +27,7 @@ struct MacPluginLoadPolicy {
     let launchMode: ModuleLaunchMode
 
     func shouldLoad(_ plugin: PluginManifest) -> Bool {
+        guard !MacPluginPackageStore.retiredPluginIDs.contains(plugin.id) else { return false }
         if plugin.modules.contains(where: { $0.manifest.isRequired }) {
             return true
         }

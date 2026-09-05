@@ -127,7 +127,6 @@ fn default_java_class_name_filters() -> Vec<String> {
         "$JDK",
         "$Libraries",
         "com.ibm.ws.*",
-        "com.springsource.loaded.*",
         "com.sun.proxy.*",
         "javassist.*",
         "jdk.proxy*.*",
@@ -137,9 +136,6 @@ fn default_java_class_name_filters() -> Vec<String> {
         "org.apache.webbeans.*",
         "org.junit.*",
         "org.mockito.*",
-        "org.springframework.aop.framework.*",
-        "org.springframework.cglib.*",
-        "org.springsource.loaded.*",
     ]
     .into_iter()
     .map(str::to_string)

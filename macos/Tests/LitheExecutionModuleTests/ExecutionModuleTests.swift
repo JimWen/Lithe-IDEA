@@ -8,13 +8,13 @@ import Testing
 @MainActor
 struct ExecutionModuleTests {
     @Test
-    func configuredServerPortUsesArgumentsEnvironmentResourcesAndFrameworkDefault() async throws {
+    func configuredServerPortUsesExplicitArgumentsAndEnvironmentOnly() async throws {
         let root = URL(fileURLWithPath: "/workspace/service-port", isDirectory: true)
         let properties = root.appendingPathComponent("src/main/resources/application.properties")
         let configuration = RunConfiguration(
             id: "spring:api",
             name: "API",
-            kind: .springBoot,
+            kind: .javaMain,
             modulePath: ".",
             mainClass: "example.Application"
         )
@@ -26,38 +26,34 @@ struct ExecutionModuleTests {
                 programArguments: "--server.port=18082",
                 environment: ["SERVER_PORT": "18083"]
             ),
-            fileAccess: TestRunFileAccess(contents: [properties: "server.port=18084"]),
-            serverPortParser: FixedServerPortParser(port: 18084)
+            fileAccess: TestRunFileAccess(contents: [properties: "server.port=18084"])
         )
-        await argumentService.loadProject(at: root, files: [properties], mavenProject: nil)
+        await argumentService.loadProject(at: root, files: [properties])
         #expect(argumentService.configuredServerPort(for: configuration) == 18082)
 
         let environmentService = makeRunService(
             configuration: configuration,
             options: RunOptions(environment: ["SERVER_PORT": "18083"]),
-            fileAccess: TestRunFileAccess(contents: [properties: "server.port=18084"]),
-            serverPortParser: FixedServerPortParser(port: 18084)
+            fileAccess: TestRunFileAccess(contents: [properties: "server.port=18084"])
         )
-        await environmentService.loadProject(at: root, files: [properties], mavenProject: nil)
+        await environmentService.loadProject(at: root, files: [properties])
         #expect(environmentService.configuredServerPort(for: configuration) == 18083)
 
         let resourceService = makeRunService(
             configuration: configuration,
             options: RunOptions(),
-            fileAccess: TestRunFileAccess(contents: [properties: "server.port=18084"]),
-            serverPortParser: FixedServerPortParser(port: 18084)
+            fileAccess: TestRunFileAccess(contents: [properties: "server.port=18084"])
         )
-        await resourceService.loadProject(at: root, files: [properties], mavenProject: nil)
-        #expect(resourceService.configuredServerPort(for: configuration) == 18084)
+        await resourceService.loadProject(at: root, files: [properties])
+        #expect(resourceService.configuredServerPort(for: configuration) == nil)
 
         let defaultService = makeRunService(
             configuration: configuration,
             options: RunOptions(),
-            fileAccess: TestRunFileAccess(),
-            serverPortParser: FixedServerPortParser(port: nil)
+            fileAccess: TestRunFileAccess()
         )
-        await defaultService.loadProject(at: root, files: [], mavenProject: nil)
-        #expect(defaultService.configuredServerPort(for: configuration) == 8080)
+        await defaultService.loadProject(at: root, files: [])
+        #expect(defaultService.configuredServerPort(for: configuration) == nil)
     }
 
     @Test
@@ -112,7 +108,6 @@ struct ExecutionModuleTests {
             processFactory: { TestStreamingProcess() },
             fileAccess: TestRunFileAccess(),
             preferences: TestRunPreferences(),
-            serverPortParser: TestServerPortParser(),
             runConfigurationOperations: operations,
             executableResolver: TestExecutableResolver(),
             languageProviderCatalog: .compatibilityFallback,
@@ -137,7 +132,6 @@ struct ExecutionModuleTests {
             processFactory: { TestStreamingProcess() },
             fileAccess: TestRunFileAccess(),
             preferences: TestRunPreferences(),
-            serverPortParser: TestServerPortParser(),
             runConfigurationOperations: operations,
             executableResolver: TestExecutableResolver(),
             languageProviderCatalog: .compatibilityFallback,
@@ -149,7 +143,7 @@ struct ExecutionModuleTests {
         #expect(service.generationState == .projectNotReady)
 
         // Binding without a snapshot only unlocks reading existing configuration.
-        await service.loadProject(at: root, files: [], mavenProject: nil)
+        await service.loadProject(at: root, files: [])
         #expect(service.projectLoadState == .bound(workspace: root))
         #expect(!service.isProjectReady(for: root, snapshotID: UUID()))
         await service.generateRunConfigurations()
@@ -157,7 +151,7 @@ struct ExecutionModuleTests {
         #expect(operations.generateCallCount == 0)
 
         let snapshotID = UUID()
-        await service.loadProject(at: root, files: [], mavenProject: nil, snapshotID: snapshotID)
+        await service.loadProject(at: root, files: [], snapshotID: snapshotID)
         #expect(service.projectLoadState == .ready(workspace: root, snapshotID: snapshotID))
         #expect(service.isProjectReady(for: root, snapshotID: snapshotID))
         // A superseded snapshot of the same workspace is not ready.
@@ -181,7 +175,6 @@ struct ExecutionModuleTests {
             processFactory: { TestStreamingProcess() },
             fileAccess: TestRunFileAccess(),
             preferences: TestRunPreferences(),
-            serverPortParser: TestServerPortParser(),
             runConfigurationOperations: operations,
             executableResolver: TestExecutableResolver(),
             languageProviderCatalog: .compatibilityFallback,
@@ -191,7 +184,7 @@ struct ExecutionModuleTests {
         let source = root.appendingPathComponent("src/main/java/demo/App.java")
 
         // The workspace snapshot has not arrived, so the inventory is empty.
-        await service.loadProject(at: root, files: [], mavenProject: nil)
+        await service.loadProject(at: root, files: [])
         await service.generateRunConfigurations()
         #expect(service.generationState == .projectNotReady)
         #expect(operations.generatedInventories.isEmpty, "a provisional inventory must not be scanned")
@@ -199,7 +192,6 @@ struct ExecutionModuleTests {
         await service.loadProject(
             at: root,
             files: [source],
-            mavenProject: nil,
             snapshotID: UUID()
         )
         await service.generateRunConfigurations()
@@ -224,7 +216,6 @@ struct ExecutionModuleTests {
             processFactory: { TestStreamingProcess() },
             fileAccess: TestRunFileAccess(),
             preferences: TestRunPreferences(),
-            serverPortParser: TestServerPortParser(),
             runConfigurationOperations: operations,
             executableResolver: TestExecutableResolver(),
             languageProviderCatalog: .compatibilityFallback,
@@ -233,7 +224,7 @@ struct ExecutionModuleTests {
         let root = URL(fileURLWithPath: "/workspace", isDirectory: true)
         let snapshotID = UUID()
 
-        await service.loadProject(at: root, files: [], mavenProject: nil, snapshotID: snapshotID)
+        await service.loadProject(at: root, files: [], snapshotID: snapshotID)
 
         #expect(service.configurationStatus == .invalid("generated.json is invalid"))
         #expect(service.isProjectReady(for: root, snapshotID: snapshotID))
@@ -252,7 +243,6 @@ struct ExecutionModuleTests {
             processFactory: { TestStreamingProcess() },
             fileAccess: TestRunFileAccess(),
             preferences: TestRunPreferences(),
-            serverPortParser: TestServerPortParser(),
             runConfigurationOperations: TestReadyRunConfigurationOperations(),
             executableResolver: TestExecutableResolver(),
             languageProviderCatalog: .compatibilityFallback,
@@ -273,7 +263,7 @@ struct ExecutionModuleTests {
 
         let root = URL(fileURLWithPath: "/workspace", isDirectory: true)
         let source = root.appendingPathComponent("cmd/server/main.go")
-        await service.loadProject(at: root, files: [source], mavenProject: nil)
+        await service.loadProject(at: root, files: [source])
         service.run(configuration: .currentFile, currentFileURL: source)
 
         #expect(builtInProcess.startRequests.isEmpty)
@@ -295,7 +285,6 @@ struct ExecutionModuleTests {
             processFactory: { TestStreamingProcess() },
             fileAccess: TestRunFileAccess(),
             preferences: TestRunPreferences(),
-            serverPortParser: TestServerPortParser(),
             runConfigurationOperations: TestGoProjectRunConfigurationOperations(),
             executableResolver: TestExecutableResolver(),
             languageProviderCatalog: .compatibilityFallback,
@@ -315,8 +304,7 @@ struct ExecutionModuleTests {
         let root = URL(fileURLWithPath: "/workspace", isDirectory: true)
         await service.loadProject(
             at: root,
-            files: [root.appendingPathComponent("go.mod")],
-            mavenProject: nil
+            files: [root.appendingPathComponent("go.mod")]
         )
         let configuration = try #require(
             service.configurations.first { $0.kind.providerID == "go" }
@@ -389,160 +377,8 @@ struct ExecutionModuleTests {
         #expect(service.errorMessage == "go testing extension is not active.")
     }
 
-    @Test
-    func mavenServiceExecutesTheSharedLaunchPlanWithLocalRuntimeOverrides() async throws {
-        let workspace = URL(fileURLWithPath: "/workspace", isDirectory: true)
-        let reactor = workspace.appendingPathComponent("projects/demo", isDirectory: true)
-        let module = MavenModule(
-            relativePath: "service-api",
-            url: reactor.appendingPathComponent("service-api", isDirectory: true),
-            groupID: "dev.lithe",
-            artifactID: "service-api",
-            version: "1.0",
-            packaging: "jar",
-            modules: []
-        )
-        let project = MavenProject(
-            rootURL: reactor,
-            pomURL: reactor.appendingPathComponent("pom.xml"),
-            groupID: "dev.lithe",
-            artifactID: "demo",
-            version: "1.0",
-            packaging: "pom",
-            modules: [module],
-            profiles: [MavenProfile(id: "dev", isActiveByDefault: false)],
-            hasWrapper: false
-        )
-        let plan = MavenLaunchPlan(
-            version: 1,
-            toolchain: "project-maven",
-            arguments: ["core-owned-argument", "-s", "/local/settings.xml", "verify"],
-            workingDirectory: "projects/demo",
-            configurationFingerprint: "sha256:test"
-        )
-        let operations = RecordingMavenOperations(project: project, plan: plan)
-        let process = MavenRecordingProcess()
-        let runtime = MavenRecordingRuntime()
-        let store = RecordingMavenConfigurationStore(configuration: MavenStoredConfiguration(
-            portable: MavenPortableConfiguration(
-                selectedProfiles: ["dev"],
-                customProfiles: [],
-                skipTests: true
-            ),
-            local: MavenLocalConfiguration(
-                settingsPath: "/local/settings.xml",
-                mavenExecutablePath: "/local/apache-maven",
-                javaHomePath: "/local/jdk"
-            )
-        ))
-        let service = MavenService(
-            runtimeService: runtime,
-            process: process,
-            mavenOperations: operations,
-            configurationStore: store
-        )
 
-        await service.loadProject(at: workspace, files: [project.pomURL])
-        service.runCustomGoal(
-            "help:evaluate -Dexpression=fixture.config -q -DforceStdout",
-            module: module
-        )
-        let request = try #require(await process.nextStart(timeout: .seconds(1)))
 
-        #expect(request.arguments == plan.arguments)
-        #expect(request.workingDirectory == reactor.path)
-        #expect(request.environment?["TEST_JAVA_HOME"] == "/local/jdk")
-        #expect(runtime.lastMavenOverride == "/local/apache-maven")
-        #expect(operations.lastContext?.reactorPath == "projects/demo")
-        #expect(operations.lastContext?.profiles == ["dev"])
-        #expect(operations.lastContext?.settingsPath == "/local/settings.xml")
-        #expect(operations.lastContext?.skipTests == true)
-        #expect(operations.lastModule == "service-api")
-        #expect(operations.lastGoals == [
-            "help:evaluate",
-            "-Dexpression=fixture.config",
-            "-q",
-            "-DforceStdout"
-        ])
-        #expect(service.output.contains("-s <settings.xml>"))
-        #expect(!service.output.contains("/local/settings.xml"))
-    }
-
-    @Test
-    func mavenServiceReportsCancellationWithoutInventingAnExitCode() async throws {
-        let workspace = URL(fileURLWithPath: "/workspace", isDirectory: true)
-        let project = MavenProject(
-            rootURL: workspace,
-            pomURL: workspace.appendingPathComponent("pom.xml"),
-            groupID: "dev.lithe",
-            artifactID: "demo",
-            version: "1.0",
-            packaging: "jar",
-            modules: [],
-            profiles: [],
-            hasWrapper: false
-        )
-        let plan = MavenLaunchPlan(
-            version: 1,
-            toolchain: "project-maven",
-            arguments: ["-B", "-ntp", "validate"],
-            workingDirectory: ".",
-            configurationFingerprint: "sha256:test"
-        )
-        let process = MavenRecordingProcess()
-        let service = MavenService(
-            runtimeService: MavenRecordingRuntime(),
-            process: process,
-            mavenOperations: RecordingMavenOperations(project: project, plan: plan)
-        )
-
-        await service.loadProject(at: workspace, files: [project.pomURL])
-        service.run(phase: .validate, module: nil)
-        _ = try #require(await process.nextStart(timeout: .seconds(1)))
-        service.stop()
-
-        #expect(service.taskState == .cancelled)
-        #expect(service.runningTitle == nil)
-        #expect(service.lastExitCode == nil)
-        #expect(service.output.hasSuffix("Maven task cancelled.\n"))
-        #expect(!process.isRunning)
-    }
-
-    @Test
-    func mavenServiceClearsReloadWhenConfigurationFingerprintReturnsToBaseline() async throws {
-        let workspace = URL(fileURLWithPath: "/workspace", isDirectory: true)
-        let project = MavenProject(
-            rootURL: workspace,
-            pomURL: workspace.appendingPathComponent("pom.xml"),
-            groupID: "dev.lithe",
-            artifactID: "demo",
-            version: "1.0",
-            packaging: "jar",
-            modules: [],
-            profiles: [],
-            hasWrapper: false
-        )
-        let process = MavenRecordingProcess()
-        let service = MavenService(
-            runtimeService: MavenRecordingRuntime(),
-            process: process,
-            mavenOperations: FingerprintingMavenOperations(project: project)
-        )
-
-        await service.loadProject(at: workspace, files: [project.pomURL])
-        #expect(!service.isReloadRequired)
-
-        service.setSkipTests(true)
-        service.run(phase: .validate, module: nil)
-        _ = try #require(await process.nextStart(timeout: .seconds(1)))
-        #expect(service.isReloadRequired)
-
-        service.stop()
-        service.setSkipTests(false)
-        service.run(phase: .validate, module: nil)
-        _ = try #require(await process.nextStart(timeout: .seconds(1)))
-        #expect(!service.isReloadRequired)
-    }
 
     private func factory(recorder: Recorder) -> ModuleFactory {
         ModuleFactory(manifest: ExecutionModule.moduleManifest, contributions: ExecutionModule.moduleContributions) {
@@ -567,8 +403,7 @@ struct ExecutionModuleTests {
 private func makeRunService(
     configuration: RunConfiguration,
     options: RunOptions,
-    fileAccess: TestRunFileAccess,
-    serverPortParser: FixedServerPortParser
+    fileAccess: TestRunFileAccess
 ) -> RunService {
     RunService(
         runtime: TestRuntime(),
@@ -576,7 +411,6 @@ private func makeRunService(
         processFactory: { TestStreamingProcess() },
         fileAccess: fileAccess,
         preferences: TestRunPreferences(),
-        serverPortParser: serverPortParser,
         runConfigurationOperations: SingleRunConfigurationOperations(
             configuration: configuration,
             options: options
@@ -597,18 +431,12 @@ private func makeRunService(
 private func makeTestGraph() -> ExecutionFeatureGraph {
     let runtime = TestRuntime()
     let resolver = TestExecutableResolver()
-    let maven = MavenService(
-        runtimeService: runtime,
-        process: TestStreamingProcess(),
-        mavenOperations: TestMavenOperations()
-    )
     let run = RunService(
         runtime: runtime,
         process: TestStreamingProcess(),
         processFactory: { TestStreamingProcess() },
         fileAccess: TestRunFileAccess(),
         preferences: TestRunPreferences(),
-        serverPortParser: TestServerPortParser(),
         runConfigurationOperations: TestRunConfigurationOperations(),
         executableResolver: resolver,
         languageProviderCatalog: .compatibilityFallback,
@@ -620,21 +448,16 @@ private func makeTestGraph() -> ExecutionFeatureGraph {
         executableResolver: resolver,
         processFactory: { TestStreamingProcess() }
     )
-    return ExecutionFeatureGraph(maven: maven, run: run, tests: tests)
+    return ExecutionFeatureGraph( run: run, tests: tests)
 }
 
 @MainActor
-private final class TestRuntime: MavenRuntimePort, RunRuntimePort {
-    func mavenExecutable(for project: MavenProject, overridePath: String?) -> URL? { nil }
-    func mavenProcessEnvironment(javaHomePath: String?) -> [String: String] { [:] }
+private final class TestRuntime: RunRuntimePort {
     func setActiveServiceJavaHomePath(_ path: String) {}
     func javaHomeURL(overridePath: String?) -> URL? { nil }
-    func mavenJavaHomeURL(overridePath: String?) -> URL? { nil }
     func runConfigurationToolchainCandidates(
-        for project: MavenProject?,
         projectRoot: URL?,
-        javaHomeOverride: String?,
-        mavenExecutableOverride: String?
+        javaHomeOverride: String?
     ) -> [ProjectToolchainCandidate] { [] }
 }
 
@@ -652,179 +475,11 @@ private final class TestStreamingProcess: StreamingProcess, @unchecked Sendable 
     func stop() { isRunning = false }
 }
 
-private struct TestMavenOperations: MavenProjectOperations {
-    func scanMavenProject(at rootURL: URL, files: [URL]) throws -> MavenProject? { nil }
-    func mavenLaunchPlan(
-        at rootURL: URL,
-        context: MavenLaunchContext,
-        module: String?,
-        goals: [String]
-    ) throws -> MavenLaunchPlan {
-        MavenLaunchPlan(
-            version: 1,
-            toolchain: "project-maven",
-            arguments: goals,
-            workingDirectory: ".",
-            configurationFingerprint: "test"
-        )
-    }
-    func mavenDiagnostics(output: String, projectRoot: URL) -> [MavenBuildIssue] { [] }
-}
 
-private final class RecordingMavenOperations: MavenProjectOperations, @unchecked Sendable {
-    private let lock = NSLock()
-    private let project: MavenProject
-    private let plan: MavenLaunchPlan
-    private var recordedContext: MavenLaunchContext?
-    private var recordedModule: String?
-    private var recordedGoals: [String] = []
 
-    init(project: MavenProject, plan: MavenLaunchPlan) {
-        self.project = project
-        self.plan = plan
-    }
 
-    var lastContext: MavenLaunchContext? {
-        lock.lock()
-        defer { lock.unlock() }
-        return recordedContext
-    }
 
-    var lastModule: String? {
-        lock.lock()
-        defer { lock.unlock() }
-        return recordedModule
-    }
 
-    var lastGoals: [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return recordedGoals
-    }
-
-    func scanMavenProject(at rootURL: URL, files: [URL]) throws -> MavenProject? {
-        project
-    }
-
-    func mavenLaunchPlan(
-        at rootURL: URL,
-        context: MavenLaunchContext,
-        module: String?,
-        goals: [String]
-    ) throws -> MavenLaunchPlan {
-        lock.lock()
-        recordedContext = context
-        recordedModule = module
-        recordedGoals = goals
-        lock.unlock()
-        return plan
-    }
-
-    func mavenDiagnostics(output: String, projectRoot: URL) -> [MavenBuildIssue] { [] }
-}
-
-private final class FingerprintingMavenOperations: MavenProjectOperations, @unchecked Sendable {
-    private let project: MavenProject
-
-    init(project: MavenProject) {
-        self.project = project
-    }
-
-    func scanMavenProject(at rootURL: URL, files: [URL]) throws -> MavenProject? {
-        project
-    }
-
-    func mavenLaunchPlan(
-        at rootURL: URL,
-        context: MavenLaunchContext,
-        module: String?,
-        goals: [String]
-    ) throws -> MavenLaunchPlan {
-        MavenLaunchPlan(
-            version: 1,
-            toolchain: "project-maven",
-            arguments: goals,
-            workingDirectory: context.reactorPath,
-            configurationFingerprint: context.skipTests ? "sha256:skip-tests" : "sha256:run-tests"
-        )
-    }
-
-    func mavenDiagnostics(output: String, projectRoot: URL) -> [MavenBuildIssue] { [] }
-}
-
-private final class RecordingMavenConfigurationStore: MavenConfigurationStoring, @unchecked Sendable {
-    private let configuration: MavenStoredConfiguration
-
-    init(configuration: MavenStoredConfiguration) {
-        self.configuration = configuration
-    }
-
-    func loadMavenConfiguration(
-        workspaceURL: URL,
-        reactorPath: String
-    ) throws -> MavenStoredConfiguration {
-        configuration
-    }
-
-    func saveMavenConfiguration(
-        _ configuration: MavenStoredConfiguration,
-        workspaceURL: URL,
-        reactorPath: String
-    ) throws {}
-}
-
-@MainActor
-private final class MavenRecordingRuntime: MavenRuntimePort {
-    private(set) var lastMavenOverride: String?
-
-    func mavenExecutable(for project: MavenProject, overridePath: String?) -> URL? {
-        lastMavenOverride = overridePath
-        return URL(fileURLWithPath: "/test/bin/mvn")
-    }
-
-    func mavenProcessEnvironment(javaHomePath: String?) -> [String: String] {
-        ["TEST_JAVA_HOME": javaHomePath ?? ""]
-    }
-}
-
-private final class MavenRecordingProcess: StreamingProcess, @unchecked Sendable {
-    var isRunning = false
-    var onOutput: (@Sendable (String) -> Void)?
-    var onTermination: (@Sendable (Int32) -> Void)?
-    var onStateChange: (@Sendable (ProcessLifecycleEvent) -> Void)?
-
-    private let stream: AsyncStream<ProcessRequest>
-    private let continuation: AsyncStream<ProcessRequest>.Continuation
-
-    init() {
-        (stream, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(4))
-    }
-
-    func start(_ request: ProcessRequest) throws {
-        isRunning = true
-        continuation.yield(request)
-    }
-
-    func send(_ input: Data) throws {}
-    func stop() { isRunning = false }
-
-    func nextStart(timeout: Duration) async -> ProcessRequest? {
-        await withTaskGroup(of: ProcessRequest?.self) { group in
-            let stream = stream
-            group.addTask {
-                var iterator = stream.makeAsyncIterator()
-                return await iterator.next()
-            }
-            group.addTask {
-                try? await ContinuousClock().sleep(for: timeout)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
-        }
-    }
-}
 
 private struct TestRunFileAccess: RunFileAccess {
     let contents: [URL: String]
@@ -847,14 +502,7 @@ private final class TestRunPreferences: RunPreferenceStore {
     func setString(_ value: String, forKey key: String) {}
 }
 
-private struct TestServerPortParser: RunServerPortParsing {
-    func serverPort(content: String, fileExtension: String) -> Int? { nil }
-}
 
-private struct FixedServerPortParser: RunServerPortParsing {
-    let port: Int?
-    func serverPort(content _: String, fileExtension _: String) -> Int? { port }
-}
 
 private struct SingleRunConfigurationOperations: RunConfigurationOperations {
     let configuration: RunConfiguration
@@ -882,7 +530,6 @@ private struct SingleRunConfigurationOperations: RunConfigurationOperations {
     ) throws -> SharedLaunchPlan {
         throw RunConfigurationOperationFailure(message: "Not required by the port resolution test")
     }
-    func createConfiguration(_ draft: RunConfigurationDraft, at _: URL) throws -> String { draft.name }
     func migrateLegacySettings(at _: URL, configurationIDs _: [String]) throws {}
 }
 
@@ -908,7 +555,6 @@ private struct TestRunConfigurationOperations: RunConfigurationOperations {
     func launchPlan(at projectURL: URL, configurationID: String, currentFile: String?, classPath: String?, debugPort: Int?) throws -> SharedLaunchPlan {
         throw RunConfigurationOperationFailure(message: "Unavailable in lifecycle test")
     }
-    func createConfiguration(_ draft: RunConfigurationDraft, at projectURL: URL) throws -> String { draft.name }
     func migrateLegacySettings(at projectURL: URL, configurationIDs: [String]) throws {}
 }
 
@@ -943,7 +589,6 @@ private final class RecordingRunConfigurationOperations: RunConfigurationOperati
     func launchPlan(at projectURL: URL, configurationID: String, currentFile: String?, classPath: String?, debugPort: Int?) throws -> SharedLaunchPlan {
         throw RunConfigurationOperationFailure(message: "Unavailable in identification test")
     }
-    func createConfiguration(_ draft: RunConfigurationDraft, at projectURL: URL) throws -> String { draft.name }
     func migrateLegacySettings(at projectURL: URL, configurationIDs: [String]) throws {}
 }
 
@@ -965,7 +610,6 @@ private struct FailingInspectionRunConfigurationOperations: RunConfigurationOper
     func launchPlan(at projectURL: URL, configurationID: String, currentFile: String?, classPath: String?, debugPort: Int?) throws -> SharedLaunchPlan {
         throw RunConfigurationOperationFailure(message: "Unavailable in inspection test")
     }
-    func createConfiguration(_ draft: RunConfigurationDraft, at projectURL: URL) throws -> String { draft.name }
     func migrateLegacySettings(at projectURL: URL, configurationIDs: [String]) throws {}
 }
 
@@ -989,7 +633,6 @@ private struct TestReadyRunConfigurationOperations: RunConfigurationOperations {
     func launchPlan(at projectURL: URL, configurationID: String, currentFile: String?, classPath: String?, debugPort: Int?) throws -> SharedLaunchPlan {
         throw RunConfigurationOperationFailure(message: "The extension must supply this launch plan")
     }
-    func createConfiguration(_ draft: RunConfigurationDraft, at projectURL: URL) throws -> String { draft.name }
     func migrateLegacySettings(at projectURL: URL, configurationIDs: [String]) throws {}
 }
 
@@ -1026,7 +669,6 @@ private struct TestGoProjectRunConfigurationOperations: RunConfigurationOperatio
             workingDirectory: "."
         )
     }
-    func createConfiguration(_ draft: RunConfigurationDraft, at projectURL: URL) throws -> String { draft.name }
     func migrateLegacySettings(at projectURL: URL, configurationIDs: [String]) throws {}
 }
 

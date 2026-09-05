@@ -33,7 +33,7 @@ pub(crate) enum JdtReadinessSignal {
     Failed(String),
 }
 
-/// Maven artifact transfer details extracted from JDT LS work-done progress.
+/// Dependency artifact transfer details extracted from JDT LS work-done progress.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct JdtDownloadProgress {
     /// File name only; repository URLs can contain credentials or private hosts.
@@ -51,11 +51,11 @@ pub(crate) struct JdtDownloadProgress {
 pub(crate) struct JdtImportProgress {
     /// Stable signature used to ignore duplicate progress notifications.
     pub activity_signature: String,
-    /// JDT LS work phase such as Maven import or classpath setup.
+    /// JDT LS work phase such as project import or classpath setup.
     pub phase: Option<String>,
     /// Outer workspace-import percentage, which can stay fixed during downloads.
     pub percentage: Option<u64>,
-    /// Current Maven project when JDT LS includes it in the progress message.
+    /// Current project when JDT LS includes it in the progress message.
     pub current_project: Option<String>,
     /// Current artifact transfer, if the progress message contains a repository URL.
     pub download: Option<JdtDownloadProgress>,
@@ -87,19 +87,6 @@ pub(crate) struct JdtStartContext {
     /// caches stay valid.
     #[serde(default)]
     pub workspace_fingerprint: Option<String>,
-}
-
-/// Maven import settings already validated by the shared project domain.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct JdtMavenConfiguration {
-    /// Optional machine-local Maven settings file consumed by JDT LS.
-    pub settings_path: Option<String>,
-    /// Sorted, de-duplicated Maven profile IDs selected for this workspace.
-    pub profiles: Vec<String>,
-    /// Deterministically ordered reactor and recursive-module directory URIs.
-    pub project_uris: Vec<String>,
-    /// Workspace-relative Java source directories discovered from Maven POMs.
-    pub source_paths: Vec<String>,
 }
 
 /// Platform-resolved files required to launch JDT LS without a shell wrapper.
@@ -278,7 +265,6 @@ pub(crate) fn adapt_initialization_options(
 pub(crate) fn workspace_configuration(
     provider_id: &str,
     items: &[WorkspaceConfigurationItem],
-    maven_configuration: Option<&JdtMavenConfiguration>,
 ) -> Option<Vec<Value>> {
     if !is_java_provider(provider_id) {
         return None;
@@ -286,47 +272,19 @@ pub(crate) fn workspace_configuration(
     Some(
         items
             .iter()
-            .map(|item| {
-                java_configuration_for_section(item.section.as_deref(), maven_configuration)
-            })
+            .map(|item| java_configuration_for_section(item.section.as_deref()))
             .collect(),
     )
 }
 
 /// Notification the engine sends after the generic `initialized` handshake.
-pub(crate) fn initialized_notification(
-    provider_id: &str,
-    maven_configuration: Option<&JdtMavenConfiguration>,
-) -> Option<ProviderNotification> {
+pub(crate) fn initialized_notification(provider_id: &str) -> Option<ProviderNotification> {
     is_java_provider(provider_id).then(|| ProviderNotification {
         method: DID_CHANGE_CONFIGURATION_METHOD.to_string(),
         params: json!({
-            "settings": java_settings(maven_configuration)
+            "settings": java_settings()
         }),
     })
-}
-
-/// Commands that apply the selected Maven profiles to every imported project.
-pub(crate) fn maven_profile_update_requests(
-    configuration: Option<&JdtMavenConfiguration>,
-) -> Vec<Value> {
-    let Some(configuration) = configuration else {
-        return Vec::new();
-    };
-    let profiles = configuration.profiles.join(",");
-    configuration
-        .project_uris
-        .iter()
-        .map(|uri| {
-            json!({
-                "command": "java.project.updateSettings",
-                "arguments": [
-                    uri,
-                    { "org.eclipse.m2e.core.selectedProfiles": profiles }
-                ]
-            })
-        })
-        .collect()
 }
 
 /// Returns whether the provider has a readiness phase after standard LSP
@@ -362,7 +320,7 @@ pub(crate) fn readiness_signal(
     }
 }
 
-/// Extracts observability-only Maven import details from JDT LS `$/progress`.
+/// Extracts observability-only workspace import details from JDT LS `$/progress`.
 ///
 /// Lifecycle correctness must never depend on this parser because progress text
 /// is owned by JDT LS and can change between releases. Readiness continues to
@@ -710,13 +668,10 @@ fn without_wrapper_owned_arguments(arguments: &[String]) -> Vec<String> {
     retained
 }
 
-fn java_settings(maven_configuration: Option<&JdtMavenConfiguration>) -> Value {
-    let mut settings = json!({
+fn java_settings() -> Value {
+    let settings = json!({
         "java": {
             "eclipse": {
-                "downloadSources": false
-            },
-            "maven": {
                 "downloadSources": false
             },
             "configuration": {
@@ -737,24 +692,12 @@ fn java_settings(maven_configuration: Option<&JdtMavenConfiguration>) -> Value {
             }
         }
     });
-    if let Some(settings_path) = maven_configuration.and_then(|value| value.settings_path.as_ref())
-    {
-        settings["java"]["configuration"]["maven"] = json!({
-            "userSettings": settings_path
-        });
-    }
-    if let Some(configuration) = maven_configuration {
-        settings["java"]["project"]["sourcePaths"] = json!(configuration.source_paths);
-    }
     settings
 }
 
-fn java_configuration_for_section(
-    section: Option<&str>,
-    maven_configuration: Option<&JdtMavenConfiguration>,
-) -> Value {
+fn java_configuration_for_section(section: Option<&str>) -> Value {
     match section {
-        Some("java") => java_settings(maven_configuration)["java"].clone(),
+        Some("java") => java_settings()["java"].clone(),
         Some("java.inlayHints") => json!({
             "parameterNames": {
                 "enabled": "all"
@@ -764,25 +707,8 @@ fn java_configuration_for_section(
         Some("java.inlayHints.parameterNames.enabled") => json!("all"),
         Some("java.eclipse") => json!({ "downloadSources": false }),
         Some("java.eclipse.downloadSources") => json!(false),
-        Some("java.maven") => json!({ "downloadSources": false }),
-        Some("java.maven.downloadSources") => json!(false),
-        Some("java.configuration") => {
-            java_settings(maven_configuration)["java"]["configuration"].clone()
-        }
+        Some("java.configuration") => java_settings()["java"]["configuration"].clone(),
         Some("java.configuration.updateBuildConfiguration") => json!("automatic"),
-        Some("java.configuration.maven") => maven_configuration
-            .and_then(|value| value.settings_path.as_ref())
-            .map(|path| json!({ "userSettings": path }))
-            .unwrap_or(Value::Null),
-        Some("java.configuration.maven.userSettings") => maven_configuration
-            .and_then(|value| value.settings_path.as_ref())
-            .map_or(Value::Null, |path| json!(path)),
-        Some("java.project") => maven_configuration
-            .map(|value| json!({ "sourcePaths": value.source_paths }))
-            .unwrap_or(Value::Null),
-        Some("java.project.sourcePaths") => maven_configuration
-            .map(|value| json!(value.source_paths))
-            .unwrap_or(Value::Null),
         Some("java.implementationsCodeLens") => json!({ "enabled": true }),
         Some("java.implementationsCodeLens.enabled") => json!(true),
         Some("java.referencesCodeLens") => json!({ "enabled": true }),
@@ -960,13 +886,16 @@ mod tests {
             Some(&json!({
                 "value": {
                     "kind": "report",
-                    "message": "Importing Maven project(s) - Importing project module-a",
+                    "message": "Importing workspace project(s) - Importing project module-a",
                     "percentage": 24
                 }
             })),
         )
         .expect("Java work-done progress should be observed");
-        assert_eq!(module.phase.as_deref(), Some("Importing Maven project(s)"));
+        assert_eq!(
+            module.phase.as_deref(),
+            Some("Importing workspace project(s)")
+        );
         assert_eq!(module.current_project.as_deref(), Some("module-a"));
         assert_eq!(module.percentage, Some(24));
 
@@ -976,7 +905,7 @@ mod tests {
             Some(&json!({
                 "value": {
                     "kind": "report",
-                    "message": "Importing Maven project(s) - 117KB/7MB (1%) https://repo.maven.apache.org/maven2/org/apache/poi/poi.jar",
+                    "message": "Importing workspace project(s) - 117KB/7MB (1%) https://repo.example.com/artifacts/poi.jar",
                     "percentage": 49
                 }
             })),
@@ -986,7 +915,7 @@ mod tests {
         assert_eq!(download.artifact, "poi.jar");
         assert_eq!(
             download.repository_host.as_deref(),
-            Some("repo.maven.apache.org")
+            Some("repo.example.com")
         );
         assert_eq!(download.downloaded_bytes, Some(117 * 1024));
         assert_eq!(download.total_bytes, Some(7 * 1024 * 1024));
@@ -997,7 +926,7 @@ mod tests {
         let params = json!({
             "value": {
                 "kind": "report",
-                "message": "Importing Maven project(s) - 50%",
+                "message": "Importing workspace project(s) - 50%",
                 "percentage": 50
             }
         });
@@ -1178,8 +1107,8 @@ mod tests {
 
         assert_eq!(adapted.arguments, context.arguments);
         assert_eq!(adapted.data_directory, None);
-        assert!(workspace_configuration("rust", &[], None).is_none());
-        assert!(initialized_notification("rust", None).is_none());
+        assert!(workspace_configuration("rust", &[]).is_none());
+        assert!(initialized_notification("rust").is_none());
         assert!(virtual_source_resolve_params("rust", "jdt://contents/A.class").is_none());
         assert_eq!(
             adapt_initialization_options("rust", Some(json!({ "custom": true })), &[]),
@@ -1238,7 +1167,6 @@ mod tests {
         let items = [
             "java",
             "java.eclipse.downloadSources",
-            "java.maven.downloadSources",
             "java.inlayHints",
             "java.inlayHints.parameterNames",
             "java.inlayHints.parameterNames.enabled",
@@ -1252,28 +1180,26 @@ mod tests {
             scope_uri: Some("file:///workspace/project".to_string()),
             section: Some(section.to_string()),
         });
-        let values = workspace_configuration("java", &items, None).unwrap();
+        let values = workspace_configuration("java", &items).unwrap();
 
         assert_eq!(values[0]["inlayHints"]["parameterNames"]["enabled"], "all");
         assert_eq!(values[0]["eclipse"]["downloadSources"], false);
-        assert_eq!(values[0]["maven"]["downloadSources"], false);
         assert_eq!(values[0]["implementationsCodeLens"]["enabled"], true);
         assert_eq!(values[0]["referencesCodeLens"]["enabled"], true);
         assert_eq!(values[1], false); // java.eclipse.downloadSources
-        assert_eq!(values[2], false); // java.maven.downloadSources
-        assert_eq!(values[3]["parameterNames"]["enabled"], "all"); // java.inlayHints
-        assert_eq!(values[4]["enabled"], "all"); // java.inlayHints.parameterNames
-        assert_eq!(values[5], "all"); // java.inlayHints.parameterNames.enabled
-        assert_eq!(values[6]["enabled"], true); // java.implementationsCodeLens
-        assert_eq!(values[7], true); // java.implementationsCodeLens.enabled
-        assert_eq!(values[8]["enabled"], true); // java.referencesCodeLens
-        assert_eq!(values[9], true); // java.referencesCodeLens.enabled
-        assert_eq!(values[10], Value::Null); // java.unknown
+        assert_eq!(values[2]["parameterNames"]["enabled"], "all"); // java.inlayHints
+        assert_eq!(values[3]["enabled"], "all"); // java.inlayHints.parameterNames
+        assert_eq!(values[4], "all"); // java.inlayHints.parameterNames.enabled
+        assert_eq!(values[5]["enabled"], true); // java.implementationsCodeLens
+        assert_eq!(values[6], true); // java.implementationsCodeLens.enabled
+        assert_eq!(values[7]["enabled"], true); // java.referencesCodeLens
+        assert_eq!(values[8], true); // java.referencesCodeLens.enabled
+        assert_eq!(values[9], Value::Null); // java.unknown
     }
 
     #[test]
     fn java_initialized_notification_publishes_inlay_settings() {
-        let notification = initialized_notification("JAVA", None).unwrap();
+        let notification = initialized_notification("JAVA").unwrap();
 
         assert_eq!(notification.method, "workspace/didChangeConfiguration");
         assert_eq!(
@@ -1285,114 +1211,12 @@ mod tests {
             false
         );
         assert_eq!(
-            notification.params["settings"]["java"]["maven"]["downloadSources"],
-            false
-        );
-        assert_eq!(
             notification.params["settings"]["java"]["implementationsCodeLens"]["enabled"],
             true
         );
         assert_eq!(
             notification.params["settings"]["java"]["referencesCodeLens"]["enabled"],
             true
-        );
-    }
-
-    #[test]
-    fn java_configuration_and_profile_updates_consume_the_maven_context() {
-        let configuration = JdtMavenConfiguration {
-            settings_path: Some("/local/settings.xml".to_string()),
-            profiles: vec!["dev".to_string(), "enterprise".to_string()],
-            project_uris: vec![
-                "file:///workspace/reactor/".to_string(),
-                "file:///workspace/reactor/module-a/".to_string(),
-                "file:///workspace/reactor/module-a/nested/".to_string(),
-            ],
-            source_paths: vec![
-                "src/main/java".to_string(),
-                "module-a/src/main/java".to_string(),
-            ],
-        };
-        let items = [
-            "java",
-            "java.configuration",
-            "java.configuration.maven",
-            "java.configuration.maven.userSettings",
-        ]
-        .map(|section| WorkspaceConfigurationItem {
-            scope_uri: Some("file:///workspace/reactor/".to_string()),
-            section: Some(section.to_string()),
-        });
-
-        let values = workspace_configuration("java", &items, Some(&configuration)).unwrap();
-        assert_eq!(
-            values[0]["configuration"]["maven"]["userSettings"],
-            "/local/settings.xml"
-        );
-        assert_eq!(values[1]["maven"]["userSettings"], "/local/settings.xml");
-        assert_eq!(values[2]["userSettings"], "/local/settings.xml");
-        assert_eq!(values[3], "/local/settings.xml");
-        assert_eq!(
-            values[0]["project"]["sourcePaths"],
-            json!(["src/main/java", "module-a/src/main/java"])
-        );
-        let source_values = workspace_configuration(
-            "java",
-            &[
-                WorkspaceConfigurationItem {
-                    scope_uri: None,
-                    section: Some("java.project".to_string()),
-                },
-                WorkspaceConfigurationItem {
-                    scope_uri: None,
-                    section: Some("java.project.sourcePaths".to_string()),
-                },
-            ],
-            Some(&configuration),
-        )
-        .unwrap();
-        assert_eq!(
-            source_values,
-            vec![
-                json!({ "sourcePaths": ["src/main/java", "module-a/src/main/java"] }),
-                json!(["src/main/java", "module-a/src/main/java"]),
-            ]
-        );
-
-        let notification = initialized_notification("java", Some(&configuration)).unwrap();
-        assert_eq!(
-            notification.params["settings"]["java"]["configuration"]["maven"]["userSettings"],
-            "/local/settings.xml"
-        );
-        assert_eq!(
-            notification.params["settings"]["java"]["project"]["sourcePaths"],
-            json!(["src/main/java", "module-a/src/main/java"])
-        );
-        assert_eq!(
-            maven_profile_update_requests(Some(&configuration)),
-            vec![
-                json!({
-                    "command": "java.project.updateSettings",
-                    "arguments": [
-                        "file:///workspace/reactor/",
-                        { "org.eclipse.m2e.core.selectedProfiles": "dev,enterprise" }
-                    ]
-                }),
-                json!({
-                    "command": "java.project.updateSettings",
-                    "arguments": [
-                        "file:///workspace/reactor/module-a/",
-                        { "org.eclipse.m2e.core.selectedProfiles": "dev,enterprise" }
-                    ]
-                }),
-                json!({
-                    "command": "java.project.updateSettings",
-                    "arguments": [
-                        "file:///workspace/reactor/module-a/nested/",
-                        { "org.eclipse.m2e.core.selectedProfiles": "dev,enterprise" }
-                    ]
-                }),
-            ]
         );
     }
 

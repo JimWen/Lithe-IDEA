@@ -156,11 +156,11 @@ struct DebugLaunchConfigurationResolver {
         options: (RunConfiguration) -> RunOptions
     ) -> DebugLaunchConfiguration {
         // Debug is a second execution mode for the selected Run configuration.
-        // Keep every Java configuration eligible here so its JDK, Maven,
+        // Keep every Java configuration eligible here so its JDK,
         // working-directory, VM/program arguments, profiles, and environment
         // overrides are carried over unchanged.
         let configuration = selectedConfiguration.flatMap { selected in
-            selected.kind.providerID == "java" || selected.kind.isMavenBacked ? selected : nil
+            selected.kind.providerID == "java" ? selected : nil
         }
         let runOptions = configuration.map(options)
         let mainClass = configuration?.mainClass ?? target.mainClass

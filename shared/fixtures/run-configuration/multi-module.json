@@ -6,34 +6,50 @@
       {
         "id": "module:backend",
         "name": "backend",
-        "type": "maven.module",
+        "type": "java.main",
         "module": "backend",
-        "toolchains": { "java": "project-jdk", "maven": "project-maven" },
+        "toolchains": {
+          "java": "project-jdk"
+        },
         "workingDirectory": ".",
         "jvmArguments": [],
-        "programArguments": [],
-        "mavenProfiles": []
+        "programArguments": []
       },
       {
         "id": "module:worker",
         "name": "worker",
-        "type": "maven.module",
+        "type": "java.main",
         "module": "worker",
-        "toolchains": { "java": "project-jdk", "maven": "project-maven" },
+        "toolchains": {
+          "java": "project-jdk"
+        },
         "workingDirectory": ".",
         "jvmArguments": [],
-        "programArguments": [],
-        "mavenProfiles": []
+        "programArguments": []
       }
     ]
   },
   "team": {
     "version": 1,
-    "configurations": [{ "id": "module:worker", "mavenProfiles": ["dev"] }]
+    "configurations": [
+      {
+        "id": "module:worker"
+      }
+    ]
   },
   "local": {
     "version": 1,
-    "configurations": [{ "id": "module:backend", "jvmArguments": ["-Xmx2g"] }]
+    "configurations": [
+      {
+        "id": "module:backend",
+        "jvmArguments": [
+          "-Xmx2g"
+        ]
+      }
+    ]
   },
-  "expected": { "configurationCount": 2, "selectedId": "module:backend" }
+  "expected": {
+    "configurationCount": 2,
+    "selectedId": "module:backend"
+  }
 }

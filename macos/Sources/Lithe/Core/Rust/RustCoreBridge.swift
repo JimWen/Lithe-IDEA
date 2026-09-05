@@ -204,142 +204,14 @@ struct RustCoreBridge: Sendable {
         let html: String
     }
 
-    struct MavenScanPayload: Decodable, Sendable {
-        struct SourceRoot: Decodable, Sendable {
-            let path: String
-            let kind: String
 
-            func makeModel() -> MavenSourceRoot? {
-                guard let kind = MavenSourceRootKind(rawValue: kind) else { return nil }
-                return MavenSourceRoot(path: path, kind: kind)
-            }
-        }
 
-        struct Profile: Decodable, Sendable {
-            let id: String
-            let isActiveByDefault: Bool
-        }
-
-        /// The core serializes Maven coordinates as `groupId` / `artifactId`,
-        /// matching Maven itself. Swift spells the same properties with a
-        /// capital D, so the mapping has to be explicit -- without it decoding
-        /// fails and the whole scan silently returns nil.
-        struct Module: Decodable, Sendable {
-            let relativePath: String
-            let groupID: String?
-            let artifactID: String
-            let version: String?
-            let packaging: String
-            let sourceRoots: [SourceRoot]?
-            let modules: [Module]
-
-            enum CodingKeys: String, CodingKey {
-                case relativePath
-                case groupID = "groupId"
-                case artifactID = "artifactId"
-                case version
-                case packaging
-                case sourceRoots
-                case modules
-            }
-
-            func makeModel(rootURL: URL) -> MavenModule {
-                MavenModule(
-                    relativePath: relativePath,
-                    url: rootURL.appendingPathComponent(relativePath),
-                    groupID: groupID,
-                    artifactID: artifactID,
-                    version: version,
-                    packaging: packaging,
-                    modules: modules.map { $0.makeModel(rootURL: rootURL) },
-                    sourceRoots: sourceRoots?.compactMap { $0.makeModel() } ?? []
-                )
-            }
-        }
-
-        let relativePath: String
-        let groupID: String?
-        let artifactID: String
-        let version: String?
-        let packaging: String
-        let sourceRoots: [SourceRoot]?
-        let modules: [Module]
-        let profiles: [Profile]
-        let hasWrapper: Bool
-
-        enum CodingKeys: String, CodingKey {
-            case groupID = "groupId"
-            case relativePath
-            case artifactID = "artifactId"
-            case version
-            case packaging
-            case sourceRoots
-            case modules
-            case profiles
-            case hasWrapper
-        }
-
-        func makeProject(workspaceRootURL: URL) -> MavenProject {
-            let rootURL = relativePath == "."
-                ? workspaceRootURL
-                : workspaceRootURL.appending(path: relativePath, directoryHint: .isDirectory)
-            return MavenProject(
-                rootURL: rootURL,
-                pomURL: rootURL.appendingPathComponent("pom.xml"),
-                groupID: groupID,
-                artifactID: artifactID,
-                version: version,
-                packaging: packaging,
-                modules: modules.map { $0.makeModel(rootURL: rootURL) },
-                profiles: profiles.map {
-                    MavenProfile(id: $0.id, isActiveByDefault: $0.isActiveByDefault)
-                },
-                hasWrapper: hasWrapper,
-                sourceRoots: sourceRoots?.compactMap { $0.makeModel() } ?? []
-            )
-        }
-    }
-
-    struct MavenDiagnosticsPayload: Decodable, Sendable {
-        struct Issue: Decodable, Sendable {
-            let path: String
-            let line: Int
-            let column: Int?
-            let severity: String
-            let message: String
-        }
-
-        let issues: [Issue]
-    }
-
-    struct MavenLaunchPlanPayload: Decodable, Sendable {
-        struct Executable: Decodable, Sendable {
-            let toolchain: String
-        }
-
-        let version: Int
-        let executable: Executable
-        let arguments: [String]
-        let workingDirectory: String
-        let configurationFingerprint: String
-
-        func makeModel() -> MavenLaunchPlan {
-            MavenLaunchPlan(
-                version: version,
-                toolchain: executable.toolchain,
-                arguments: arguments,
-                workingDirectory: workingDirectory,
-                configurationFingerprint: configurationFingerprint
-            )
-        }
-    }
 
     struct JavaRunConfigurationsPayload: Decodable, Sendable {
         struct MainClass: Decodable, Sendable {
             let path: String
             let qualifiedName: String
             let simpleName: String
-            let isSpringBoot: Bool
         }
 
         struct Configuration: Decodable, Sendable {
@@ -354,112 +226,28 @@ struct RustCoreBridge: Sendable {
         let configurations: [Configuration]
     }
 
-    struct SpringIndexPayload: Decodable, Sendable {
-        struct Property: Decodable, Sendable {
-            let name: String
-            let typeName: String?
-            let description: String?
-            let defaultValue: String?
-            let sourcePath: String?
-            let sourceLine: Int?
-            let sourceColumn: Int?
-        }
-        struct ConfigurationValue: Decodable, Sendable {
-            let key: String
-            let value: String
-            let path: String
-            let line: Int
-            let column: Int
-            let profile: String?
-            let overridesBaseValue: Bool
-            let targetPath: String?
-            let targetLine: Int?
-            let targetColumn: Int?
-        }
-        struct PropertyReference: Decodable, Sendable {
-            let key: String
-            let path: String
-            let line: Int
-            let column: Int
-        }
-        struct Diagnostic: Decodable, Sendable {
-            let path: String
-            let line: Int
-            let column: Int
-            let severity: String
-            let message: String
-        }
-        struct Bean: Decodable, Sendable {
-            let id: String
-            let name: String
-            let typeName: String
-            let path: String
-            let line: Int
-            let column: Int
-            let kind: String
-        }
-        struct Injection: Decodable, Sendable {
-            let path: String
-            let line: Int
-            let column: Int
-            let typeName: String
-            let qualifier: String?
-            let beanIds: [String]
-        }
-        struct Endpoint: Decodable, Sendable {
-            let id: String
-            let httpMethods: [String]
-            let route: String
-            let controller: String
-            let method: String
-            let path: String
-            let line: Int
-            let column: Int
-        }
-
-        let properties: [Property]
-        let values: [ConfigurationValue]
-        let propertyReferences: [PropertyReference]
-        let diagnostics: [Diagnostic]
-        let beans: [Bean]
-        let injections: [Injection]
-        let endpoints: [Endpoint]
-    }
 
     struct RunConfigurationPayload: Codable, Sendable {
         struct Toolchain: Codable, Sendable {
             struct Java: Codable, Sendable { let homePath: String? }
-            struct Maven: Codable, Sendable {
-                let executablePath: String?
-                let javaHomePath: String?
-            }
-
             let java: Java?
-            let maven: Maven?
         }
         struct Generator: Codable, Sendable {
             let fingerprint: String
             let inputs: [String: String]?
         }
         struct Configuration: Codable, Sendable {
-            struct Maven: Codable, Sendable {
+            struct Java: Codable, Sendable {
+                let homePath: String?
                 let module: String?
                 let mainClass: String?
                 let jvmArguments: [String]?
                 let programArguments: [String]?
-                let profiles: [String]?
-                let skipTests: Bool?
-            }
-            struct Java: Codable, Sendable {
-                let homePath: String?
-                let mavenExecutablePath: String?
-                let mavenJavaHomePath: String?
             }
             struct Debug: Codable, Sendable {
                 let adapter: String
             }
             struct Extensions: Codable, Sendable {
-                let maven: Maven?
                 let java: Java?
             }
             let id: String
@@ -478,7 +266,6 @@ struct RustCoreBridge: Sendable {
             let disabled: Bool
             let source: String?
 
-            var maven: Maven? { extensions?.maven }
         }
 
         let version: Int
@@ -557,9 +344,6 @@ struct RustCoreBridge: Sendable {
         let utf16Column: Int
     }
 
-    struct JavaServerPortPayload: Decodable, Sendable {
-        let port: Int?
-    }
 
     struct TextPayload: Decodable, Sendable {
         let text: String
@@ -1334,17 +1118,7 @@ struct RustCoreBridge: Sendable {
         let destinationPath: String
     }
 
-    private struct MavenScanRequest: Encodable {
-        let root: String
-        let paths: [String]
-    }
 
-    private struct MavenLaunchPlanRequest: Encodable {
-        let root: String
-        let context: MavenLaunchContext
-        let module: String?
-        let goals: [String]
-    }
 
     private struct MarkdownRenderRequest: Encodable {
         let source: String
@@ -1532,7 +1306,6 @@ struct RustCoreBridge: Sendable {
 
     private struct JdtWorkspaceFingerprintRequest: Encodable {
         let buildFiles: [JdtBuildFileObservation]
-        let directMavenModules: [String]
         let jdtlsVersion: String
     }
 
@@ -1584,7 +1357,6 @@ struct RustCoreBridge: Sendable {
         let jdtlsLaunchResources: LspJdtlsLaunchResourcesRequest?
         let cacheDirectory: String?
         let workspaceFingerprint: String?
-        let mavenContext: MavenLaunchContext?
         let initializeTimeoutMilliseconds: Int
         let requestTimeoutMilliseconds: Int
         let shutdownTimeoutMilliseconds: Int
@@ -1740,10 +1512,6 @@ struct RustCoreBridge: Sendable {
         let version: String?
     }
 
-    private struct MavenDiagnosticsRequest: Encodable {
-        let root: String
-        let output: String
-    }
 
     private struct JavaRunConfigurationsRequest: Encodable {
         let root: String
@@ -1769,20 +1537,8 @@ struct RustCoreBridge: Sendable {
         let jvmArguments: String
         let arguments: String
         let environment: [String: String]
-        let mavenProfiles: [String]
-        let mavenSkipTests: Bool?
         let javaHomePath: String
-        let mavenExecutablePath: String
-        let mavenJavaHomePath: String
         let toolchain: ProjectToolchainSelection?
-    }
-    private struct RunConfigurationCreateUserRequest: Encodable {
-        let root: String
-        let scope: String
-        let name: String
-        let type: String
-        let module: String
-        let mainClass: String
     }
     private struct LaunchPlanRequest: Encodable {
         let root: String
@@ -1790,7 +1546,6 @@ struct RustCoreBridge: Sendable {
         let currentFile: String?
         let classPath: String?
         let debugPort: Int?
-        let mavenContext: MavenLaunchContext?
     }
 
     private struct JavaStructureRequest: Encodable {
@@ -1798,13 +1553,6 @@ struct RustCoreBridge: Sendable {
         let declarationSources: [String]
     }
 
-    private struct SpringIndexRequest: Encodable {
-        let root: String
-        let paths: [String]
-        let metadataRepositories: [String]
-        let refreshDependencyMetadata: Bool
-        let textOverrides: [String: String]
-    }
 
     private struct JavaCodeVisionRequest: Encodable {
         let root: String
@@ -1823,10 +1571,6 @@ struct RustCoreBridge: Sendable {
         let memberName: String?
     }
 
-    private struct JavaServerPortRequest: Encodable {
-        let content: String
-        let fileExtension: String
-    }
 
     private struct GitStatusRequest: Encodable {
         let root: String
@@ -1974,119 +1718,6 @@ struct RustCoreBridge: Sendable {
         let path: String
     }
 
-    struct DiscourseAuthorizationStart: Decodable, Sendable {
-        let flowId: String
-        let authorizationUrl: String
-        let expiresAt: UInt64
-    }
-
-    struct DiscourseAuthorizationCredential: Decodable, Sendable {
-        let userApiKey: String
-        let apiVersion: UInt64
-    }
-
-    struct DiscourseTopicSummary: Decodable, Identifiable, Sendable {
-        let id: UInt64
-        let slug: String
-        let title: String
-        let postsCount: UInt64
-        let replyCount: UInt64
-        let views: UInt64
-        let likeCount: UInt64
-        let categoryId: UInt64?
-        let createdAt: String?
-        let lastPostedAt: String?
-        let lastPosterUsername: String?
-        let pinned: Bool
-        let closed: Bool
-        let archived: Bool
-    }
-
-    struct DiscoursePost: Decodable, Identifiable, Sendable {
-        let id: UInt64
-        let postNumber: UInt64
-        let username: String
-        let name: String?
-        let cooked: String
-        let createdAt: String?
-        let updatedAt: String?
-        let replyCount: UInt64
-        let reads: UInt64
-    }
-
-    struct DiscourseTopicsResponse: Decodable, Sendable {
-        let topics: [DiscourseTopicSummary]
-        let moreTopicsUrl: String?
-    }
-
-    struct DiscourseTopicResponse: Decodable, Sendable {
-        let id: UInt64
-        let title: String
-        let slug: String
-        let posts: [DiscoursePost]
-    }
-
-    struct DiscourseCategory: Decodable, Identifiable, Sendable {
-        let id: UInt64
-        let name: String
-        let slug: String
-        let color: String?
-        let topicCount: UInt64
-        let descriptionText: String?
-    }
-
-    struct DiscourseCategoriesResponse: Decodable, Sendable {
-        let categories: [DiscourseCategory]
-    }
-
-    struct DiscourseSearchResponse: Decodable, Sendable {
-        let topics: [DiscourseTopicSummary]
-        let posts: [DiscoursePost]
-    }
-
-    private struct DiscourseAuthorizationBeginRequest: Encodable {
-        let origin: String
-        let clientId: String
-        let applicationName: String
-        let authRedirect: String
-        let scopes: [String]
-    }
-
-    private struct DiscourseAuthorizationCompleteRequest: Encodable {
-        let flowId: String
-        let callbackUrl: String
-    }
-
-    private struct DiscourseAPIRequest: Encodable {
-        let origin: String
-        let userApiKey: String
-        let clientId: String
-    }
-
-    private struct DiscourseTopicsRequest: Encodable {
-        let origin: String
-        let userApiKey: String
-        let clientId: String
-        let feed: String
-        let period: String?
-        let page: UInt32?
-    }
-
-    private struct DiscourseTopicRequest: Encodable {
-        let origin: String
-        let userApiKey: String
-        let clientId: String
-        let topicId: UInt64
-    }
-
-    private struct DiscourseSearchRequest: Encodable {
-        let origin: String
-        let userApiKey: String
-        let clientId: String
-        let query: String
-        let page: UInt32?
-    }
-
     var isAvailable: Bool {
         String(cString: lithe_bridge_version()) != "unlinked"
     }
@@ -2094,125 +1725,6 @@ struct RustCoreBridge: Sendable {
     func version() -> String? {
         guard isAvailable else { return nil }
         return String(cString: lithe_bridge_version())
-    }
-
-    func beginDiscourseAuthorization(
-        origin: String,
-        clientID: String,
-        applicationName: String,
-        authRedirect: String,
-        scopes: [String]
-    ) -> Result<DiscourseAuthorizationStart, CoreCallError> {
-        executeResult(
-            command: "community.discourse.auth.begin",
-            payload: DiscourseAuthorizationBeginRequest(
-                origin: origin,
-                clientId: clientID,
-                applicationName: applicationName,
-                authRedirect: authRedirect,
-                scopes: scopes
-            )
-        )
-    }
-
-    func completeDiscourseAuthorization(
-        flowID: String,
-        callbackURL: String
-    ) -> Result<DiscourseAuthorizationCredential, CoreCallError> {
-        executeResult(
-            command: "community.discourse.auth.complete",
-            payload: DiscourseAuthorizationCompleteRequest(
-                flowId: flowID,
-                callbackUrl: callbackURL
-            )
-        )
-    }
-
-    func discourseTopics(
-        origin: String,
-        userAPIKey: String,
-        clientID: String,
-        feed: String,
-        period: String? = nil,
-        page: UInt32? = nil
-    ) -> Result<DiscourseTopicsResponse, CoreCallError> {
-        executeResult(
-            command: "community.discourse.topics",
-            payload: DiscourseTopicsRequest(
-                origin: origin,
-                userApiKey: userAPIKey,
-                clientId: clientID,
-                feed: feed,
-                period: period,
-                page: page
-            )
-        )
-    }
-
-    func discourseTopic(
-        origin: String,
-        userAPIKey: String,
-        clientID: String,
-        topicID: UInt64
-    ) -> Result<DiscourseTopicResponse, CoreCallError> {
-        executeResult(
-            command: "community.discourse.topic",
-            payload: DiscourseTopicRequest(
-                origin: origin,
-                userApiKey: userAPIKey,
-                clientId: clientID,
-                topicId: topicID
-            )
-        )
-    }
-
-    func discourseCategories(
-        origin: String,
-        userAPIKey: String,
-        clientID: String
-    ) -> Result<DiscourseCategoriesResponse, CoreCallError> {
-        executeResult(
-            command: "community.discourse.categories",
-            payload: DiscourseAPIRequest(
-                origin: origin,
-                userApiKey: userAPIKey,
-                clientId: clientID
-            )
-        )
-    }
-
-    func searchDiscourse(
-        origin: String,
-        userAPIKey: String,
-        clientID: String,
-        query: String,
-        page: UInt32? = nil
-    ) -> Result<DiscourseSearchResponse, CoreCallError> {
-        executeResult(
-            command: "community.discourse.search",
-            payload: DiscourseSearchRequest(
-                origin: origin,
-                userApiKey: userAPIKey,
-                clientId: clientID,
-                query: query,
-                page: page
-            )
-        )
-    }
-
-    func revokeDiscourseAuthorization(
-        origin: String,
-        userAPIKey: String,
-        clientID: String
-    ) -> Result<Void, CoreCallError> {
-        executeVoid(
-            command: "community.discourse.auth.revoke",
-            payload: DiscourseAPIRequest(
-                origin: origin,
-                userApiKey: userAPIKey,
-                clientId: clientID
-            )
-        )
     }
 
     func snapshot(
@@ -2460,50 +1972,9 @@ struct RustCoreBridge: Sendable {
         return response?.relocated == true
     }
 
-    func scanMaven(at rootURL: URL, paths: [String] = []) -> MavenScanPayload? {
-        try? scanMavenResult(at: rootURL, paths: paths).get()
-    }
 
-    func scanMavenResult(
-        at rootURL: URL,
-        paths: [String] = []
-    ) -> Result<MavenScanPayload?, CoreCallError> {
-        let result: Result<Envelope<MavenScanPayload>, CoreCallError> = decodeEnvelope(
-            command: "maven.scan",
-            payload: MavenScanRequest(
-                root: rootURL.standardizedFileURL.path,
-                paths: paths
-            )
-        )
-        return result.map(\.data)
-    }
 
-    func mavenLaunchPlan(
-        at rootURL: URL,
-        context: MavenLaunchContext,
-        module: String?,
-        goals: [String]
-    ) -> Result<MavenLaunchPlanPayload, CoreCallError> {
-        executeResult(
-            command: "maven.launchPlan",
-            payload: MavenLaunchPlanRequest(
-                root: rootURL.standardizedFileURL.path,
-                context: context,
-                module: module,
-                goals: goals
-            )
-        )
-    }
 
-    func mavenDiagnostics(at rootURL: URL, output: String) -> MavenDiagnosticsPayload? {
-        execute(
-            command: "maven.diagnostics",
-            payload: MavenDiagnosticsRequest(
-                root: rootURL.standardizedFileURL.path,
-                output: output
-            )
-        )
-    }
 
     func scanJavaRunConfigurations(
         at rootURL: URL,
@@ -2560,8 +2031,7 @@ struct RustCoreBridge: Sendable {
         configurationID: String,
         currentFile: String? = nil,
         classPath: String? = nil,
-        debugPort: Int? = nil,
-        mavenContext: MavenLaunchContext? = nil
+        debugPort: Int? = nil
     ) -> Result<LaunchPlanPayload, CoreCallError> {
         executeResult(
             command: "runConfig.createLaunchPlan",
@@ -2570,8 +2040,7 @@ struct RustCoreBridge: Sendable {
                 configurationId: configurationID,
                 currentFile: currentFile,
                 classPath: classPath,
-                debugPort: debugPort,
-                mavenContext: mavenContext
+                debugPort: debugPort
             )
         )
     }
@@ -2592,11 +2061,7 @@ struct RustCoreBridge: Sendable {
                 jvmArguments: options.vmArguments,
                 arguments: options.arguments,
                 environment: options.environment,
-                mavenProfiles: options.activeProfiles.sorted(),
-                mavenSkipTests: options.mavenSkipTests,
                 javaHomePath: options.javaHomePath,
-                mavenExecutablePath: options.mavenExecutablePath,
-                mavenJavaHomePath: options.mavenJavaHomePath,
                 toolchain: nil
             )
         )
@@ -2619,32 +2084,12 @@ struct RustCoreBridge: Sendable {
                 jvmArguments: options.vmArguments,
                 arguments: options.arguments,
                 environment: options.environment,
-                mavenProfiles: options.activeProfiles.sorted(),
-                mavenSkipTests: options.mavenSkipTests,
                 javaHomePath: options.javaHomePath,
-                mavenExecutablePath: options.mavenExecutablePath,
-                mavenJavaHomePath: options.mavenJavaHomePath,
                 toolchain: toolchain
             )
         )
     }
 
-    func createUserRunConfiguration(
-        at rootURL: URL,
-        draft: RunConfigurationDraft
-    ) -> Result<RunConfigurationMutationPayload, CoreCallError> {
-        executeResult(
-            command: "runConfig.createUserConfiguration",
-            payload: RunConfigurationCreateUserRequest(
-                root: rootURL.standardizedFileURL.path,
-                scope: draft.scope.rawValue,
-                name: draft.name,
-                type: draft.kind.id,
-                module: draft.modulePath,
-                mainClass: draft.mainClass
-            )
-        )
-    }
 
     func javaCodeVision(
         at rootURL: URL,
@@ -2683,12 +2128,6 @@ struct RustCoreBridge: Sendable {
         )
     }
 
-    func javaServerPort(content: String, fileExtension: String) -> JavaServerPortPayload? {
-        execute(
-            command: "java.serverPort",
-            payload: JavaServerPortRequest(content: content, fileExtension: fileExtension)
-        )
-    }
 
     func javaStructure(source: String, declarationSources: [String] = []) -> JavaStructurePayload? {
         execute(
@@ -2697,26 +2136,6 @@ struct RustCoreBridge: Sendable {
         )
     }
 
-    func springIndex(
-        at rootURL: URL,
-        paths: [String],
-        metadataRepositoryURLs: [URL] = [],
-        refreshDependencyMetadata: Bool = false,
-        textOverrides: [String: String] = [:]
-    ) -> SpringIndexPayload? {
-        execute(
-            command: "spring.index",
-            payload: SpringIndexRequest(
-                root: rootURL.standardizedFileURL.path,
-                paths: paths,
-                metadataRepositories: metadataRepositoryURLs.map {
-                    $0.standardizedFileURL.path
-                },
-                refreshDependencyMetadata: refreshDependencyMetadata,
-                textOverrides: textOverrides
-            )
-        )
-    }
 
     func gitStatus(at rootURL: URL) -> GitStatusPayload? {
         execute(
@@ -3199,14 +2618,12 @@ struct RustCoreBridge: Sendable {
     /// workspace-fingerprint representation owned by Rust Core.
     func jdtWorkspaceFingerprint(
         buildFiles: [JdtBuildFileObservation],
-        directMavenModules: [String],
         jdtlsVersion: String
     ) -> Result<String, CoreCallError> {
         let result: Result<JdtWorkspaceFingerprintPayload, CoreCallError> = executeResult(
             command: "java.jdtWorkspaceFingerprint",
             payload: JdtWorkspaceFingerprintRequest(
                 buildFiles: buildFiles,
-                directMavenModules: directMavenModules,
                 jdtlsVersion: jdtlsVersion
             )
         )
@@ -3257,7 +2674,6 @@ struct RustCoreBridge: Sendable {
         jdtlsLaunchResources: JDTLSLaunchResources? = nil,
         cacheDirectoryURL: URL? = nil,
         workspaceFingerprint: String? = nil,
-        mavenContext: MavenLaunchContext? = nil,
         initializeTimeout: TimeInterval = 30,
         requestTimeout: TimeInterval = 30,
         shutdownTimeout: TimeInterval = 2
@@ -3284,7 +2700,6 @@ struct RustCoreBridge: Sendable {
                 },
                 cacheDirectory: cacheDirectoryURL?.standardizedFileURL.path,
                 workspaceFingerprint: workspaceFingerprint,
-                mavenContext: mavenContext,
                 initializeTimeoutMilliseconds: Self.milliseconds(initializeTimeout),
                 requestTimeoutMilliseconds: Self.milliseconds(requestTimeout),
                 shutdownTimeoutMilliseconds: Self.milliseconds(shutdownTimeout)

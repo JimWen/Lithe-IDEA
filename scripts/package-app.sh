@@ -21,26 +21,6 @@ case "$ARCH" in
 esac
 
 cd "$ROOT_DIR"
-JDTLS_ROOT=$(LITHE_ARCH="$ARCH" "$ROOT_DIR/scripts/prepare-jdtls.sh")
-if [[ "$ARCH" == "universal" ]]; then
-    if [[ -n "${LITHE_JDK_ROOT:-}" ]]; then
-        print -u2 -- \
-            "Universal packaging requires LITHE_JDK_ARM64_ROOT and LITHE_JDK_X86_64_ROOT instead of LITHE_JDK_ROOT"
-        exit 1
-    fi
-    ARM64_JDK_ROOT=$( \
-        LITHE_JDK_ROOT="${LITHE_JDK_ARM64_ROOT:-}" \
-        LITHE_JDK_TARGET_ARCH="arm64" \
-        "$ROOT_DIR/scripts/prepare-jdk.sh"
-    )
-    X86_64_JDK_ROOT=$( \
-        LITHE_JDK_ROOT="${LITHE_JDK_X86_64_ROOT:-}" \
-        LITHE_JDK_TARGET_ARCH="x86_64" \
-        "$ROOT_DIR/scripts/prepare-jdk.sh"
-    )
-else
-    JDK_ROOT=$(LITHE_JDK_TARGET_ARCH="$ARCH" "$ROOT_DIR/scripts/prepare-jdk.sh")
-fi
 if [[ "$ARCH" == "universal" ]]; then
     scripts/build-macos.sh --configuration release --triple "$ARM64_TRIPLE"
     scripts/build-macos.sh --configuration release --triple "$X86_64_TRIPLE"
@@ -117,15 +97,6 @@ for bundle_name in Lithe_Lithe.bundle SwiftTerm_SwiftTerm.bundle; do
     fi
     cp -R "$resource_bundle" "$APP_DIR/Contents/Resources/$bundle_name"
 done
-mkdir -p "$APP_DIR/Contents/Resources/LanguageServers"
-cp -R "$JDTLS_ROOT" "$APP_DIR/Contents/Resources/LanguageServers/jdtls"
-if [[ "$ARCH" == "universal" ]]; then
-    cp -R "$ARM64_JDK_ROOT" "$APP_DIR/Contents/Resources/LanguageServers/jdk-arm64"
-    cp -R "$X86_64_JDK_ROOT" "$APP_DIR/Contents/Resources/LanguageServers/jdk-x86_64"
-else
-    cp -R "$JDK_ROOT" "$APP_DIR/Contents/Resources/LanguageServers/jdk"
-fi
-
 OFFICIAL_PLUGIN_DESTINATION="$APP_DIR/Contents/Resources/OfficialPlugins"
 mkdir -p "$OFFICIAL_PLUGIN_DESTINATION"
 if [[ "$ARCH" == "universal" ]]; then

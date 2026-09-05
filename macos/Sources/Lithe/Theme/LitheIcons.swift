@@ -33,7 +33,6 @@ enum LitheIconKind: Hashable {
     case html
 
     // 配置与数据
-    case maven
     case gradle
     case xml
     case properties
@@ -91,7 +90,6 @@ enum LitheIcons {
         .javaScript: "fileTypes/javaScript.svg",
         .css: "fileTypes/css.svg",
         .html: "fileTypes/html.svg",
-        .maven: "maven/mavenProject.svg",
         .gradle: "fileTypes/gradle.svg",
         .xml: "fileTypes/xml.svg",
         .properties: "fileTypes/properties.svg",
@@ -128,7 +126,6 @@ enum LitheIcons {
         "play.fill": "actions/execute.svg",
         "play.rectangle": "actions/execute.svg",
         "point.3.connected.trianglepath.dotted": "toolwindows/toolWindowVcs.svg",
-        "shippingbox": "maven/toolWindowMaven.svg",
         "ladybug": "toolwindows/toolWindowDebugger.svg",
         "exclamationmark.triangle": "toolwindows/toolWindowProblems.svg",
         "ellipsis": "actions/more.svg",
@@ -261,7 +258,6 @@ enum LitheIcons {
 
     private static func fileKind(fileName: String, pathExtension: String) -> LitheIconKind {
         let name = fileName.lowercased()
-        if name == "pom.xml" { return .maven }
         if name == ".gitignore" || name == ".gitattributes" || name == ".dockerignore" { return .gitignore }
         if name == ".classpath" || name == ".project" || name == ".factorypath" { return .xml }
         if name == ".editorconfig" { return .editorConfig }
@@ -417,7 +413,6 @@ enum LitheIcons {
         case .css: .document(accent: Color(red: 0.33, green: 0.54, blue: 0.97), mark: .letter("C"))
         case .html: .document(accent: Color(red: 0.34, green: 0.59, blue: 0.36), mark: .angleBrackets)
 
-        case .maven: .document(accent: Color(red: 0.36, green: 0.60, blue: 0.90), mark: .letter("m"))
         case .gradle: .document(accent: Color(red: 0.30, green: 0.66, blue: 0.68), mark: .letter("G"))
         case .xml: .document(accent: Color(red: 0.72, green: 0.55, blue: 0.88), mark: .angleBrackets)
         case .properties: .document(accent: Color(red: 0.60, green: 0.64, blue: 0.72), mark: .lines)

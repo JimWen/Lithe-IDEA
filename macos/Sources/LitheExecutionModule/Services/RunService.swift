@@ -22,7 +22,6 @@ package final class RunService: ObservableObject {
     @Published package private(set) var optionsByConfigurationID: [String: RunOptions] = [:]
     @Published package private(set) var projectToolchain = ProjectToolchainSelection()
     @Published package private(set) var effectiveSourcesByConfigurationID: [String: RunConfigurationSource] = [:]
-    @Published package private(set) var mavenProfiles: [MavenProfile] = []
     @Published package private(set) var moduleSessions: [RunSession] = []
     @Published package private(set) var portConflicts: [RunPortConflict] = []
     @Published package private(set) var configurationStatus: ProjectRunConfigurationStatus = .missing
@@ -36,7 +35,6 @@ package final class RunService: ObservableObject {
     private let processFactory: () -> any StreamingProcess
     private let fileAccess: any RunFileAccess
     private let preferences: any RunPreferenceStore
-    private let serverPortParser: any RunServerPortParsing
     private let runConfigurationOperations: any RunConfigurationOperations
     private let languageProviderCatalog: LanguageProviderCatalog
     private let languageRunProviders: LanguageRunProviderRegistry
@@ -45,7 +43,6 @@ package final class RunService: ObservableObject {
     private var activeLanguageExecutionSession: (any LanguageExecutionSession)?
     private var projectURL: URL?
     private var projectFiles: [URL] = []
-    private var mavenProject: MavenProject?
     private var projectLoadID = UUID()
     private var selectedConfigurationIDsByProject: [String: String] = [:]
     private var lastRunConfiguration: RunConfiguration?
@@ -57,7 +54,6 @@ package final class RunService: ObservableObject {
     private let maximumOutputCharacters = 500_000
     private let runtime: any RunRuntimePort
     private let executableResolver: any RunExecutableResolving
-    private var mavenContextProvider: @MainActor () -> MavenLaunchContext? = { nil }
 
     package init(
         runtime: any RunRuntimePort,
@@ -65,7 +61,6 @@ package final class RunService: ObservableObject {
         processFactory: @escaping () -> any StreamingProcess,
         fileAccess: any RunFileAccess,
         preferences: any RunPreferenceStore,
-        serverPortParser: any RunServerPortParsing,
         runConfigurationOperations: any RunConfigurationOperations,
         executableResolver: any RunExecutableResolving,
         languageProviderCatalog: LanguageProviderCatalog,
@@ -77,7 +72,6 @@ package final class RunService: ObservableObject {
         self.processFactory = processFactory
         self.fileAccess = fileAccess
         self.preferences = preferences
-        self.serverPortParser = serverPortParser
         self.runConfigurationOperations = runConfigurationOperations
         self.languageProviderCatalog = languageProviderCatalog
         self.languageRunProviders = languageRunProviders
@@ -131,11 +125,6 @@ package final class RunService: ObservableObject {
         generationState = .projectNotReady
     }
 
-    package func configureMavenContextProvider(
-        _ provider: @escaping @MainActor () -> MavenLaunchContext?
-    ) {
-        mavenContextProvider = provider
-    }
 
     @discardableResult
     package func registerLanguageRunExtension(
@@ -155,12 +144,9 @@ package final class RunService: ObservableObject {
         languageRunExtensions[languageID] = nil
     }
 
-    /// 供输出文本定位源码使用:项目根 + 各 Maven 模块根。
+    /// Workspace roots used to resolve source links in process output.
     package var sourceSearchRoots: [URL] {
-        var roots = projectURL.map { [$0] } ?? []
-        if let mavenProject {
-            roots.append(contentsOf: mavenProject.allModules.map(\.url))
-        }
+        let roots = projectURL.map { [$0] } ?? []
         return roots
     }
 
@@ -172,7 +158,6 @@ package final class RunService: ObservableObject {
     package func loadProject(
         at projectURL: URL,
         files: [URL],
-        mavenProject: MavenProject?,
         snapshotID: UUID? = nil
     ) async {
         let loadID = UUID()
@@ -203,8 +188,6 @@ package final class RunService: ObservableObject {
         projectLoadState = snapshotID
             .map { .ready(workspace: workspace, snapshotID: $0) }
             ?? .bound(workspace: workspace)
-        self.mavenProject = mavenProject
-        mavenProfiles = mavenProject?.profiles ?? []
         self.projectFiles = files
         configurationStatus = inspection.status
         configurationDiagnostics = inspection.diagnostics
@@ -220,7 +203,6 @@ package final class RunService: ObservableObject {
                 let resolution = try resolveWithServiceToolchains(
                     operations: operations,
                     projectURL: projectURL,
-                    mavenProject: mavenProject,
                     preferredConfigurationID: preferredID
                 )
                 configurationDiagnostics += resolution.diagnostics
@@ -263,7 +245,7 @@ package final class RunService: ObservableObject {
         }
         let operations = runConfigurationOperations
         let files = projectFiles
-        let modulePaths = mavenProject?.allModules.map(\.relativePath) ?? []
+        let modulePaths: [String] = []
         let result = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(returning: Result {
@@ -284,7 +266,6 @@ package final class RunService: ObservableObject {
                 var resolution = try resolveWithServiceToolchains(
                     operations: operations,
                     projectURL: projectURL,
-                    mavenProject: mavenProject,
                     preferredConfigurationID: nil
                 )
                 try operations.migrateLegacySettings(
@@ -294,7 +275,6 @@ package final class RunService: ObservableObject {
                 resolution = try resolveWithServiceToolchains(
                     operations: operations,
                     projectURL: projectURL,
-                    mavenProject: mavenProject,
                     preferredConfigurationID: selectedConfigurationIDsByProject[projectURL.standardizedFileURL.path]
                         ?? resolution.defaultConfigurationID
                 )
@@ -341,11 +321,9 @@ package final class RunService: ObservableObject {
         optionsByConfigurationID[configuration.id] ?? RunOptions()
     }
 
-    /// Returns the service port explicitly configured for this run target, or
-    /// a Spring-style framework's conventional 8080 default when no override exists.
+    /// Returns the service port explicitly configured for this run target.
     package func configuredServerPort(for configuration: RunConfiguration) -> Int? {
         configuredPort(for: configuration)
-            ?? (configuration.kind.mavenFramework != nil ? 8080 : nil)
     }
 
     package func source(for configuration: RunConfiguration) -> RunConfigurationSource {
@@ -389,7 +367,6 @@ package final class RunService: ObservableObject {
             let resolution = try resolveWithServiceToolchains(
                 operations: runConfigurationOperations,
                 projectURL: projectURL,
-                mavenProject: mavenProject,
                 preferredConfigurationID: configuration.id
             )
             configurationDiagnostics = runConfigurationOperations.inspect(at: projectURL).diagnostics
@@ -416,40 +393,6 @@ package final class RunService: ObservableObject {
         )
     }
 
-    @discardableResult
-    package func createConfiguration(_ draft: RunConfigurationDraft) -> Bool {
-        configurationSaveError = nil
-        guard configurationStatus == .ready, let projectURL else {
-            configurationSaveError = "Identify the project before creating a run configuration."
-            return false
-        }
-        do {
-            let id = try runConfigurationOperations.createConfiguration(draft, at: projectURL)
-            let resolution = try resolveWithServiceToolchains(
-                operations: runConfigurationOperations,
-                projectURL: projectURL,
-                mavenProject: mavenProject,
-                preferredConfigurationID: id
-            )
-            guard resolution.configurations.contains(where: { $0.configuration.id == id }) else {
-                throw RunConfigurationOperationFailure(
-                    message: "The new configuration did not pass project validation. Check its module and main class."
-                )
-            }
-            configurationDiagnostics = runConfigurationOperations.inspect(at: projectURL).diagnostics
-                + resolution.diagnostics
-            apply(
-                resolution.configurations,
-                projectToolchain: resolution.projectToolchain,
-                preferredConfigurationID: id
-            )
-            selectedConfigurationIDsByProject[projectURL.path] = id
-            return true
-        } catch {
-            configurationSaveError = error.localizedDescription
-            return false
-        }
-    }
 
     package func runSelected(currentFileURL: URL?) {
         guard let configuration = selectedConfiguration else { return }
@@ -467,8 +410,7 @@ package final class RunService: ObservableObject {
         lastExitCode = nil
         lastRunConfiguration = configuration
         lastCurrentFileURL = currentFileURL
-        let mavenContext = configuration.kind.isMavenBacked ? mavenContextProvider() : nil
-        let options = effectiveOptions(for: configuration, mavenContext: mavenContext)
+        let options = self.options(for: configuration)
         let usesGenericCurrentFile = configuration.kind == .currentFile
             && isGenericCurrentFile(currentFileURL)
         if !usesGenericCurrentFile {
@@ -531,8 +473,7 @@ package final class RunService: ObservableObject {
                     configurationID: configuration.id,
                     currentFile: currentFile,
                     classPath: planClassPath,
-                    debugPort: nil,
-                    mavenContext: mavenContext
+                    debugPort: nil
                 )
                 extensionSession = languageRunExtension(
                     providerID: configuration.kind.providerID
@@ -554,9 +495,7 @@ package final class RunService: ObservableObject {
 
         runningTitle = configuration.name
         isRunning = true
-        let displayedArguments = configuration.kind.isMavenBacked
-            ? redactedMavenArgumentsForDisplay(arguments)
-            : arguments
+        let displayedArguments = arguments
         append(
             "$ " + resolved.executableURL.lastPathComponent + " "
                 + displayedArguments.joined(separator: " ") + "\n\n"
@@ -655,13 +594,11 @@ package final class RunService: ObservableObject {
         projectLoadState = .idle
         selectedConfigurationIDsByProject = [:]
         projectFiles = []
-        mavenProject = nil
         configurations = [.currentFile]
         selectedConfigurationID = RunConfiguration.currentFileID
         optionsByConfigurationID = [:]
         projectToolchain = ProjectToolchainSelection()
         effectiveSourcesByConfigurationID = [:]
-        mavenProfiles = []
         moduleSessions = []
         portConflicts = []
         configurationStatus = .missing
@@ -726,14 +663,11 @@ package final class RunService: ObservableObject {
 
     private func toolchainCandidates(
         projectURL: URL,
-        mavenProject: MavenProject?,
         options: RunOptions? = nil
     ) -> [ProjectToolchainCandidate] {
         let runtimeCandidates = runtime.runConfigurationToolchainCandidates(
-            for: mavenProject,
             projectRoot: projectURL,
-            javaHomeOverride: options?.javaHomePath,
-            mavenExecutableOverride: options?.mavenExecutablePath
+            javaHomeOverride: options?.javaHomePath
         )
         var candidatesByID = Dictionary(uniqueKeysWithValues: runtimeCandidates.map { ($0.id, $0) })
         for candidate in executableResolver.candidates(projectURL: projectURL)
@@ -746,12 +680,11 @@ package final class RunService: ObservableObject {
     private func resolveWithServiceToolchains(
         operations: any RunConfigurationOperations,
         projectURL: URL,
-        mavenProject: MavenProject?,
         preferredConfigurationID: String?
     ) throws -> RunConfigurationResolution {
         let initial = try operations.resolve(
             at: projectURL,
-            toolchainCandidates: toolchainCandidates(projectURL: projectURL, mavenProject: mavenProject)
+            toolchainCandidates: toolchainCandidates(projectURL: projectURL)
         )
         let preferred = initial.configurations.first { $0.configuration.id == preferredConfigurationID }
         let javaService = preferred ?? initial.configurations.first {
@@ -761,7 +694,6 @@ package final class RunService: ObservableObject {
         guard let javaService else { return initial }
         let candidates = toolchainCandidates(
             projectURL: projectURL,
-            mavenProject: mavenProject,
             options: javaService.options
         )
         return try operations.resolve(at: projectURL, toolchainCandidates: candidates)
@@ -809,8 +741,7 @@ package final class RunService: ObservableObject {
            configurations.contains(where: { $0.id == preferredConfigurationID }) {
             selectedConfigurationID = preferredConfigurationID
         } else if !configurations.contains(where: { $0.id == selectedConfigurationID }) {
-            selectedConfigurationID = configurations.first(where: { $0.kind.mavenFramework != nil })?.id
-                ?? configurations.first?.id
+            selectedConfigurationID = configurations.first?.id
                 ?? RunConfiguration.currentFileID
         }
     }
@@ -925,13 +856,6 @@ package final class RunService: ObservableObject {
 
     private func classPath(for fileURL: URL) -> String? {
         var candidateRoots: [URL] = []
-        if let mavenProject {
-            candidateRoots += mavenProject.allModules
-                .filter { Self.isInside(fileURL, directory: $0.url) }
-                .sorted { $0.url.path.count > $1.url.path.count }
-                .map(\.url)
-            candidateRoots.append(mavenProject.rootURL)
-        }
         if let projectURL {
             candidateRoots.append(projectURL)
         }
@@ -973,12 +897,9 @@ package final class RunService: ObservableObject {
             ))
             return
         }
-        let mavenContext = configuration.kind.isMavenBacked ? mavenContextProvider() : nil
-        let options = effectiveOptions(for: configuration, mavenContext: mavenContext)
-        let configuredJavaHome = (options.mavenJavaHomePath.isEmpty
-            ? options.javaHomePath
-            : options.mavenJavaHomePath).trimmingCharacters(in: .whitespacesAndNewlines)
-        if !configuredJavaHome.isEmpty && runtime.mavenJavaHomeURL(overridePath: configuredJavaHome) == nil {
+        let options = self.options(for: configuration)
+        let configuredJavaHome = options.javaHomePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configuredJavaHome.isEmpty && runtime.javaHomeURL(overridePath: configuredJavaHome) == nil {
             moduleSessions.append(RunSession(
                 id: configuration.id,
                 configurationID: configuration.id,
@@ -997,8 +918,7 @@ package final class RunService: ObservableObject {
                 configurationID: configuration.id,
                 currentFile: nil,
                 classPath: nil,
-                debugPort: nil,
-                mavenContext: mavenContext
+                debugPort: nil
             )
         } catch {
             moduleSessions.append(RunSession(
@@ -1036,9 +956,7 @@ package final class RunService: ObservableObject {
             configurationID: configuration.id,
             title: configuration.name,
             output: "$ " + resolved.executableURL.lastPathComponent + " "
-                + (configuration.kind.isMavenBacked
-                    ? redactedMavenArgumentsForDisplay(arguments)
-                    : arguments).joined(separator: " ") + "\n\n",
+                + arguments.joined(separator: " ") + "\n\n",
             isRunning: true,
             exitCode: nil
         )
@@ -1210,11 +1128,10 @@ package final class RunService: ObservableObject {
     }
 
     private func refreshPortConflicts() {
-        let moduleConfigurations = configurations.filter { $0.kind == .mavenModule }
+        let moduleConfigurations = configurations.filter { $0.execution == .service }
         var configurationsByPort: [Int: [String]] = [:]
         for configuration in moduleConfigurations {
-            let port = configuredPort(for: configuration) ?? 8080
-            guard (1...65_535).contains(port) else { continue }
+            guard let port = configuredPort(for: configuration), (1...65_535).contains(port) else { continue }
             configurationsByPort[port, default: []].append(configuration.name)
         }
         portConflicts = configurationsByPort
@@ -1241,28 +1158,6 @@ package final class RunService: ObservableObject {
             }
         }
 
-        let moduleRoot = configuration.modulePath.flatMap { modulePath in
-            mavenProject?.modules.first(where: { $0.relativePath == modulePath })?.url
-        } ?? projectURL
-        guard let moduleRoot else { return nil }
-        let resourceFiles = projectFiles.filter { fileURL in
-            let name = fileURL.lastPathComponent.lowercased()
-            return Self.isInside(fileURL, directory: moduleRoot) &&
-                (name == "application.properties" || name == "application.yml" || name == "application.yaml" ||
-                 (name.hasPrefix("application-") &&
-                  (name.hasSuffix(".properties") || name.hasSuffix(".yml") || name.hasSuffix(".yaml"))))
-        }
-        for fileURL in resourceFiles {
-            guard let data = try? fileAccess.readData(from: fileURL),
-                  let contents = String(data: data, encoding: .utf8),
-                  let port = serverPortParser.serverPort(
-                      content: contents,
-                      fileExtension: fileURL.pathExtension.lowercased()
-                  ) else {
-                continue
-            }
-            return port
-        }
         return nil
     }
 
@@ -1293,20 +1188,6 @@ package final class RunService: ObservableObject {
         return filePath.hasPrefix(directoryPath + "/")
     }
 
-    private func effectiveOptions(
-        for configuration: RunConfiguration,
-        mavenContext: MavenLaunchContext?
-    ) -> RunOptions {
-        var options = self.options(for: configuration)
-        guard let mavenContext else { return options }
-        if options.mavenExecutablePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            options.mavenExecutablePath = mavenContext.mavenExecutablePath ?? ""
-        }
-        if options.mavenJavaHomePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            options.mavenJavaHomePath = mavenContext.javaHomePath ?? ""
-        }
-        return options
-    }
 
     private func resolvedWorkingDirectory(_ path: String, fallback: URL) -> URL {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -32,14 +32,12 @@ jobs:
             const priority = field('Priority / 优先级').match(/^(P[012])\b/i)?.[1]?.toUpperCase() || null;
             const platform = {
               'macOS': 'platform:macos',
-              'Windows': 'platform:windows',
               'Cross-platform / 跨平台': 'platform:cross-platform',
               'Other / 其他': 'platform:other',
             }[field('Platform / 平台') || field('Target platform / 目标平台')] || null;
             const area = {
               'Editor / 编辑器': 'area:editor',
               'Language support / 语言服务': 'area:language',
-              'Maven': 'area:maven',
               'Run / 运行': 'area:run',
               'Debug / 调试': 'area:debug',
               'Test / 测试': 'area:test',
@@ -61,8 +59,8 @@ jobs:
             const type = /^\[(Bug|Feature)\]\s*/i.exec(issue.title || '')?.[1]?.toLowerCase();
             const managedLabels = [
               'bug', 'enhancement', 'P0', 'P1', 'P2',
-              'platform:macos', 'platform:windows', 'platform:cross-platform', 'platform:other',
-              'area:editor', 'area:language', 'area:maven', 'area:run', 'area:debug', 'area:test',
+              'platform:macos', 'platform:cross-platform', 'platform:other',
+              'area:editor', 'area:language', 'area:run', 'area:debug', 'area:test',
               'area:terminal', 'area:git', 'area:github', 'area:project', 'area:search',
               'area:extensions', 'area:settings', 'area:database', 'area:docker', 'area:remote',
               'area:ai', 'area:ui', 'area:ux', 'area:other',

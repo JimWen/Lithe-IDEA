@@ -22,6 +22,7 @@ final class JavaLanguageServerPreparationOwner {
 enum JavaLanguageServerActivationReadiness {
     case ready
     case preparing
+    case unavailable
 }
 
 enum JavaLanguageServerPreparationFailure {
@@ -73,11 +74,11 @@ final class JavaFeatureModel: ObservableObject {
     @Published private(set) var javaCodeVisionHints: [URL: [JavaCodeVisionHint]] = [:]
     private(set) var languageServerWorkspaceState: JavaLanguageServerWorkspaceState = .idle
 
-    private let operations: any JavaMavenOperations
+    private let operations: any JavaOperations
     private var documentProvider: (@MainActor () -> EditorDocument?)?
     private var loadBlame: (@MainActor (URL) async -> [GitBlameLine])?
 
-    init(operations: any JavaMavenOperations) {
+    init(operations: any JavaOperations) {
         self.operations = operations
     }
 

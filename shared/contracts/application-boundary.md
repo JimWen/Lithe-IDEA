@@ -1,7 +1,7 @@
 # Application Boundary Contract
 
 The application boundary describes product behavior that a SwiftUI/AppKit or
-React/Tauri Windows UI can consume. It does not describe widgets, threads, processes,
+future platform UI can consume. It does not describe widgets, threads, processes,
 or operating-system APIs. It defines the cross-platform contract; current
 product scope and setup are documented in [`README.md`](../../README.md); the
 verification scripts are the executable source of boundary checks.
@@ -27,15 +27,14 @@ verification scripts are the executable source of boundary checks.
 | Search | query matching, deterministic result ordering, symbols, and replacement preview | workspace lifecycle and optional index persistence |
 | Git | changes, commits, branches, diffs, history, worktree listing and safe management, worktree-aware PR publication context, validation, and mutation results | Git executable discovery, credentials, process environment, opening checkout paths |
 | GitHub | remote parsing, trusted request plans, normalized branch comparisons and pull requests/reviews/comments, deterministic ordering, and stable errors | OAuth configuration, HTTPS, browser opening, and operating-system credential storage |
-| Runtime | Java/Maven requirements, normalized candidates, and effective toolchain references | JDK/Maven probing and executable paths |
+| Runtime | Java requirements, normalized candidates, and effective toolchain references | JDK probing and executable paths |
 | Language tooling | provider catalog, local fallback results, complete LSP process/session runtime, capabilities, diagnostics, UTF-16 edits, and normalized feature results | executable/environment discovery and UI provider routing |
-| Java/Maven/Spring | deterministic Maven-root selection, project structure, modules and profiles; compiler diagnostic parsing; Java source structure, symbols, code vision, run-configuration detection, Spring configuration/bean/endpoint indexing, and JDTLS/Java Debug adapter policy | JDK/Maven discovery, local dependency-repository selection, Java/Maven child processes, and sockets |
+| Java | Java source structure, symbols, code vision, run configurations, and optional JDTLS/Debug policy | JDK discovery and optional Java child processes |
 | Run/Debug | versioned configuration documents, three-layer resolution, diagnostics, platform-neutral launch plans, DAP framing/state, reverse terminal requests, breakpoint relocation, stepping filters, threads, stacks, variables, and events | project and preference persistence, native edit reporting, adapter discovery, PTY/ConPTY debuggee launch, child processes, sockets, native termination, and UI |
 | Terminal | input bytes, output bytes, lifecycle | PTY/ConPTY, shell and environment |
 | Workbench background | versioned source (`none`, bundled slot `01`–`10`, or `custom`) and opacity | UI, image rendering, bundled-resource packaging, local-image access permission and persistence |
 | Local History | revision metadata, text content, restore result | persistence location and file operations |
 | Modules | stable IDs, manifests, enabled state, lifecycle snapshots, dependencies, capabilities, and contributions | native factories, processes, timers, PTY/ConPTY, watchers, connections, and UI rendering |
-| Community integrations | Discourse authorization sessions, RSA-OAEP callback verification, user API protocol models, and normalized community data | opening the system browser, receiving URL callbacks, and credential-vault persistence |
 
 ## Module Lifecycle Contract
 
@@ -72,7 +71,7 @@ contract must preserve these invariants:
 - Native plugin factories receive a read-only host context. Host services use
   stable IDs and shared protocols; plugin code cannot import a platform
   composition root or the application executable.
-- AI Assistance, Terminal, Git, Search, Local History, Debug, and Java/Maven
+- AI Assistance, Terminal, Git, Search, Local History, Debug, and Java
   execution are built-in lifecycle modules. They are not marketplace plugins.
 - Java language tooling remains part of the built-in product. Every other
   language provider is represented by an independently configurable bundled
@@ -131,7 +130,7 @@ state owned by another operation.
 
 Java workspace activation is a shared Core decision over visible relative
 paths. Any workspace containing a non-ignored `.java` source starts one JDT LS
-session asynchronously, even without Maven or Gradle metadata. That session is
+session asynchronously, when the optional Java runtime is installed. That session is
 owned by the workspace and remains alive until the workspace closes or the user
 explicitly restarts it. `ready` means JDT LS has completed project import, not
 merely that the process answered `initialize`.
@@ -142,7 +141,7 @@ path. A missing or invalid bundle is a packaging failure. The application shows
 preparing, ready, failure, and timeout notifications; a navigation command while
 preparing ends after the notice and is never replayed later.
 
-macOS and Windows adapters discover the selected JDT LS installation's Equinox
+macOS adapters discover the selected JDT LS installation's Equinox
 launcher JAR, platform configuration directory, Lombok agent, Java Debug
 Server, and bundled Java executable. Java Test-capable adapters additionally
 submit ordered extension bundles; Rust Core owns their ordering and
@@ -172,12 +171,11 @@ and test-specific VM and program arguments.
 
 Platforms observe JDT LS version and non-recursive build-file metadata, while
 Rust Core alone validates and reduces those observations to the opaque workspace
-fingerprint. macOS and Windows adapters must not duplicate its ordering,
+fingerprint. macOS adapters must not duplicate its ordering,
 de-duplication, or serialization rules.
 
 Editor changes use versioned incremental document synchronization and do not
-restart the session or clear its index. Workspace watchers coalesce Maven and
-Gradle changes before one project refresh and publish normalized watched-file
+restart the session or clear its index. Workspace watchers coalesce Gradle changes before one project refresh and publish normalized watched-file
 events. Platform adapters mark selected JDT LS caches as recently used, ask
 Rust Core which inactive caches exceed the 30-day retention period, and delete
 only those validated directories. **Java: Rebuild Index** remains the explicit
@@ -298,7 +296,7 @@ cannot replace the active selection and its returned cursor is also closed.
 Run configuration behavior is exposed through the `runConfig.*` commands.
 Platform clients coordinate inspection, generation, resolution, typed document
 edits, and launch planning, but must not implement a second JSON merger,
-toolchain matcher, ID generator, argument parser, or Java/Maven argument
+toolchain matcher, ID generator, argument parser, or Java argument
 builder. Opening a project inspects existing files without writing; generation
 is an explicit user action. Shared project overrides stay in
 `.lithe/run/configurations.json`. Machine-local overrides may live in
@@ -314,28 +312,4 @@ than inferred from the provider namespace. An automatically discovered runtime
 path is session-effective: validation and launch share it, but persistence
 still requires an explicit user selection.
 
-Maven tool-window execution uses `maven.launchPlan`; platform views do not
-assemble Maven arguments. Portable profile and Skip Tests defaults conform to
-[`maven-portable-configuration-v1.schema.json`](maven-portable-configuration-v1.schema.json).
-The transient Core request conforms to
-[`maven-launch-context-v1.schema.json`](maven-launch-context-v1.schema.json).
-External `settings.xml`, local repository, Maven executable, and Maven JDK
-paths remain in a machine-local store. They may be supplied transiently to Core
-for planning and fingerprinting, but Core never opens `settings.xml` or
-serializes those paths into the portable project context.
-
-The Java language-server startup consumes that same context. Core exposes the
-selected `settings.xml` to JDT LS as
-`java.configuration.maven.userSettings`, then applies the sorted Profile set
-to the reactor and every recursively declared Maven module after JDT LS
-reports `ServiceReady`. The Java session remains `initializing` until those
-project updates all succeed; a rejected or timed-out update fails the session
-instead of silently retaining the previous Maven model.
-
-Maven-backed Run and Debug launch planning consumes the current project Maven
-context. A Run Configuration's explicit Profiles and toolchain paths take
-precedence; explicit `cwd` and `extensions.maven.skipTests` values also take
-precedence, including `skipTests: false`. Unset values inherit the project
-settings. The shared Core applies the final Maven argument order for all three
-entry points. Tool-window, Run, and Debug module launches add `-am` so reactor
-dependencies are built before the selected module.
+The default macOS distribution omits JDK, JDTLS, and Java Debug/Test resources. Opening a Java file retains text editing and syntax highlighting and does not prewarm a missing runtime. Maven/Spring workflows and the community integration are not part of this product.

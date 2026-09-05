@@ -6,5 +6,4 @@ mod plugins;
 mod project;
 mod protocol;
 mod run_configuration;
-mod spring;
 mod support;

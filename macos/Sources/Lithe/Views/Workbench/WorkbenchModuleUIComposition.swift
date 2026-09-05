@@ -15,8 +15,7 @@ enum WorkbenchModuleUIComposition {
                 gitRegistration,
                 languageRegistration,
                 executionRegistration,
-                debugRegistration,
-                communityRegistration
+                debugRegistration
             ])
         } catch {
             preconditionFailure("Invalid built-in module UI registration: \(error)")
@@ -76,23 +75,10 @@ enum WorkbenchModuleUIComposition {
     private static let executionRegistration = WorkbenchModuleUIRegistry.Registration(
         contributions: ExecutionModule.moduleContributions,
         actions: [
-            .init(id: "execution.maven.toggle", perform: { $0.toggleMaven() }),
             .init(id: "execution.run.toggle", perform: { $0.toggleRun() }),
             .init(id: "execution.tests.toggle", perform: { $0.toggleTests() })
         ],
         renderers: [
-            .init(
-                id: "execution.maven",
-                ideaAssetPath: "maven/toolWindowMaven.svg",
-                isVisible: { $0.hasMavenProject },
-                isSelected: { $0.isMavenVisible },
-                content: { model in
-                    guard let feature = model.mavenFeatureIfActive else {
-                        return AnyView(WorkbenchModuleUIRegistry.moduleLoadingView)
-                    }
-                    return AnyView(MavenView(feature: feature))
-                }
-            ),
             .init(
                 id: "execution.run",
                 ideaAssetPath: "toolwindows/toolWindowRun.svg",
@@ -141,29 +127,5 @@ enum WorkbenchModuleUIComposition {
         ]
     )
 
-    private static let communityRegistration: WorkbenchModuleUIRegistry.Registration = {
-        let moduleID = OfficialPluginCatalog.linuxDoSupportModuleID
-        let contributions = OfficialPluginCatalog.manifest(forModule: moduleID)?
-            .modules.first(where: { $0.manifest.id == moduleID })?
-            .contributions ?? []
-        return WorkbenchModuleUIRegistry.Registration(
-            contributions: contributions,
-            actions: [
-                .init(id: "community.linux-do.toggle", perform: {
-                    $0.isDiscourseCommunityVisible.toggle()
-                })
-            ],
-            renderers: [
-                .init(
-                    id: "community.linux-do.browser",
-                    ideaAssetPath: nil,
-                    isVisible: { _ in true },
-                    isSelected: { $0.isDiscourseCommunityVisible },
-                    content: { _ in
-                        AnyView(LinuxDoCommunityView())
-                    }
-                )
-            ]
-        )
-    }()
+
 }

@@ -9,6 +9,10 @@ Follow these instructions for all work in this repository. Prefer the existing
 architecture, nearby code, and executable verification scripts over generic
 framework conventions.
 
+## Current product scope
+
+This fork ships macOS only. Windows product code, plugins, and build/CI workflows have been removed. Do not require Windows builds for this fork. Preserve platform-neutral Rust contracts and generic portability checks used by macOS.
+
 ## Read the relevant source of truth
 
 - Read the implementation and tests around a change before editing it.
@@ -30,15 +34,12 @@ framework conventions.
 | `macos/Sources/Lithe/Core/` | Platform-neutral ports and typed Rust operations |
 | `macos/Sources/Lithe/Platform/MacOS/` | macOS adapters and composition |
 | `rust/lithe-core/` | Deterministic shared commands, models, validation, and C ABI |
-| `windows/` | React/Tauri Windows product and Rust platform adapters |
 | `Plugins/mac/` | macOS-owned plugin packages |
-| `Plugins/win/` | Windows-owned plugin packages |
 | `shared/` | Cross-platform contracts and fixtures, not compiled implementation |
 | `infra/` | Repository-level development and validation infrastructure |
 | `third_party/` | Upstream code; leave unchanged unless the task explicitly targets it |
 
-macOS is the current reference product. Windows is an independent React/Tauri
-implementation and must not import Swift source or depend on macOS types.
+macOS owns native presentation and adapters. Shared contracts must remain independent of macOS types.
 
 ## Preserve application boundaries
 
@@ -57,10 +58,6 @@ implementation and must not import Swift source or depend on macOS types.
 - Deterministic behavior shared by both products belongs in `rust/lithe-core/`.
   Native filesystem, process, terminal, runtime, security, persistence, and UI
   behavior belongs in platform adapters.
-- Windows feature code must import `@/platform/tauri-core` instead of the Tauri
-  core API directly. Shared operations route through `lithe-core`; Windows-only
-  terminal, watcher, credential, process, and WebView behavior stays in the
-  Tauri host or a platform plugin.
 
 ## Keep shared contracts deterministic
 
@@ -136,19 +133,6 @@ Windows/Tauri Rust crates, generated code, or third-party sources.
   helper. Still review changed internal types and implementations for the
   semantic cases above, which a static check cannot judge reliably.
 
-### Windows React and Tauri
-
-- Use Bun for frontend scripts and Tauri 2 for the Windows host. Keep React
-  feature code in `windows/tauri/src/features`, reusable UI in
-  `windows/tauri/src/ui`, the invoke boundary in
-  `windows/tauri/src/platform`, and native Rust behavior in
-  `windows/tauri/src-tauri`.
-- Do not restore a parallel C++/Qt application layer or one Tauri command per
-  shared Core operation. Translate compatibility command names through the
-  central platform dispatcher.
-- Add frontend tests for product behavior and Rust tests in the owning crate.
-  Verify WebView2, ConPTY, installer, signing, and updater behavior on Windows.
-
 ## Avoid hardcoded environment details
 
 - Never commit credentials, tokens, private endpoints, signing material, or
@@ -187,8 +171,6 @@ before handoff.
 | Rust Core, JSON C ABI, or Swift bridge | `./scripts/verify-rust-core.sh` |
 | Core feature behavior | `./scripts/verify-core.sh` |
 | Git graph behavior | `./scripts/verify-git-graph.sh` |
-| Windows boundaries from macOS/Linux | `./scripts/verify-windows-boundaries.sh` |
-| Windows implementation on Windows | `./scripts/build-windows.ps1 -Configuration Release`, then `cargo test --manifest-path windows/tauri/src-tauri/Cargo.toml` |
 
 Also run tests for directly affected crates or targets. If the current machine
 cannot run a platform-specific check, state that clearly; do not claim an

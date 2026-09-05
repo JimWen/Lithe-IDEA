@@ -1,10 +1,5 @@
 //! Validation and routing from versioned command names to their owning domains.
 
-use crate::community::{
-    self, DiscourseAuthorizationBeginRequest, DiscourseAuthorizationCompleteRequest,
-    DiscourseCategoriesRequest, DiscourseRevokeRequest, DiscourseSearchRequest,
-    DiscourseTopicRequest, DiscourseTopicsRequest,
-};
 use crate::git::{
     self, GitApplyRequest, GitBlameRequest, GitCheckoutPreflightRequest, GitCommandRequest,
     GitCommitFilesRequest, GitCommitRequest, GitComparisonRequest, GitConflictMarkerRequest,
@@ -16,8 +11,9 @@ use crate::git::{
 use crate::github::{NormalizeResponseRequest, ParseRemoteRequest, RequestPlanRequest};
 use crate::languages::{
     JavaClassNameRequest, JavaCodeVisionRequest, JavaRunConfigurationsRequest,
-    JavaServerPortRequest, JavaSourceDefinitionRequest, JavaStructureRequest, SpringIndexRequest,
+    JavaSourceDefinitionRequest, JavaStructureRequest,
 };
+use crate::project::MarkdownRenderRequest;
 use crate::project::{
     self, DocumentLifecycleRequest, FileReadRequest, FileWriteRequest, ReplacementPreviewRequest,
     SearchIndexRequest, SearchIndexUpdateRequest, SearchRequest, WorkspaceSnapshotRequest,
@@ -26,7 +22,6 @@ use crate::project::{
     HistoryContentRequest, HistoryDeleteRequest, HistoryEntriesRequest, HistoryRecordRequest,
     HistoryRelocateRequest, HistoryRenameRequest,
 };
-use crate::project::{MarkdownRenderRequest, MavenDiagnosticsRequest, MavenScanRequest};
 use crate::protocol::CoreResponse;
 use crate::protocol::{CoreCommand, CoreRequest};
 use crate::protocol::{CoreError, ErrorCode};
@@ -78,128 +73,6 @@ fn execute(request: &str) -> CoreResponse {
                 "coreVersion": env!("CARGO_PKG_VERSION")
             }),
         ),
-        CoreCommand::CommunityDiscourseAuthBegin => {
-            match serde_json::from_value::<DiscourseAuthorizationBeginRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "Invalid Discourse authorization request",
-                    )
-                    .with_details(error.to_string())
-                })
-                .and_then(community::begin_authorization)
-            {
-                Ok(data) => CoreResponse::success(
-                    id,
-                    serde_json::to_value(data)
-                        .expect("Discourse authorization response should encode"),
-                ),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
-        CoreCommand::CommunityDiscourseAuthComplete => {
-            match serde_json::from_value::<DiscourseAuthorizationCompleteRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "Invalid Discourse authorization callback",
-                    )
-                    .with_details(error.to_string())
-                })
-                .and_then(community::complete_authorization)
-            {
-                Ok(data) => CoreResponse::success(
-                    id,
-                    serde_json::to_value(data)
-                        .expect("Discourse authorization credential should encode"),
-                ),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
-        CoreCommand::CommunityDiscourseTopics => {
-            match serde_json::from_value::<DiscourseTopicsRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "Invalid Discourse topics request",
-                    )
-                    .with_details(error.to_string())
-                })
-                .and_then(community::topics)
-            {
-                Ok(data) => CoreResponse::success(
-                    id,
-                    serde_json::to_value(data).expect("Discourse topics should encode"),
-                ),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
-        CoreCommand::CommunityDiscourseTopic => {
-            match serde_json::from_value::<DiscourseTopicRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(ErrorCode::InvalidRequest, "Invalid Discourse topic request")
-                        .with_details(error.to_string())
-                })
-                .and_then(community::topic)
-            {
-                Ok(data) => CoreResponse::success(
-                    id,
-                    serde_json::to_value(data).expect("Discourse topic should encode"),
-                ),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
-        CoreCommand::CommunityDiscourseCategories => {
-            match serde_json::from_value::<DiscourseCategoriesRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "Invalid Discourse categories request",
-                    )
-                    .with_details(error.to_string())
-                })
-                .and_then(community::categories)
-            {
-                Ok(data) => CoreResponse::success(
-                    id,
-                    serde_json::to_value(data).expect("Discourse categories should encode"),
-                ),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
-        CoreCommand::CommunityDiscourseSearch => {
-            match serde_json::from_value::<DiscourseSearchRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "Invalid Discourse search request",
-                    )
-                    .with_details(error.to_string())
-                })
-                .and_then(community::search)
-            {
-                Ok(data) => CoreResponse::success(
-                    id,
-                    serde_json::to_value(data).expect("Discourse search should encode"),
-                ),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
-        CoreCommand::CommunityDiscourseAuthRevoke => {
-            match serde_json::from_value::<DiscourseRevokeRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "Invalid Discourse revoke request",
-                    )
-                    .with_details(error.to_string())
-                })
-                .and_then(community::revoke)
-            {
-                Ok(data) => CoreResponse::success(id, data),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
         CoreCommand::WorkspaceSnapshot => {
             match serde_json::from_value::<WorkspaceSnapshotRequest>(parsed.payload)
                 .map_err(|error| {
@@ -436,55 +309,6 @@ fn execute(request: &str) -> CoreResponse {
                 .and_then(crate::project::delete)
             {
                 Ok(()) => CoreResponse::success(id, serde_json::json!({"deleted": true})),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
-        CoreCommand::MavenScan => match serde_json::from_value::<MavenScanRequest>(parsed.payload)
-            .map_err(|error| {
-                CoreError::new(ErrorCode::InvalidRequest, "Invalid Maven scan request")
-                    .with_details(error.to_string())
-            })
-            .and_then(crate::project::scan)
-        {
-            Ok(data) => CoreResponse::success(
-                id,
-                serde_json::to_value(data).expect("Maven scan response should encode"),
-            ),
-            Err(error) => CoreResponse::failure(id, error),
-        },
-        CoreCommand::MavenLaunchPlan => {
-            match serde_json::from_value::<crate::project::MavenLaunchPlanRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "Invalid Maven launch-plan request",
-                    )
-                    .with_details(error.to_string())
-                })
-                .and_then(crate::project::launch_plan)
-            {
-                Ok(data) => CoreResponse::success(
-                    id,
-                    serde_json::to_value(data).expect("Maven launch plan should encode"),
-                ),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
-        CoreCommand::MavenDiagnostics => {
-            match serde_json::from_value::<MavenDiagnosticsRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "Invalid Maven diagnostics request",
-                    )
-                    .with_details(error.to_string())
-                })
-                .and_then(crate::project::diagnostics)
-            {
-                Ok(data) => CoreResponse::success(
-                    id,
-                    serde_json::to_value(data).expect("Maven diagnostics should encode"),
-                ),
                 Err(error) => CoreResponse::failure(id, error),
             }
         }
@@ -1270,23 +1094,6 @@ fn execute(request: &str) -> CoreResponse {
                 Err(error) => CoreResponse::failure(id, error),
             }
         }
-        CoreCommand::RunConfigCreateUserConfiguration => {
-            match serde_json::from_value::<crate::execution::CreateUserConfigurationRequest>(
-                parsed.payload,
-            )
-            .map_err(|error| {
-                CoreError::new(
-                    ErrorCode::InvalidRequest,
-                    "Invalid user configuration request",
-                )
-                .with_details(error.to_string())
-            })
-            .and_then(crate::execution::create_user_configuration)
-            {
-                Ok(data) => CoreResponse::success(id, data),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
         CoreCommand::RunConfigCreateLaunchPlan => {
             match serde_json::from_value::<crate::execution::LaunchPlanRequest>(parsed.payload)
                 .map_err(|error| {
@@ -1350,24 +1157,6 @@ fn execute(request: &str) -> CoreResponse {
                 Err(error) => CoreResponse::failure(id, error),
             }
         }
-        CoreCommand::JavaServerPort => {
-            match serde_json::from_value::<JavaServerPortRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "Invalid Java server port request",
-                    )
-                    .with_details(error.to_string())
-                })
-                .and_then(crate::languages::server_port)
-            {
-                Ok(data) => CoreResponse::success(
-                    id,
-                    serde_json::to_value(data).expect("Java server port should encode"),
-                ),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
         CoreCommand::JavaStructure => {
             match serde_json::from_value::<JavaStructureRequest>(parsed.payload)
                 .map_err(|error| {
@@ -1379,21 +1168,6 @@ fn execute(request: &str) -> CoreResponse {
                 Ok(data) => CoreResponse::success(
                     id,
                     serde_json::to_value(data).expect("Java structure response should encode"),
-                ),
-                Err(error) => CoreResponse::failure(id, error),
-            }
-        }
-        CoreCommand::SpringIndex => {
-            match serde_json::from_value::<SpringIndexRequest>(parsed.payload)
-                .map_err(|error| {
-                    CoreError::new(ErrorCode::InvalidRequest, "Invalid Spring index request")
-                        .with_details(error.to_string())
-                })
-                .and_then(crate::languages::spring_index)
-            {
-                Ok(data) => CoreResponse::success(
-                    id,
-                    serde_json::to_value(data).expect("Spring index response should encode"),
                 ),
                 Err(error) => CoreResponse::failure(id, error),
             }

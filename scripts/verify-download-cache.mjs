@@ -76,7 +76,6 @@ function parseArguments(argv) {
   if (options.cargoLocks.length === 0) {
     options.cargoLocks.push(
       path.join(REPOSITORY_ROOT, "rust", "Cargo.lock"),
-      path.join(REPOSITORY_ROOT, "windows", "tauri", "src-tauri", "Cargo.lock"),
     );
   }
   return options;

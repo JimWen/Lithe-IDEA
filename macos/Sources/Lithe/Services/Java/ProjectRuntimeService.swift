@@ -3,7 +3,6 @@ import LitheCoreContracts
 
 enum ProjectRuntimeProcessKind: Sendable {
     case java
-    case maven
 }
 
 extension ProjectRuntimeService: RunRuntimePort {}
@@ -18,12 +17,6 @@ extension ProjectRuntimeService: LanguageToolRuntimePort {
     }
 }
 
-extension ProjectRuntimeService: MavenRuntimePort {
-    package func mavenProcessEnvironment(javaHomePath: String?) -> [String: String] {
-        environment(for: .maven, javaHomeOverride: javaHomePath)
-    }
-}
-
 @MainActor
 final class ProjectRuntimeService: ObservableObject {
     enum JavaLanguageServerRuntimePreparation: Equatable {
@@ -34,7 +27,6 @@ final class ProjectRuntimeService: ObservableObject {
 
     @Published private(set) var projectURL: URL?
     @Published private(set) var javaRuntimes: [JavaRuntimeCandidate] = []
-    @Published private(set) var mavenRuntimes: [MavenRuntimeCandidate] = []
     @Published private(set) var javaEnvironmentReport: JavaEnvironmentReport?
     @Published private(set) var isDiscovering = false
     private var activeServiceJavaHomePath = ""
@@ -65,7 +57,6 @@ final class ProjectRuntimeService: ObservableObject {
         let normalizedURL = url.standardizedFileURL
         projectURL = normalizedURL
         javaRuntimes = []
-        mavenRuntimes = []
         javaEnvironmentReport = .checking(for: normalizedURL)
         javaLanguageServerRuntimePreparation = .unprepared
         discoveryTask = nil
@@ -77,7 +68,6 @@ final class ProjectRuntimeService: ObservableObject {
         activeDiscoveryID = nil
         projectURL = nil
         javaRuntimes = []
-        mavenRuntimes = []
         javaEnvironmentReport = nil
         isDiscovering = false
         activeServiceJavaHomePath = ""
@@ -115,7 +105,6 @@ final class ProjectRuntimeService: ObservableObject {
               projectURL == targetProjectURL,
               activeDiscoveryID == discoveryID else { return }
         javaRuntimes = result.javaRuntimes
-        mavenRuntimes = result.mavenRuntimes
         refreshJavaEnvironmentReport(using: result.javaRuntimes)
         isDiscovering = false
     }
@@ -158,6 +147,11 @@ final class ProjectRuntimeService: ObservableObject {
             }
         }
         return nil
+    }
+
+    /// A distribution without the optional Java runtime must stay idle.
+    var hasJavaLanguageServerRuntime: Bool {
+        runtimeLocator.bundledJdkHome() != nil
     }
 
     func isJavaLanguageServerRuntimePrepared() -> Bool {
@@ -209,28 +203,13 @@ final class ProjectRuntimeService: ObservableObject {
         return message
     }
 
-    func mavenJavaHomeURL(overridePath: String? = nil) -> URL? {
-        if let overridePath {
-            let normalizedPath = normalizedOverridePath(overridePath)
-            if !normalizedPath.isEmpty {
-                return runtimeLocator.validJavaHome(path: normalizedPath)
-            }
-        }
-        let paths = [runtimeLocator.environment()["JAVA_HOME"]]
-        for path in paths.compactMap({ $0 }).map(normalizedPath).filter({ !$0.isEmpty }) {
-            if let home = runtimeLocator.validJavaHome(path: path) { return home }
-        }
-        return javaHomeURL()
-    }
 
     func environment(
         for processKind: ProjectRuntimeProcessKind,
         javaHomeOverride: String? = nil
     ) -> [String: String] {
         var environment = runtimeLocator.environment()
-        let home = processKind == .maven
-            ? mavenJavaHomeURL(overridePath: javaHomeOverride)
-            : javaHomeURL(overridePath: javaHomeOverride)
+        let home = javaHomeURL(overridePath: javaHomeOverride)
         if let home {
             environment["JAVA_HOME"] = home.path
             let path = environment["PATH"] ?? ""
@@ -330,30 +309,7 @@ final class ProjectRuntimeService: ObservableObject {
         return runtimeLocator.isExecutable(at: url) ? url : nil
     }
 
-    package func mavenExecutable(for project: MavenProject, overridePath: String? = nil) -> URL? {
-        mavenExecutable(at: project.rootURL, overridePath: overridePath)
-    }
 
-    func mavenExecutable(at rootURL: URL, overridePath: String? = nil) -> URL? {
-        let configured = overridePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !configured.isEmpty {
-            let resolved = configured.hasPrefix("/")
-                ? URL(fileURLWithPath: configured)
-                : rootURL.appendingPathComponent(configured)
-            let standardized = resolved.standardizedFileURL
-            if runtimeLocator.isExecutable(at: standardized) {
-                return standardized
-            }
-            return runtimeLocator.mavenExecutable(
-                forHomePath: standardized.path
-            )
-        }
-        let wrapper = rootURL.appendingPathComponent("mvnw")
-        if runtimeLocator.isExecutable(at: wrapper) {
-            return wrapper
-        }
-        return runtimeLocator.systemMavenExecutable()
-    }
 
     /// Resolves a Gradle wrapper before falling back to a system Gradle. The
     /// executable check is delegated to RuntimeLocator so platform adapters
@@ -375,16 +331,10 @@ final class ProjectRuntimeService: ObservableObject {
         return javaRuntimes.first { $0.homePath == home }
     }
 
-    func activeMavenRuntime(for project: MavenProject) -> MavenRuntimeCandidate? {
-        guard let executable = mavenExecutable(for: project)?.path else { return nil }
-        return mavenRuntimes.first { $0.executablePath == executable }
-    }
 
     func runConfigurationToolchainCandidates(
-        for project: MavenProject?,
         projectRoot: URL? = nil,
-        javaHomeOverride: String? = nil,
-        mavenExecutableOverride: String? = nil
+        javaHomeOverride: String? = nil
     ) -> [ProjectToolchainCandidate] {
         var result: [ProjectToolchainCandidate] = []
         let java = javaHomeURL(overridePath: javaHomeOverride).flatMap(runtimeLocator.javaRuntime(at:))
@@ -394,21 +344,6 @@ final class ProjectRuntimeService: ObservableObject {
                 type: "java",
                 version: java.version,
                 vendor: java.vendor
-            ))
-        }
-        let maven = projectRoot.flatMap { root in
-            mavenExecutable(at: root, overridePath: mavenExecutableOverride)
-                .flatMap(runtimeLocator.mavenRuntime(at:))
-        } ?? project.flatMap(activeMavenRuntime)
-            ?? projectRoot.flatMap { root in
-                mavenExecutable(at: root).flatMap(runtimeLocator.mavenRuntime(at:))
-            }
-        if let maven {
-            result.append(ProjectToolchainCandidate(
-                id: "project-maven",
-                type: "maven",
-                version: maven.version,
-                vendor: ""
             ))
         }
         return result

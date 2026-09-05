@@ -3,7 +3,7 @@
 
   <h1>Lithe</h1>
 
-  <p><strong>A low-memory IntelliJ IDEA alternative for Java development and AI collaboration</strong></p>
+  <p><strong>A lightweight macOS IDE for multi-language development and AI collaboration</strong></p>
 
   <p>
     <a href="./README.zh-CN.md"><strong>简体中文</strong></a> ·
@@ -27,15 +27,11 @@
     <a href="https://github.com/1lck/Lithe-IDEA/releases/latest"><img src="https://img.shields.io/github/v/release/1lck/Lithe-IDEA?style=flat&label=release&logo=github&logoColor=white" alt="Latest release"></a>
     <a href="https://github.com/1lck/Lithe-IDEA/releases"><img src="https://img.shields.io/github/downloads/1lck/Lithe-IDEA/total?style=flat&label=downloads&logo=github&logoColor=white" alt="Total downloads"></a>
     <img src="https://img.shields.io/badge/macOS-13%2B-111827?style=flat&logo=apple&logoColor=white" alt="macOS 13+">
-    <img src="https://img.shields.io/badge/Windows-x64-0078D4?style=flat&logo=windows&logoColor=white" alt="Windows x64">
     <img src="https://img.shields.io/badge/memory-300--400%20MB-159957?style=flat" alt="300 to 400 MB baseline memory">
     <a href="#download-and-install"><img src="https://img.shields.io/badge/Homebrew-Install-FBB040?style=flat&logo=homebrew&logoColor=black" alt="Install with Homebrew"></a>
     <a href="./LICENSE"><img src="https://img.shields.io/github/license/1lck/Lithe-IDEA?style=flat&label=license" alt="Apache License 2.0"></a>
   </p>
   <p>
-    <img src="https://img.shields.io/badge/Java-JDK%2017%2B-E76F00?style=flat&logo=openjdk&logoColor=white" alt="JDK 17+">
-    <img src="https://img.shields.io/badge/Spring%20Boot-Projects-6DB33F?style=flat&logo=springboot&logoColor=white" alt="Spring Boot projects">
-    <img src="https://img.shields.io/badge/Maven-Management-C71A36?style=flat&logo=apachemaven&logoColor=white" alt="Maven management">
     <img src="https://img.shields.io/badge/Debugger-Breakpoints-D32F2F?style=flat" alt="Breakpoint debugging">
     <img src="https://img.shields.io/badge/Git-Diff%20Review-F05032?style=flat&logo=git&logoColor=white" alt="Git diff review">
     <img src="https://img.shields.io/badge/Database-SQL%20Workspace-336791?style=flat" alt="Database SQL workspace">
@@ -48,7 +44,7 @@ Codex, Claude Code, and other AI coding tools can now handle much of the impleme
 
 ## Meet Lithe
 
-Lithe is a lightweight IntelliJ IDEA alternative built first for Java and Spring Boot developers. It keeps the core workflows for browsing, editing, navigation, search, Maven, run and debug, Git diff review, local history, and databases.
+This fork keeps Lithe’s macOS workbench for browsing, editing, navigation, search, run and debug, Git diff review, local history, and databases. The default package omits JDK/JDTLS and Java Debug/Test resources. Maven, Spring, Windows, and Linux.do integration have been removed; Go, Rust, Python, and other existing language integrations remain available.
 
 The Lithe application typically uses about **300–400 MB of baseline memory** after opening a regular project. Language servers, terminals, build tools, debuggers, and database helpers start on demand. Actual usage varies with the project and active services.
 
@@ -56,8 +52,8 @@ The Lithe application typically uses about **300–400 MB of baseline memory** a
 
 ## Core features
 
-1. Built for Spring Boot projects and Java development.
-2. Maven management, breakpoint debugging, and custom run configurations.
+1. Multi-language project browsing, editing, and navigation.
+2. Breakpoint debugging and custom run configurations.
 3. Git management and side-by-side diff review.
 4. Double-Shift search and `Command + Shift + F` project-wide search.
 5. Process-free lightweight completion and current-file navigation, with on-demand language servers for richer completion, hover, and semantic navigation.
@@ -69,7 +65,7 @@ The Lithe application typically uses about **300–400 MB of baseline memory** a
 11. Local application memory usage monitoring.
 12. One-command installation and updates through Homebrew.
 13. One-click in-app updates and installation.
-14. Automatic project entry-point detection with one-click run support for Spring Boot, Java, Maven, Gradle, npm, Cargo, Go, Python, Make, Docker Compose, Procfile, and shell projects.
+14. Automatic project entry-point detection with one-click run support for Java source, Gradle, npm, Cargo, Go, Python, Make, Docker Compose, Procfile, and shell projects.
 15. Per-language service switches so language servers can be enabled or disabled independently to match the machine's resources.
 16. Multi-line editor tabs for keeping more files visible in the same workspace.
 17. Database connection workspace with multiple database types, connection management, SQL history, table browsing, and database operations.
@@ -121,8 +117,9 @@ The Lithe application typically uses about **300–400 MB of baseline memory** a
 
 ## Download and install
 
+The release links below point to upstream builds. Build this fork locally with `./scripts/package-app.sh` to obtain the trimmed package.
+
 - **macOS 13+:** Download the `arm64` DMG for Apple silicon or the `x86_64` DMG for Intel Macs from [GitHub Releases](https://github.com/1lck/Lithe-IDEA/releases/latest).
-- **Windows x64:** Download the Windows `.exe` installer from [GitHub Releases](https://github.com/1lck/Lithe-IDEA/releases/latest).
 
 Homebrew is the recommended installation and update method on macOS:
 
@@ -152,7 +149,7 @@ Only use these steps for an app whose source you trust. Homebrew installations u
 
 ## Architecture Overview
 
-macOS is the current reference product. Windows is an independent React/Tauri implementation. Both products share deterministic commands and contracts through Rust Core while keeping native UI and platform integrations separate.
+The macOS application uses Rust Core for deterministic commands and contracts, with native UI and platform integrations kept separate.
 
 ```mermaid
 flowchart LR
@@ -165,13 +162,7 @@ flowchart LR
         Contracts["JSON contracts and fixtures"] --> Core["Rust lithe-core"]
     end
 
-    subgraph Windows["Windows"]
-        WinUI["React workbench"] --> WinFeatures["TypeScript features and stores"]
-        WinFeatures --> Tauri["Tauri 2 host and Windows adapters"]
-    end
-
     MacApp -->|"JSON C ABI"| Core
-    Tauri -->|"Rust crate"| Core
 ```
 
 <details>
@@ -207,7 +198,6 @@ Before submitting a change, run:
 ./scripts/verify-git-graph.sh
 ./scripts/verify-service-boundaries.sh
 ./scripts/verify-shared-contracts.sh
-./scripts/verify-windows-boundaries.sh
 ./scripts/verify-rust-core.sh
 ```
 
@@ -261,18 +251,6 @@ See [Repository layout and shared boundaries](./docs/architecture/repository-lay
     </td>
   </tr>
 </table>
-
-### ⭐ Special thanks
-
-<p align="center">
-  <a href="https://linux.do/">
-    <img src="./docs/assets/special-thanks/linux-do.png" width="78%" alt="LINUX DO">
-  </a>
-</p>
-
-<p align="center">
-  <strong>For all things AI, head to <a href="https://linux.do/">LINUX DO</a>. Wishing the community ever greater success.</strong>
-</p>
 
 ### Contributors
 

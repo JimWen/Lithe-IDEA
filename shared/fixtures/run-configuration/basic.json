@@ -4,20 +4,30 @@
     "version": 1,
     "configurations": [
       {
-        "id": "spring:com.example.DemoApplication",
+        "id": "java-main:com.example.DemoApplication",
         "name": "DemoApplication",
-        "type": "spring-boot.maven",
+        "type": "java.main",
         "module": ".",
         "mainClass": "com.example.DemoApplication",
-        "toolchains": { "java": "project-jdk", "maven": "project-maven" },
+        "toolchains": {
+          "java": "project-jdk"
+        },
         "workingDirectory": ".",
         "jvmArguments": [],
-        "programArguments": [],
-        "mavenProfiles": []
+        "programArguments": []
       }
     ]
   },
-  "team": { "version": 1, "configurations": [] },
-  "local": { "version": 1, "configurations": [] },
-  "expected": { "selectedId": "spring:com.example.DemoApplication", "launchToolchain": "project-maven" }
+  "team": {
+    "version": 1,
+    "configurations": []
+  },
+  "local": {
+    "version": 1,
+    "configurations": []
+  },
+  "expected": {
+    "selectedId": "java-main:com.example.DemoApplication",
+    "launchToolchain": "project-jdk"
+  }
 }

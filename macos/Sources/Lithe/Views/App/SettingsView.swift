@@ -160,7 +160,7 @@ struct SettingsView: View {
         case .terminal:
             ["Terminal", "Shell", "Default shell"]
         case .lsp:
-            ["LSP", "Language server", "Java SDK", "JDK", "Maven"]
+            ["LSP", "Language server", "Java SDK", "JDK"]
         case .ai:
             ["AI & Commit", "AI provider", "Model", "API key", "Commit message"]
         case .updates:

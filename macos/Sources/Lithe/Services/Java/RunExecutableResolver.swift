@@ -26,12 +26,9 @@ final class RunExecutableResolver: RunExecutableResolving {
 
         switch plan.executable {
         case .toolchain(let id):
-            let toolchainProjectURL = id == "project-maven" && plan.workingDirectory != "."
-                ? projectURL.appending(path: plan.workingDirectory, directoryHint: .isDirectory)
-                : projectURL
             let resolved = try toolchainRegistry.resolve(
                 identifier: id,
-                projectURL: toolchainProjectURL.standardizedFileURL,
+                projectURL: projectURL.standardizedFileURL,
                 options: options,
                 runtimeService: runtimeService
             )
@@ -58,7 +55,7 @@ final class RunExecutableResolver: RunExecutableResolving {
         let discoveries = toolchainRegistry.discoveries(
             projectURL: projectURL,
             runtimeService: runtimeService,
-            excludingTypes: ["java", "maven"]
+            excludingTypes: ["java"]
         )
         let metadata = await Task.detached(priority: .utility) {
             var probeCache: [String: RunToolchainMetadata] = [:]
@@ -89,7 +86,7 @@ final class RunExecutableResolver: RunExecutableResolving {
             .candidates(
                 projectURL: projectURL,
                 runtimeService: runtimeService,
-                excludingTypes: ["java", "maven"]
+                excludingTypes: ["java"]
             )
             .map { candidate in
                 guard let value = metadata[candidate.id] else { return candidate }

@@ -348,10 +348,44 @@ struct PluginPackageStoreTests {
         #expect(!recovery.isQuarantined(currentModuleID))
     }
 
+    @Test
+    func retiredCommunityPackagesAreHiddenAndCannotBeReinstalled() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lithe-retired-plugin-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let retiredID = PluginID("dev.lithe.plugin.linux-do-support")
+        let source = try makePackage(
+            root: root, name: "retired", version: PluginVersion(major: 0, minor: 3, patch: 0),
+            pluginID: retiredID
+        )
+        let installedRoot = root.appendingPathComponent("installed", isDirectory: true)
+        let pluginDirectory = installedRoot.appendingPathComponent(retiredID.rawValue, isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        // Old installations may have incompatible manifests or no remaining binary.
+        // Skip them before validation so they cannot prevent other plugins loading.
+        let record = PluginInstallationRecord(
+            pluginID: retiredID, activeVersion: PluginVersion(major: 0, minor: 3, patch: 0),
+            origin: .marketplace, status: .installed
+        )
+        try JSONEncoder().encode(record).write(to: pluginDirectory.appendingPathComponent("installation.json"))
+        let store = MacPluginPackageStore(
+            rootURL: installedRoot, bundledRootURL: source.deletingLastPathComponent(),
+            verifier: TestPluginSignatureVerifier()
+        )
+        let result = try store.scanInstalledPlugins()
+        #expect(result.packages.isEmpty)
+        #expect(result.issues.isEmpty)
+        #expect(throws: PluginPackageStoreError.retiredPlugin(retiredID)) {
+            _ = try store.installPackage(from: source)
+        }
+        #expect(FileManager.default.fileExists(atPath: pluginDirectory.path))
+    }
+
     private func makePackage(
         root: URL,
         name: String,
         version: PluginVersion,
+        pluginID: PluginID = PluginID("dev.example.plugin"),
         required: Bool = false,
         languageSupport: LanguageSupportDeclaration? = nil
     ) throws -> URL {
@@ -362,7 +396,7 @@ struct PluginPackageStoreTests {
         )
         let moduleID = ModuleID("dev.example.feature")
         let manifest = PluginManifest(
-            id: PluginID("dev.example.plugin"),
+            id: pluginID,
             displayName: "Example Plugin",
             version: version,
             hostCompatibility: PluginHostCompatibility(

@@ -127,13 +127,13 @@ Rust Core 的 `lsp.builtinCompletions`、`lsp.builtinHover` 和
 
 macOS discovery 的查找顺序包括项目 `.lithe` 工具目录、`LITHE_<TOOL>_PATH`/`LITHE_TOOL_<TOOL>_PATH`、`PATH` 和常见系统目录；`gopls` 等 Go 工具还会检查 `GOBIN`、`GOPATH/bin`、`~/go/bin` 和 `~/.go/bin`。discovery 只查找，不自动安装软件。
 
-正式 macOS 与 Windows 安装包包含 JDTLS 和只供语言服务使用的 Temurin JDK 21。发布构建根据 `third_party/jdtls/manifest.json` 下载固定版本，同时校验 JDTLS 归档、EPL-2.0 许可证、Lombok agent 与 MIT 许可证的 SHA-256，再将产物放入应用资源目录的 `LanguageServers/jdtls`。平台 adapter 从选中的安装目录稳定解析 Equinox launcher JAR、当前平台的 configuration 目录和 `lombok/lombok.jar`，以结构化 `jdtlsLaunchResources` 提交给 Rust Core；Core 统一构造 `-javaagent`、内存、module/open、Eclipse product/application、`-jar`、`-configuration` 和 workspace `-data` 参数，并直接启动包内 `java`/`java.exe`。因此正式包运行 JDTLS 不依赖 shell、PowerShell 或用户 `PATH`。资源缺失会在进程启动前作为打包故障明确失败，不会产生静默的错误诊断。生成的 `bin/jdtls`、`jdtls.bat` 和 `jdtls.ps1` 只为外部/旧启动计划保留兼容回退；运行 JDTLS 的 Java runtime 始终只能是内置 JDK 21。下载只发生在构建阶段，应用运行时不会联网安装 JDTLS、Lombok 或 JDK。
+当前默认 macOS 安装包不包含 JDK、JDTLS、Java Debug/Test，构建和发布不再下载这些资源。基础 Java 编辑和高亮仍可用；没有可选运行时的分发包不会触发预热、重装错误或重复恢复。保留的 Java 适配器供显式准备资源的开发构建使用。
 
 准备脚本会把经过校验的 JDTLS manifest 一同复制到 `LanguageServers/jdtls/manifest.json`。平台启动 adapter 只观测 workspace 根部的 `pom.xml`、`build.gradle`、`build.gradle.kts` 元数据、直接包含 `pom.xml` 的模块目录和实际选中 JDTLS 的版本；`java.jdtWorkspaceFingerprint` 在 Rust Core 内统一校验、排序、去重并生成非递归结构指纹，平台不得拼接或解析该字符串。Rust Core 将指纹和标准化 workspace 路径共同哈希为 `-data` 目录键；结构变化只会选择新目录，不影响当前会话。缺少指纹时仍使用历史的纯路径键，兼容旧客户端。两端在使用缓存时写入最近使用标记，再把目录元数据交给 `java.jdtCacheRetention`；Core 只返回超过 30 天且非当前活动项的键，平台复核后删除，Core 不执行文件系统操作。
 
 命令面板的 **Java: Rebuild Index** 是损坏索引的人工恢复路径。平台先停止当前 workspace 的语言服务器会话，再通过 Core 的同一键算法只删除当前 workspace 与当前结构指纹对应的目录。其他项目和该项目的旧结构缓存均保留，重新打开 workspace 时按正常预热流程重建。
 
-JDTLS runtime 与项目运行/调试 JDK 完全分离。产品只接受随应用发布且校验为主版本 21 的 Temurin JDK，不读取系统 `JAVA_HOME`，也不提供用户路径设置；缺失或版本错误按打包故障提示。项目 Run/Debug 的 Java/Maven JDK 配置继续独立存在。
+JDTLS runtime 与项目运行/调试 JDK 完全分离。产品只接受随应用发布且校验为主版本 21 的 Temurin JDK，不读取系统 `JAVA_HOME`，也不提供用户路径设置；只有显式请求准备可选 runtime 时才报告缺失或版本错误。项目 Run/Debug 的 Java JDK 配置继续独立存在。
 
 LSP 控制中心标题栏的工具设置会在用户偏好中保存每个 provider 的可执行文件覆盖路径。session 创建时先验证并使用该路径，路径失效时继续使用 catalog 候选进行自动探测。Homebrew formula 和官方兜底地址都来自 `languageServerInstallation`，Swift 不维护 provider ID 映射。安装仍由平台层以参数数组直接执行 `brew install`，不经过 shell；没有 Homebrew/formula 时只打开对应项目的 HTTPS 官方发布或安装页面，避免用一套不安全的通用解压逻辑处理不同项目的签名和包结构。
 
@@ -141,7 +141,7 @@ LSP 控制中心标题栏的工具设置会在用户偏好中保存每个 provid
 
 ## LSP 会话与兼容性
 
-当前 transport 是 LSP 标准的 stdio `Content-Length` framing。一个 provider 在一个 workspace root 下复用一个 session；同一 provider 切换到另一个 root 时，manager 会停止旧 session 并创建新 session。`java.workspacePolicy` 只要在非忽略目录发现有效 `.java` 文件就请求异步预热，不依赖 Maven/Gradle，也不需要先打开 Java 标签页；会话由 workspace 持有并在 workspace 关闭时停止。
+当前 transport 是 LSP 标准的 stdio `Content-Length` framing。一个 provider 在一个 workspace root 下复用一个 session；同一 provider 切换到另一个 root 时，manager 会停止旧 session 并创建新 session。`java.workspacePolicy` 只要在非忽略目录发现有效 `.java` 文件就请求异步预热，但平台仅在可选 JDK 资源存在时才启动准备流程，也不需要先打开 Java 标签页；会话由 workspace 持有并在 workspace 关闭时停止。
 
 生产路径由 Rust engine 持有长生命周期 `sessionID -> RuntimeSession` registry。每个 runtime 同时拥有子进程、stdio、frame buffer、文档版本、pending request/deadline、capability 和 diagnostics；Swift 只保存不透明 `sessionID` 与 application-level `operationID`。`syncDocument` 由 Rust 决定发送 version 1 的 `didOpen` 或递增版本的 `didChange`；当 server 声明 Incremental `textDocumentSync` 且请求携带 range 时发送 range-based `didChange`，否则发送全文。`pollEvents` 立即排空队列；`waitEvents` 在 session 事件 channel 上等待直到有事件或超时后再排空 typed state/feature/diagnostic/result/error 事件。协议 reducer/host 只作为 engine 内部实现与纯函数测试 seam，不属于应用公开命令面。
 
@@ -157,8 +157,8 @@ timeout。Core、service 和 adapter 只返回稳定原因，面向用户的提�
 
 1. 平台完成可执行文件、运行时和 provider 专用资源发现，向 Rust 提交 typed `startServer`；JDTLS 包内计划必须包含 `jdtlsLaunchResources`；
 2. Rust provider adapter 生成最终参数，engine 创建 session、直接启动目标进程并安装 stdout/stderr reader，再发送 `initialize`；
-3. 收到响应后，Rust 保存服务器 capability，发送 `initialized` 和 provider adapter 通知；JDTLS 的配置通知和 `workspace/configuration` 响应通过 `java.configuration.maven.userSettings` 消费当前 Maven `settings.xml`，随后继续等待 `language/status: ServiceReady`；
-4. JDTLS 报告 `ServiceReady` 后，Rust 对 reactor 和每个递归 Maven module 发送 `java.project.updateSettings`，以 `org.eclipse.m2e.core.selectedProfiles` 应用排序后的 Profiles；所有响应成功前仍保持 `initializing`，拒绝或超时会明确失败而不沿用旧 Maven model；
+3. 收到响应后，Rust 保存 capability 并发送 `initialized`，Java 会话继续等待 `language/status: ServiceReady`。
+4. JDTLS 报告 `ServiceReady` 后，会话进入可用状态；不再应用 Maven settings 或 Profiles。
 5. manager 只在真实 `ready` 后发布 capability；打开文档发送 `didOpen`，后续编辑优先按服务器协商结果发送增量 `didChange`；
 6. Rust 以 LSP request ID 关联 deadline，并用不透明 operation ID 把 terminal result 投影给 Swift。
 
@@ -176,7 +176,7 @@ Java import 日志以节流后的结构化 JSON detail 发布，至少保留 pha
 `projectImportActive` 标明最后状态。JDTLS workspace 已存在 `.metadata` 时记为
 `reused`，否则记为 `new`。
 
-JDTLS 初始化配置不主动下载 Maven/Eclipse source attachment；依赖 POM/JAR 仍按
+JDTLS 初始化配置不主动下载 外部 source attachment；依赖 JAR 仍按
 项目模型需要正常解析。外部依赖没有源码包时，跳转使用已有的 class-file/decompile
 能力，从而把非必要源码下载移出首次 `ServiceReady` 关键路径。
 
@@ -185,7 +185,7 @@ JDTLS 初始化配置不主动下载 Maven/Eclipse source attachment；依赖 PO
 
 关闭文档时发送 `textDocument/didClose` 并清除该文档诊断。停止 session 时先请求 `shutdown`，收到响应后发送 `exit`；若服务器无响应，则由超时路径强制停止进程。不要直接以 `terminate()` 代替正常 LSP 关闭流程。
 
-Java source 编辑只走单调版本的文档同步，不重启 JDTLS，也不清理索引。workspace watcher 在 350ms 窗口内合并变化；已打开 Java 文档由 `didChange` 独占，未打开源码和 Maven/Gradle 文件通过 `workspace/didChangeWatchedFiles` 通知。构建文件变化可以触发一次合并后的项目服务刷新，但不会按每次按键重建会话。用户在 `startingProcess`/`initializing` 阶段触发导航时只收到“Java 服务正在准备”的通知，本次操作立即结束，ready 后不会自动跳转。
+Java source 编辑只走单调版本的文档同步，不重启 JDTLS，也不清理索引。workspace watcher 在 350ms 窗口内合并变化；已打开 Java 文档由 `didChange` 独占，未打开源码和 Gradle 文件通过 `workspace/didChangeWatchedFiles` 通知。构建文件变化可以触发一次合并后的项目服务刷新，但不会按每次按键重建会话。用户在 `startingProcess`/`initializing` 阶段触发导航时只收到“Java 服务正在准备”的通知，本次操作立即结束，ready 后不会自动跳转。
 
 Java gutter 导航由 Rust Core 统一投影。`java_navigation_syntax.rs` 只用
 tree-sitter 选择真实声明候选，`jdt_navigation.rs` 负责固定上限的任务规划、

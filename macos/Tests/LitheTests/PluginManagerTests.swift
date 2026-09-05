@@ -44,12 +44,6 @@ struct PluginManagerTests {
         #expect(officialLanguagePlugins.flatMap(\.modules).allSatisfy {
             $0.manifest.defaultState == .disabled
         })
-        let linuxDoPlugin = try #require(OfficialPluginCatalog.manifest(
-            forModule: OfficialPluginCatalog.linuxDoSupportModuleID
-        ))
-        #expect(linuxDoPlugin.modules.allSatisfy {
-            $0.manifest.defaultState == .disabled
-        })
         _ = try ValidatedPluginCatalog(
             manifests: BuiltInPluginCatalog.manifests
                 + BundledLanguagePluginCatalog.manifests

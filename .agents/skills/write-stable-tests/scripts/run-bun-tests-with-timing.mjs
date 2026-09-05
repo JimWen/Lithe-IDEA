@@ -13,7 +13,7 @@ const REPOSITORY_ROOT = path.resolve(SCRIPT_DIRECTORY, "../../../..");
 function parseArguments(arguments_) {
   const separator = arguments_.indexOf("--");
   const options = {
-    workingDirectory: path.join(REPOSITORY_ROOT, "windows/tauri"),
+    workingDirectory: REPOSITORY_ROOT,
     warnMs: 1000,
     maxMs: 15000,
     suiteTimeoutMs: 600000,

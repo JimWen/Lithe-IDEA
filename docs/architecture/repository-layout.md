@@ -1,9 +1,6 @@
 # Repository Layout and Sharing Rules
 
-Lithe contains two independent platform applications connected by a small set
-of shared contracts. macOS is the current reference product. Windows is a
-React/Tauri implementation; it must not import Swift source or depend on macOS
-types.
+Lithe is a macOS application with platform-neutral Rust commands and JSON contracts. Preserve the existing boundaries for continued upstream integration.
 
 ## Top-level layout
 
@@ -23,12 +20,10 @@ Lithe-IDEA/
 ├── macos/Resources/        # macOS metadata, icons, localization, and assets
 ├── Plugins/
 │   ├── mac/Official/       # macOS plugin manifests, source, tests, and Bundle metadata
-│   └── win/                # Windows-owned plugin packages
 ├── macos/Tests/LitheTests/       # Swift Testing unit tests
 ├── rust/lithe-core/        # shared Rust commands, models, and C ABI
-├── windows/                # React/Tauri Windows application and Rust adapters
 ├── shared/                 # contracts and cross-platform fixtures
-├── shared/fixtures/projects/ # reusable Java, Maven, Spring Boot, and Git data
+├── shared/fixtures/projects/ # reusable Java and Git data
 ├── scripts/                # build, packaging, fixture, and verification tools
 ├── docs/                   # product, architecture, release, and QA docs
 ├── infra/docker/           # repository-owned containerized validation environments
@@ -46,19 +41,6 @@ SwiftUI/AppKit → AppModel → Application Feature Models → AppServices
                                       ├── Rust Core operations
                                       └── macOS ports and adapters
 ```
-
-The Windows implementation has the corresponding web/native layers:
-
-```text
-windows/tauri/src/           React workbench, feature stores, and presentation
-windows/tauri/src/platform/  frontend boundary for shared and native commands
-windows/tauri/src-tauri/     Tauri composition and Windows-owned Rust adapters
-```
-
-Both platforms consume `rust/lithe-core` through the same JSON envelope and
-command names. The Windows Tauri host links the Rust crate directly while
-macOS uses the C ABI. Shared behavior belongs in `shared/contracts/` and should
-have a fixture under `shared/fixtures/` before the second platform relies on it.
 
 ## Swift source organization
 
@@ -106,10 +88,7 @@ use `Type+Concern.swift` only for a focused extension or executable-target
 bridge. Do not rename module IDs, capability IDs, JSON fields, C symbols, or
 plugin entrypoint names as part of physical source reorganization.
 
-Plugin packages are platform-owned. macOS plugins live under `Plugins/mac/`
-and Windows plugins under `Plugins/win/`; neither platform may compile source
-from the other platform's plugin tree. Shared plugin wire contracts and
-fixtures remain under `shared/` rather than either platform directory.
+macOS plugin packages live under `Plugins/mac/`. Shared plugin wire contracts and fixtures remain under `shared/`.
 
 ## Rust Core packages
 
@@ -119,7 +98,7 @@ fixtures remain under `shared/` rather than either platform directory.
 rust/lithe-core/src/
 ├── protocol/    # command names, wire contracts, responses, errors, events, cancellation
 ├── runtime/     # JSON dispatcher and C ABI exports
-├── project/     # files/search, local history, Markdown, Maven project inspection
+├── project/     # files/search, local history, Markdown
 ├── execution/   # run configuration, launch/toolchain models, project detectors
 ├── languages/   # language-specific source inspection such as Java
 ├── git/         # Git validation, parsing, state, and mutations
@@ -153,7 +132,7 @@ and assertions are not already sufficient.
 | UTF-8 file command validation and results | Native file APIs, permissions, and persistence paths |
 | Git models, validation, parsing, and mutations | Executable environment and credentials |
 | History metadata and snapshot rules | History storage location and file movement |
-| Language provider catalog, lightweight features, complete LSP runtime, Maven, and Java source parsing | Language-server/JDK/Maven discovery; Maven/Debug child processes |
+| Language provider catalog, lightweight features, complete LSP runtime, and Java source parsing | Language-server/JDK discovery; Debug child processes |
 | Error codes, cancellation, deadlines, and JSON envelope | PTY/ConPTY, signals, handles, and native UI |
 
 The UI must depend on feature models and shared models, not on a concrete
@@ -179,6 +158,6 @@ actually compiles a documented local patch. Platform runtime assets and plugin
 payloads stay with their owning platform resource or plugin package.
 
 `infra/` owns repository-level development and validation infrastructure that
-is not an implementation detail of macOS, Windows, or the shared Rust Core.
+is not an implementation detail of macOS or the shared Rust Core.
 Container definitions used to validate database helpers belong under
 `infra/docker/`; product Docker features remain in their owning platform code.

@@ -56,26 +56,7 @@ final class JavaTestWorkflowState {
 
 @MainActor
 extension AppModel {
-    func toggleSpringEndpoints() {
-        isSpringVisible.toggle()
-        guard isSpringVisible else { return }
-        isTestsVisible = false
-        isGitLogVisible = false
-        isTerminalVisible = false
-        isReferencesVisible = false
-        isProblemsVisible = false
-        isMavenVisible = false
-        isRunVisible = false
-        isDebugVisible = false
-    }
 
-    func openSpringEndpoint(_ endpoint: SpringEndpoint) {
-        navigateToEditorLocation(
-            url: endpoint.url,
-            line: max(0, endpoint.line - 1),
-            utf16Column: max(0, endpoint.column - 1)
-        )
-    }
 
     func toggleRun() {
         isRunVisible.toggle()
@@ -92,78 +73,13 @@ extension AppModel {
         isTerminalVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
         isDebugVisible = false
     }
 
-    func toggleMaven() {
-        guard hasMavenProject else {
-            showNotification("No Maven project was detected in this workspace")
-            isMavenVisible = false
-            return
-        }
-        isMavenVisible.toggle()
-        guard isMavenVisible else { return }
-        Task { [weak self] in
-            guard let self, await activateExecutionModule() != nil,
-                  let workspaceURL else { return }
-            await loadProjectServicesForAppliedSnapshot(at: workspaceURL)
-        }
-        isTestsVisible = false
-        isGitLogVisible = false
-        isTerminalVisible = false
-        isReferencesVisible = false
-        isProblemsVisible = false
-        isRunVisible = false
-        isDebugVisible = false
-        guard let workspaceURL else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            let capability = await self.activateExecutionModule()
-            if capability?.mavenFeature.project == nil {
-                await self.loadProjectServicesForAppliedSnapshot(at: workspaceURL)
-            }
-        }
-    }
 
-    func runMaven(
-        phase: MavenLifecyclePhase,
-        module: MavenModule?
-    ) {
-        isMavenVisible = true
-        isGitLogVisible = false
-        isTerminalVisible = false
-        isReferencesVisible = false
-        isProblemsVisible = false
-        isRunVisible = false
-        isDebugVisible = false
-        Task { [weak self] in
-            guard let feature = await self?.activateExecutionModule()?.mavenFeature else { return }
-            feature.run(phase: phase, module: module)
-        }
-    }
 
-    func runMavenGoal(_ goal: String, module: MavenModule?) {
-        isMavenVisible = true
-        Task { [weak self] in
-            guard let feature = await self?.activateExecutionModule()?.mavenFeature else { return }
-            feature.runCustomGoal(goal, module: module)
-        }
-    }
 
-    func stopMaven() {
-        mavenFeatureIfActive?.stop()
-    }
 
-    func openMavenIssue(_ issue: MavenBuildIssue) {
-        guard let fileURL = issue.fileURL,
-              workspaceFeature.fileExists(at: fileURL) else { return }
-        navigateToEditorLocation(
-            url: fileURL.standardizedFileURL,
-            line: max(0, (issue.line ?? 1) - 1),
-            utf16Column: max(0, (issue.column ?? 1) - 1)
-        )
-    }
 
     /// 打开源码文件并定位到指定行/列(供构建输出、运行堆栈等可点击文本跳转)。
     func openSourceLocation(url: URL, line: Int, column: Int?) {
@@ -204,7 +120,6 @@ extension AppModel {
         isGitLogVisible = false
         isTerminalVisible = false
         isReferencesVisible = false
-        isMavenVisible = false
         isRunVisible = false
         isDebugVisible = false
     }
@@ -273,10 +188,6 @@ extension AppModel {
     /// Loads build-system and run state at the workspace boundary. The generic
     /// run lifecycle is intentionally not owned by JavaFeatureModel.
     ///
-    /// Spring indexing is scheduled rather than awaited. It scales with the
-    /// number of Java sources, and run configurations, test discovery, and the
-    /// Git refresh that follows this call must not wait for it.
-    ///
     /// `files` and `snapshotID` must describe the same scan; the caller captures
     /// them together. `resumesDeferredRunAction` is set only by the workspace
     /// snapshot callback, because a deferred Run waits for a snapshot and
@@ -295,13 +206,6 @@ extension AppModel {
         prepareJavaLanguageServerForWorkspaceIfNeeded(
             at: target,
             files: files
-        )
-        springFeature.scheduleLoad(
-            workspaceURL: target,
-            files: files,
-            textOverrides: Dictionary(uniqueKeysWithValues: openDocuments.map {
-                ($0.url.standardizedFileURL, $0.text)
-            })
         )
         guard let execution = await activateExecutionModule() else { return }
         // Module activation suspends; a project switch or a reopen must not let
@@ -440,7 +344,7 @@ extension AppModel {
             clearPendingRunAction(for: identity)
         case .waitingForSnapshot(let waitingIdentity):
             // Launching from a provisional inventory resolves toolchains without
-            // the Maven project, so wait for the snapshot instead of running.
+            // the project inventory, so wait for the snapshot instead of running.
             deferRunAction(.run, for: waitingIdentity)
             return
         case .stale:
@@ -477,7 +381,6 @@ extension AppModel {
         isGitLogVisible = false
         isTerminalVisible = false
         isReferencesVisible = false
-        isMavenVisible = false
         isDebugVisible = false
     }
 
@@ -648,7 +551,6 @@ extension AppModel {
         isTerminalVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
         isRunVisible = false
     }
 
@@ -799,7 +701,6 @@ extension AppModel {
         isTerminalVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
         isRunVisible = false
         isDebugVisible = false
         guard let workspaceURL else { return }
@@ -892,7 +793,6 @@ extension AppModel {
         isTerminalVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
         isRunVisible = false
         isDebugVisible = false
         Task { [weak self] in
@@ -1357,26 +1257,10 @@ extension AppModel {
         isTerminalVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
         isRunVisible = false
     }
 
     func goToDefinition() {
-        if let document = activeDocument, let caret = editorCaret {
-            let springLocations = springFeature.navigationLocations(
-                for: document.url,
-                line: caret.line
-            )
-            if !springLocations.isEmpty {
-                presentGenericNavigationValues(
-                    springLocations,
-                    kind: .definitions,
-                    navigateToSingleResult: true,
-                    providerID: nil
-                )
-                return
-            }
-        }
         guard languageServerFeatureIsReady(
             .definition,
             unsupportedMessage: "Definition navigation is not supported by this language server"
@@ -1687,11 +1571,6 @@ extension AppModel {
         utf16Column: Int,
         completion: @escaping (LanguageServerHover?) -> Void
     ) {
-        if let document = activeDocument,
-           let hover = springFeature.hover(for: document.url, line: line) {
-            completion(hover)
-            return
-        }
         guard let document = activeDocument,
               (languageToolingSessionsIfActive?.features(for: document.url).contains(.hover) == true),
               let workspaceURL else {
@@ -1730,15 +1609,10 @@ extension AppModel {
             completion([])
             return
         }
-        let springCompletions = springFeature.completions(
-            document: document,
-            line: line,
-            utf16Column: utf16Column
-        )
         guard
               (languageToolingSessionsIfActive?.features(for: document.url).contains(.completion) == true),
               let workspaceURL else {
-            completion(springCompletions)
+            completion([])
             return
         }
         do {
@@ -1754,15 +1628,15 @@ extension AppModel {
                 switch result {
                 case .success(let values):
                     var seen = Set<String>()
-                    completion((springCompletions + values).filter { seen.insert($0.label).inserted })
+                    completion(values.filter { seen.insert($0.label).inserted })
                 case .failure(let error):
                     self?.showNotification(error.localizedDescription)
-                    completion(springCompletions)
+                    completion([])
                 }
             }
         } catch {
             showNotification(error.localizedDescription)
-            completion(springCompletions)
+            completion([])
         }
     }
 
@@ -2175,7 +2049,6 @@ extension AppModel {
         isGitLogVisible = false
         isTerminalVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
         isRunVisible = false
         isReferencesVisible = kind != .implementations
         isImplementationChooserVisible = kind == .implementations

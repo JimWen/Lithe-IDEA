@@ -8,6 +8,7 @@ protocol PluginPackageSignatureVerifying {
 }
 
 enum PluginPackageStoreError: Error, Equatable, LocalizedError {
+    case retiredPlugin(PluginID)
     case invalidPackageDirectory
     case unsafeIdentifier(String)
     case manifestDoesNotMatchInstallation
@@ -24,6 +25,7 @@ enum PluginPackageStoreError: Error, Equatable, LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .retiredPlugin(let id): "Plugin \(id) is no longer supported by this product."
         case .invalidPackageDirectory: "The plugin package directory is invalid."
         case .unsafeIdentifier(let value): "Plugin package identifier is unsafe: \(value)."
         case .manifestDoesNotMatchInstallation: "Plugin manifest does not match its installation record."
@@ -63,6 +65,9 @@ struct PluginPackageScanResult: Equatable {
 }
 
 final class MacPluginPackageStore {
+    // Keep old installations on disk, but never register or load retired code.
+    static let retiredPluginIDs: Set<PluginID> = [PluginID("dev.lithe.plugin.linux-do-support")]
+
     private let rootURL: URL
     private let bundledRootURL: URL?
     private let hostVersion: PluginVersion
@@ -155,6 +160,7 @@ final class MacPluginPackageStore {
                     PluginInstallationRecord.self,
                     at: pluginDirectory.appendingPathComponent("installation.json")
                 )
+                guard !Self.retiredPluginIDs.contains(record.pluginID) else { continue }
                 issuePluginID = record.pluginID
                 try validatePathComponent(record.pluginID.rawValue)
                 guard pluginDirectory.lastPathComponent == record.pluginID.rawValue else {
@@ -214,6 +220,7 @@ final class MacPluginPackageStore {
             var issuePluginID: PluginID?
             do {
                 let manifest = try loadManifest(at: packageURL)
+                guard !Self.retiredPluginIDs.contains(manifest.id) else { continue }
                 issuePluginID = manifest.id
                 try validatePathComponent(manifest.id.rawValue)
                 guard packageURL.lastPathComponent == manifest.id.rawValue else {
@@ -257,6 +264,9 @@ final class MacPluginPackageStore {
         deferActivationUntilRestart: Bool = false
     ) throws -> InstalledPluginPackage {
         let sourceManifest = try loadManifest(at: sourceURL)
+        guard !Self.retiredPluginIDs.contains(sourceManifest.id) else {
+            throw PluginPackageStoreError.retiredPlugin(sourceManifest.id)
+        }
         _ = try ValidatedPluginCatalog(manifests: [sourceManifest], hostVersion: hostVersion)
         try validatePathComponent(sourceManifest.id.rawValue)
 

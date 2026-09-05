@@ -6,7 +6,9 @@ cd "$ROOT_DIR"
 
 swift run --quiet LitheGitGraphVerifier
 
-FIXTURE_DIR="$(scripts/create-git-graph-fixture.sh)"
+FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/lithe-git-graph-verification.XXXXXX")"
+trap 'rm -rf -- "$FIXTURE_ROOT"' EXIT
+FIXTURE_DIR="$(scripts/create-git-graph-fixture.sh "$FIXTURE_ROOT/project")"
 MERGE_LINE="$(git -C "$FIXTURE_DIR" log --all --merges --format='%H %P' -1)"
 MERGE_PARENT_COUNT="$(print -r -- "$MERGE_LINE" | awk '{ print NF - 1 }')"
 

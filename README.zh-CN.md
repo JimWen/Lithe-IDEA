@@ -3,7 +3,7 @@
 
   <h1>Lithe</h1>
 
-  <p><strong>面向 Java 开发与 AI 协作的低内存占用 IntelliJ IDEA 替代品</strong></p>
+  <p><strong>面向多语言开发与 AI 协作的轻量级 macOS IDE</strong></p>
 
   <p>
     <a href="./README.md"><strong>English</strong></a> ·
@@ -27,15 +27,11 @@
     <a href="https://github.com/1lck/Lithe-IDEA/releases/latest"><img src="https://img.shields.io/github/v/release/1lck/Lithe-IDEA?style=flat&label=release&logo=github&logoColor=white" alt="最新版本"></a>
     <a href="https://github.com/1lck/Lithe-IDEA/releases"><img src="https://img.shields.io/github/downloads/1lck/Lithe-IDEA/total?style=flat&label=downloads&logo=github&logoColor=white" alt="累计下载量"></a>
     <img src="https://img.shields.io/badge/macOS-13%2B-111827?style=flat&logo=apple&logoColor=white" alt="macOS 13+">
-    <img src="https://img.shields.io/badge/Windows-x64-0078D4?style=flat&logo=windows&logoColor=white" alt="Windows x64">
     <img src="https://img.shields.io/badge/memory-300--400%20MB-159957?style=flat" alt="基础内存 300 到 400 MB">
     <a href="#下载与安装"><img src="https://img.shields.io/badge/Homebrew-Install-FBB040?style=flat&logo=homebrew&logoColor=black" alt="通过 Homebrew 安装"></a>
     <a href="./LICENSE"><img src="https://img.shields.io/github/license/1lck/Lithe-IDEA?style=flat&label=license" alt="Apache License 2.0"></a>
   </p>
   <p>
-    <img src="https://img.shields.io/badge/Java-JDK%2017%2B-E76F00?style=flat&logo=openjdk&logoColor=white" alt="JDK 17+">
-    <img src="https://img.shields.io/badge/Spring%20Boot-Projects-6DB33F?style=flat&logo=springboot&logoColor=white" alt="支持 Spring Boot 项目">
-    <img src="https://img.shields.io/badge/Maven-Management-C71A36?style=flat&logo=apachemaven&logoColor=white" alt="Maven 管理">
     <img src="https://img.shields.io/badge/Debugger-Breakpoints-D32F2F?style=flat" alt="断点调试">
     <img src="https://img.shields.io/badge/Git-Diff%20Review-F05032?style=flat&logo=git&logoColor=white" alt="Git Diff 审查">
     <img src="https://img.shields.io/badge/Database-SQL%20Workspace-336791?style=flat" alt="数据库 SQL 工作台">
@@ -48,7 +44,7 @@ Codex、Claude Code 等 AI 编程工具已经可以承担大量编码工作，�
 
 ## Lithe 是什么
 
-Lithe 是一款主要面向 Java 和 Spring Boot 开发者的轻量级 IDEA 替代品，保留项目浏览、代码编辑与导航、搜索、Maven、运行调试、Git Diff、本地历史和数据库等核心工作流。
+本分支保留 Lithe 的 macOS 项目浏览、代码编辑与导航、搜索、运行调试、Git Diff、本地历史和数据库等核心工作流。默认包不包含 JDK/JDTLS、Java Debug/Test；Maven、Spring、Windows 和 Linux.do 集成已移除。Go、Rust、Python 及其他已有语言能力保持现状。
 
 打开普通项目后，Lithe 应用本身的基础内存占用通常约为 **300～400 MB**。语言服务器、终端、构建工具、调试器和数据库组件均按需启动；实际占用会随项目和启用的服务变化。
 
@@ -56,8 +52,8 @@ Lithe 是一款主要面向 Java 和 Spring Boot 开发者的轻量级 IDEA 替�
 
 ## 核心功能
 
-1. 适配 Spring Boot 项目体系，适合 Java 开发。
-2. 支持 Maven 管理、断点调试和自定义启动配置。
+1. 多语言项目浏览、编辑与导航。
+2. 支持断点调试和自定义启动配置。
 3. 支持 Git 管理和 Diff 审查。
 4. 支持双击 Shift 搜索，以及 `Command + Shift + F` 全局搜索。
 5. 支持无需 LSP 的轻量补全和当前文件导航，并可按需使用语言服务器增强补全、悬浮与语义导航。
@@ -69,7 +65,7 @@ Lithe 是一款主要面向 Java 和 Spring Boot 开发者的轻量级 IDEA 替�
 11. 支持查看应用的本地内存占用情况。
 12. 支持通过 Homebrew 一键安装和更新。
 13. 支持在应用内一键更新并安装。
-14. 自动识别 Spring Boot、Java、Maven、Gradle、npm、Cargo、Go、Python、Make、Docker Compose、Procfile 和 Shell 项目的可运行入口，并支持一键运行。
+14. 自动识别 Java 源文件、Gradle、npm、Cargo、Go、Python、Make、Docker Compose、Procfile 和 Shell 项目的可运行入口，并支持一键运行。
 15. 支持按语言独立开关语言服务，可根据电脑配置自由启用或停用。
 16. 支持类似 IDEA 的多行编辑器标签，同时展示更多打开的文件。
 17. 新增数据库连接工作台，支持多种数据库类型、连接管理、SQL 历史、表浏览和数据库操作。
@@ -121,8 +117,9 @@ Lithe 是一款主要面向 Java 和 Spring Boot 开发者的轻量级 IDEA 替�
 
 ## 下载与安装
 
+以下发行链接指向上游构建。使用 `./scripts/package-app.sh` 本地构建本分支，得到裁剪后的安装包。
+
 - **macOS 13+：**前往 [GitHub Releases](https://github.com/1lck/Lithe-IDEA/releases/latest) 下载 `.dmg`。M 系列芯片选择 `arm64`，Intel 芯片选择 `x86_64`。
-- **Windows x64：**前往 [GitHub Releases](https://github.com/1lck/Lithe-IDEA/releases/latest) 下载 Windows `.exe` 安装包。
 
 macOS 推荐使用 Homebrew 安装和更新：
 
@@ -152,7 +149,7 @@ brew upgrade --cask lithe
 
 ## 架构概览
 
-macOS 是当前参考产品，Windows 是独立的 React/Tauri 实现。两端通过 Rust Core 共享确定性命令与契约，同时保持原生界面和平台能力相互独立。
+macOS 产品通过 Rust Core 执行确定性命令与契约，原生界面和平台适配器保持独立。
 
 ```mermaid
 flowchart LR
@@ -165,13 +162,7 @@ flowchart LR
         Contracts["JSON 契约与 Fixtures"] --> Core["Rust lithe-core"]
     end
 
-    subgraph Windows["Windows"]
-        WinUI["React 工作台"] --> WinFeatures["TypeScript Features 与 Stores"]
-        WinFeatures --> Tauri["Tauri 2 Host 与 Windows 适配器"]
-    end
-
     MacApp -->|"JSON C ABI"| Core
-    Tauri -->|"Rust crate"| Core
 ```
 
 <details>
@@ -207,7 +198,6 @@ open dist/Lithe.app
 ./scripts/verify-git-graph.sh
 ./scripts/verify-service-boundaries.sh
 ./scripts/verify-shared-contracts.sh
-./scripts/verify-windows-boundaries.sh
 ./scripts/verify-rust-core.sh
 ```
 
@@ -261,18 +251,6 @@ open dist/Lithe.app
     </td>
   </tr>
 </table>
-
-### ⭐ 特别鸣谢
-
-<p align="center">
-  <a href="https://linux.do/">
-    <img src="./docs/assets/special-thanks/linux-do.png" width="78%" alt="LINUX DO">
-  </a>
-</p>
-
-<p align="center">
-  <strong>关于 AI 的一切，欢迎前往 <a href="https://linux.do/">LINUX DO</a>！祝社区越来越好～</strong>
-</p>
 
 ### 贡献者
 

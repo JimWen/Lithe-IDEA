@@ -159,7 +159,7 @@ constructs a macOS adapter. This keeps a new module's host integration to its
 service protocol, service registration, static manifest, and package build.
 
 Internal lifecycle modules and downloadable plugins are separate concepts.
-Search, Git, Local History, Terminal, Debug, AI Assistance, Java/Maven
+Search, Git, Local History, Terminal, Debug, AI Assistance, Java
 execution, Workspace Foundation, and the application/editor shell remain
 statically composed even when they use `ModuleRuntime` for lazy activation or
 sleep.
@@ -177,7 +177,7 @@ and testing may share one module because they use the same language toolchain;
 each operation still receives its own process session. LSP remains a separate
 module so editing intelligence can stop, fail, or sleep independently. Their UI
 and application-facing state remain built in and consume narrow capability
-protocols. Java and Maven project execution remain built in behind the same
+protocols. Java project execution remain built in behind the same
 provider shape.
 
 Go Support is the first released official native package. Its inert manifest
@@ -225,7 +225,7 @@ dependencies first, restores persisted state, then republishes capabilities.
 | snapshot retention and history operations | Local History |
 | Java language-server discovery, Rust LSP sessions, LSP processes, polling | built-in Language Intelligence module |
 | non-Java language-server discovery, Rust LSP sessions, LSP processes, polling | owning language support plugin |
-| Java/Maven build, run, and test processes | built-in Execution module |
+| Java build, run, and test processes | built-in Execution module |
 | non-Java run/test providers and child processes | owning language support plugin |
 | `JavaDebugService`, DAP sessions, debuggee processes | Debug |
 | `MacTerminalTransport`, PTY and shell | Terminal |
@@ -244,7 +244,7 @@ behavior:
 2. Wrap the current graph behind module factories while preserving behavior.
 3. Extract database connection ownership behind a native plugin capability.
 4. Extract LSP startup/session ownership behind a native plugin capability.
-5. Keep Java/Maven execution built in and extract non-Java LSP/run/test/debug
+5. Keep Java execution built in and extract non-Java LSP/run/test/debug
    providers into per-language packages, beginning with Go Support.
 6. Keep other feature targets statically composed and eliminate concrete
    feature fields from `AppServices` and `AppModel` where lifecycle isolation

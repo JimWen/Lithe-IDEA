@@ -3,41 +3,17 @@ import Foundation
 package struct RunOptions: Codable, Hashable, Sendable {
     package struct JavaCapability: Codable, Hashable, Sendable {
         package var homePath = ""
-        package var mavenExecutablePath = ""
-        package var mavenJavaHomePath = ""
         package var vmArguments = ""
-        package var activeMavenProfiles: Set<String> = []
-        package var skipTests: Bool?
 
-        private enum CodingKeys: String, CodingKey {
-            case homePath, mavenExecutablePath, mavenJavaHomePath, vmArguments, activeMavenProfiles
-            case skipTests
-        }
-
-        package init(
-            homePath: String = "",
-            mavenExecutablePath: String = "",
-            mavenJavaHomePath: String = "",
-            vmArguments: String = "",
-            activeMavenProfiles: Set<String> = [],
-            skipTests: Bool? = nil
-        ) {
+        private enum CodingKeys: String, CodingKey { case homePath, vmArguments }
+        package init(homePath: String = "", vmArguments: String = "") {
             self.homePath = homePath
-            self.mavenExecutablePath = mavenExecutablePath
-            self.mavenJavaHomePath = mavenJavaHomePath
             self.vmArguments = vmArguments
-            self.activeMavenProfiles = activeMavenProfiles
-            self.skipTests = skipTests
         }
-
         package init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             homePath = try container.decodeIfPresent(String.self, forKey: .homePath) ?? ""
-            mavenExecutablePath = try container.decodeIfPresent(String.self, forKey: .mavenExecutablePath) ?? ""
-            mavenJavaHomePath = try container.decodeIfPresent(String.self, forKey: .mavenJavaHomePath) ?? ""
             vmArguments = try container.decodeIfPresent(String.self, forKey: .vmArguments) ?? ""
-            activeMavenProfiles = try container.decodeIfPresent(Set<String>.self, forKey: .activeMavenProfiles) ?? []
-            skipTests = try container.decodeIfPresent(Bool.self, forKey: .skipTests)
         }
     }
 
@@ -51,10 +27,6 @@ package struct RunOptions: Codable, Hashable, Sendable {
         workingDirectoryPath: String = "",
         vmArguments: String = "",
         programArguments: String = "",
-        activeProfiles: Set<String> = [],
-        mavenSkipTests: Bool? = nil,
-        mavenExecutablePath: String = "",
-        mavenJavaHomePath: String = "",
         environment: [String: String] = [:]
     ) {
         self.workingDirectoryPath = workingDirectoryPath
@@ -62,11 +34,7 @@ package struct RunOptions: Codable, Hashable, Sendable {
         self.environment = environment
         java = JavaCapability(
             homePath: javaHomePath,
-            mavenExecutablePath: mavenExecutablePath,
-            mavenJavaHomePath: mavenJavaHomePath,
-            vmArguments: vmArguments,
-            activeMavenProfiles: activeProfiles,
-            skipTests: mavenSkipTests
+            vmArguments: vmArguments
         )
     }
 
@@ -78,30 +46,18 @@ package struct RunOptions: Codable, Hashable, Sendable {
         get { java.vmArguments }
         set { java.vmArguments = newValue }
     }
-    package var mavenExecutablePath: String {
-        get { java.mavenExecutablePath }
-        set { java.mavenExecutablePath = newValue }
-    }
-    package var mavenJavaHomePath: String {
-        get { java.mavenJavaHomePath }
-        set { java.mavenJavaHomePath = newValue }
-    }
+
+
     package var programArguments: String {
         get { arguments }
         set { arguments = newValue }
     }
-    package var activeProfiles: Set<String> {
-        get { java.activeMavenProfiles }
-        set { java.activeMavenProfiles = newValue }
-    }
-    package var mavenSkipTests: Bool? {
-        get { java.skipTests }
-        set { java.skipTests = newValue }
-    }
+
+
 
     private enum CodingKeys: String, CodingKey {
         case workingDirectoryPath, arguments, environment, java
-        case javaHomePath, vmArguments, programArguments, activeProfiles
+        case javaHomePath, vmArguments, programArguments
     }
 
     package init(from decoder: Decoder) throws {
@@ -113,8 +69,7 @@ package struct RunOptions: Codable, Hashable, Sendable {
         environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
         java = try container.decodeIfPresent(JavaCapability.self, forKey: .java) ?? JavaCapability(
             homePath: try container.decodeIfPresent(String.self, forKey: .javaHomePath) ?? "",
-            vmArguments: try container.decodeIfPresent(String.self, forKey: .vmArguments) ?? "",
-            activeMavenProfiles: try container.decodeIfPresent(Set<String>.self, forKey: .activeProfiles) ?? []
+            vmArguments: try container.decodeIfPresent(String.self, forKey: .vmArguments) ?? ""
         )
     }
 
@@ -196,12 +151,9 @@ package extension RunExecutableResolving {
 package protocol RunRuntimePort: AnyObject {
     func setActiveServiceJavaHomePath(_ path: String)
     func javaHomeURL(overridePath: String?) -> URL?
-    func mavenJavaHomeURL(overridePath: String?) -> URL?
     func runConfigurationToolchainCandidates(
-        for project: MavenProject?,
         projectRoot: URL?,
-        javaHomeOverride: String?,
-        mavenExecutableOverride: String?
+        javaHomeOverride: String?
     ) -> [ProjectToolchainCandidate]
 }
 
@@ -216,10 +168,6 @@ package protocol RunPreferenceStore: AnyObject {
     func string(forKey key: String) -> String?
     func setData(_ data: Data, forKey key: String)
     func setString(_ value: String, forKey key: String)
-}
-
-package protocol RunServerPortParsing: Sendable {
-    func serverPort(content: String, fileExtension: String) -> Int?
 }
 
 package enum LanguageTestItemKind: String, Equatable, Sendable {

@@ -44,8 +44,6 @@ swift_database=false
 rust_core=false
 rust_database=false
 macos_release=false
-windows=false
-windows_rust=false
 rust_comments=false
 metadata=false
 
@@ -56,8 +54,6 @@ enable_all_validation() {
     rust_core=true
     rust_database=true
     macos_release=true
-    windows=true
-    windows_rust=true
 }
 
 while IFS=$'\t' read -r status first_path _; do
@@ -69,12 +65,12 @@ while IFS=$'\t' read -r status first_path _; do
     fi
 
     path="$first_path"
-    lowercase_path="${path,,}"
+    lowercase_path="$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
 
     case "$lowercase_path" in
         *.md|*.mdx)
             # Text-only documentation still receives git diff validation in the
-            # workflow, but does not reserve a macOS or Windows runner.
+            # workflow, but does not reserve a macOS runner.
             ;;
         casks/*|scripts/update-homebrew-cask.rb)
             metadata=true
@@ -95,15 +91,8 @@ while IFS=$'\t' read -r status first_path _; do
             swift_database=true
             rust_database=true
             ;;
-        .github/workflows/ci-windows.yml)
-            windows=true
-            windows_rust=true
-            ;;
         .github/workflows/release-macos.yml|.github/workflows/release-preview-macos.yml)
             macos_release=true
-            ;;
-        .github/workflows/release-windows.yml|.github/workflows/release-preview-windows.yml)
-            windows=true
             ;;
         .github/actions/prepare-macos-dependency-cache/*)
             swift=true
@@ -119,8 +108,6 @@ while IFS=$'\t' read -r status first_path _; do
             plugins=true
             swift_database=true
             rust_core=true
-            windows=true
-            windows_rust=true
             ;;
         .github/*|docs/*|.agents/*|.idea/*|.gitignore|license)
             ;;
@@ -135,16 +122,10 @@ while IFS=$'\t' read -r status first_path _; do
         plugins/mac/*|macos/tests/litheofficialpluginverifier/*)
             plugins=true
             ;;
-        plugins/win/*)
-            # Windows plugin packages may contain frontend and native host code.
-            # Until their per-language layout is narrower, validate both lanes.
-            windows=true
-            windows_rust=true
-            ;;
-        macos/tests/lithetests/nativepluginloadertests.swift|macos/tests/lithetests/pluginmanagementpresentationtests.swift|macos/tests/lithetests/pluginmanagertests.swift|macos/tests/lithetests/pluginpackagestoretests.swift|macos/tests/lithetests/linuxdoanonymouswebsessiontests.swift|macos/tests/lithetests/linuxdocommunityformattingtests.swift|macos/tests/lithetests/macexternalauthorizationcallbackroutertests.swift|macos/tests/lithetests/webkitintegrationtests.swift)
+        macos/tests/lithetests/nativepluginloadertests.swift|macos/tests/lithetests/pluginmanagementpresentationtests.swift|macos/tests/lithetests/pluginmanagertests.swift|macos/tests/lithetests/pluginpackagestoretests.swift)
             plugins=true
             ;;
-        macos/sources/lithe/litheapp.swift|macos/sources/lithe/application/features/pluginmanagement.swift|macos/sources/lithe/core/language/pluginlanguageprovidercatalogsource.swift|macos/sources/lithe/models/appmodel/appmodel+pluginmanagement.swift|macos/sources/lithe/platform/macos/community/*|macos/sources/lithe/platform/macos/plugins/*|macos/sources/lithe/views/app/pluginmanagementview.swift|macos/sources/lithe/views/community/*|macos/sources/lithe/views/workbench/workbenchmoduleuicomposition.swift|macos/sources/litheapplicationkernel/plugins/*|macos/sources/lithemoduleapi/catalog/bundledlanguageplugincatalog.swift|macos/sources/lithemoduleapi/plugins/*)
+        macos/sources/lithe/litheapp.swift|macos/sources/lithe/application/features/pluginmanagement.swift|macos/sources/lithe/core/language/pluginlanguageprovidercatalogsource.swift|macos/sources/lithe/models/appmodel/appmodel+pluginmanagement.swift|macos/sources/lithe/platform/macos/plugins/*|macos/sources/lithe/views/app/pluginmanagementview.swift|macos/sources/lithe/views/workbench/workbenchmoduleuicomposition.swift|macos/sources/litheapplicationkernel/plugins/*|macos/sources/lithemoduleapi/catalog/bundledlanguageplugincatalog.swift|macos/sources/lithemoduleapi/plugins/*)
             # Host-side plugin APIs are product code, while their focused
             # behavior is owned by the plugin lane.
             swift=true
@@ -239,8 +220,6 @@ while IFS=$'\t' read -r status first_path _; do
                 rust_core=true
                 if [[ "$lowercase_path" != rust/lithe-core/src/tests/* && "$lowercase_path" != */tests.rs ]]; then
                     macos_release=true
-                    windows=true
-                    windows_rust=true
                 fi
             fi
             ;;
@@ -250,15 +229,11 @@ while IFS=$'\t' read -r status first_path _; do
         rust/lithe-core/cargo.toml|rust/lithe-core/include/*)
             rust_core=true
             macos_release=true
-            windows=true
-            windows_rust=true
             ;;
         rust/cargo.toml|rust/cargo.lock)
             rust_core=true
             rust_database=true
             macos_release=true
-            windows=true
-            windows_rust=true
             ;;
         rust/lithe-db-mcp/*|rust/lithe-db-sidecar/*)
             rust_database=true
@@ -272,23 +247,12 @@ while IFS=$'\t' read -r status first_path _; do
             rust_core=true
             rust_database=true
             macos_release=true
-            windows=true
-            windows_rust=true
             ;;
         shared/*)
             # Non-Markdown shared contracts and fixtures are compatibility
-            # surfaces consumed by Swift, Rust Core, and the Windows product.
+            # surfaces consumed by Swift and Rust Core.
             swift=true
             rust_core=true
-            windows=true
-            windows_rust=true
-            ;;
-        windows/tauri/src-tauri/*.rs|windows/tauri/src-tauri/cargo.toml|windows/tauri/src-tauri/cargo.lock|windows/tauri/crates/*)
-            windows=true
-            windows_rust=true
-            ;;
-        windows/*)
-            windows=true
             ;;
         scripts/test-macos.sh)
             swift=true
@@ -318,12 +282,6 @@ while IFS=$'\t' read -r status first_path _; do
             swift_database=true
             rust_core=true
             macos_release=true
-            windows=true
-            windows_rust=true
-            ;;
-        scripts/validate-windows-build-caches.ps1|scripts/invoke-cargo-with-cache-fallback.ps1)
-            windows=true
-            windows_rust=true
             ;;
         scripts/validate-macos-dependency-caches.sh|scripts/prepare-macos-dependencies.sh)
             swift=true
@@ -331,9 +289,6 @@ while IFS=$'\t' read -r status first_path _; do
             swift_database=true
             rust_core=true
             macos_release=true
-            ;;
-        scripts/build-windows.ps1|scripts/verify-windows-boundaries.ps1|scripts/verify-windows-boundaries.sh|scripts/prepare-jdtls.ps1|scripts/prepare-jdk.ps1|scripts/package-windows.ps1|scripts/install-windows-frontend-dependencies.ps1|scripts/invoke-windows-tauri-build.ps1|scripts/create-windows-updater-manifest.ps1|scripts/test-windows-updater-manifest.ps1)
-            windows=true
             ;;
         scripts/prepare-lithe-pr-review.mjs|scripts/test-prepare-lithe-pr-review.mjs|scripts/run-lithe-codex-with-timeout.sh|scripts/update-repo-charts.py)
             ;;
@@ -354,7 +309,5 @@ printf 'swift_database=%s\n' "$swift_database"
 printf 'rust_core=%s\n' "$rust_core"
 printf 'rust_database=%s\n' "$rust_database"
 printf 'macos_release=%s\n' "$macos_release"
-printf 'windows=%s\n' "$windows"
-printf 'windows_rust=%s\n' "$windows_rust"
 printf 'rust_comments=%s\n' "$rust_comments"
 printf 'metadata=%s\n' "$metadata"

@@ -404,7 +404,7 @@ macOS 类型、CoreServices 标志和具体 watcher 不得泄漏到 Application�
 外部普通文件变化
 → 编辑器外部修改检测
 → 必要时刷新项目树
-→ 必要时重载 Java/Maven 项目服务
+→ 必要时重载 Java 项目服务
 → 本地历史
 → Git 状态刷新
 ```
@@ -426,7 +426,7 @@ Git 元数据或 repositoryRoot 外部文件变化
 - 项目树重建；
 - 编辑器外部文件冲突检测；
 - 本地历史；
-- Java/Maven 服务重载；
+- Java 服务重载；
 - 普通文件扫描。
 
 ### 9.3 防抖与最终刷新
@@ -647,7 +647,7 @@ Views 不参与路径解析、文件监听、防抖或恢复。Changes、状态�
 - Git Log；
 - merge/rebase operation state；
 - 项目树没有因 Git-only 事件闪烁；
-- Java/Maven 服务没有因 Git-only 事件重启；
+- Java 服务没有因 Git-only 事件重启；
 - 编辑器没有收到 `.git` 路径的外部冲突提示。
 
 ### 15.4 仓库验证命令
@@ -673,7 +673,7 @@ swift test --disable-sandbox
 本设计只有同时满足以下条件才算完成：
 
 1. 普通仓库、linked worktree、submodule、repository 子目录和 separate git-dir 都通过验收；
-2. Git-only 事件不会触发项目树、编辑器、本地历史或 Java/Maven 刷新；
+2. Git-only 事件不会触发项目树、编辑器、本地历史或 Java 刷新；
 3. 普通文件外部变化行为没有回归；
 4. FSEvents 丢事件和 RootChanged 有明确恢复路径；
 5. 初始化期间没有“刷新完成后、watcher 启动前”的永久漏事件窗口；

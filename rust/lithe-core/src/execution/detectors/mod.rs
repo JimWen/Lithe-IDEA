@@ -5,18 +5,11 @@
 //! the tree themselves: a shared walk is the only way the cost stays bounded as
 //! ecosystems are added.
 //!
-//! An ecosystem whose layout is *declared* rather than discovered reads its own
-//! manifest graph instead -- see `maven`. The caller selects the Maven root
-//! because it may sit below the opened workspace. That is not a shortcut around
-//! the shared walk: a declared graph names directories the walk prunes, and
-//! omits ones it would visit.
-
 mod cargo;
 mod compose;
 mod go;
 mod gradle;
 mod make;
-mod maven;
 mod npm;
 mod procfile;
 mod python;
@@ -144,23 +137,6 @@ impl Detected {
         self
     }
 
-    /// Hands the executable to a toolchain instead of spawning `command`.
-    ///
-    /// Most detections name a program that is on `PATH`, which is what keeps a
-    /// new ecosystem from needing changes in the launch layer. An ecosystem
-    /// whose launch is assembled from a toolchain rather than a command line --
-    /// Maven's `spring-boot:run`, addressed through the project JDK and Maven
-    /// binding -- takes this instead, and the launch layer must already know
-    /// that provider.
-    pub fn with_toolchains(mut self, toolchains: &[(&str, &str)]) -> Self {
-        self.command = None;
-        self.toolchains = toolchains
-            .iter()
-            .map(|(role, name)| (role.to_string(), name.to_string()))
-            .collect();
-        self
-    }
-
     /// Declares a runtime requirement while keeping the detector-owned command.
     ///
     /// Process-based detectors still own their command, but Core needs the
@@ -170,16 +146,9 @@ impl Detected {
         self
     }
 
-    /// Declares the debug adapter supported by this detection.
-    pub fn with_debug(mut self, adapter: &str) -> Self {
-        self.debug = Some(adapter.to_string());
-        self
-    }
-
     /// Overrides the directory the command runs in. Defaults to the directory
     /// the detection was made in, which is wrong when a build must be invoked
-    /// from its root -- a Gradle subproject, or a Maven module addressed by
-    /// `-pl` from the reactor root.
+    /// from its root, as with a Gradle subproject.
     pub fn with_cwd(mut self, cwd: &str) -> Self {
         self.cwd = cwd.to_string();
         self
@@ -230,17 +199,12 @@ const DETECTORS: &[DetectFn] = &[
 /// Runs every detector over the project and returns deduplicated results
 /// ordered shallowest-directory-first, so the top-level service of a monorepo
 /// reads before its packages.
-pub fn detect_all(root: &Path, maven_root: Option<&Path>) -> Result<Vec<Detected>, CoreError> {
+pub fn detect_all(root: &Path) -> Result<Vec<Detected>, CoreError> {
     let directories = scan(root)?;
     let mut found = Vec::new();
     for context in &directories {
         for detector in DETECTORS {
             found.extend(detector(context));
-        }
-    }
-    if let Some(maven_root) = maven_root {
-        if let Some(context) = DirectoryContext::at(root, maven_root)? {
-            found.extend(maven::detect(&context));
         }
     }
     Ok(dedupe(found))

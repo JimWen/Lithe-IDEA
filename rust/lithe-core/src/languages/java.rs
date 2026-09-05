@@ -1,11 +1,11 @@
-//! Lightweight Java source and Maven-aware run-configuration inspection.
+//! Lightweight Java source and standalone run-configuration inspection.
 
 use crate::protocol::{CoreError, ErrorCode};
 use crate::protocol::{
     JavaClassNameResponse, JavaCodeVisionHintResponse, JavaCodeVisionResponse,
     JavaFoldRegionResponse, JavaInlayHintResponse, JavaMainClassResponse,
-    JavaRunConfigurationResponse, JavaRunConfigurationsResponse, JavaServerPortResponse,
-    JavaSourceSetResponse, JavaStructureResponse,
+    JavaRunConfigurationResponse, JavaRunConfigurationsResponse, JavaSourceSetResponse,
+    JavaStructureResponse,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -61,15 +61,7 @@ pub struct JavaSourceDefinitionRequest {
     pub member_name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-/// Spring configuration content inspected for a declared server port.
-pub struct JavaServerPortRequest {
-    pub content: String,
-    pub file_extension: String,
-}
-
-/// Discovers stable Java and Spring Boot run entries from selected sources.
+/// Discovers stable Java run entries from selected sources.
 pub fn run_configurations(
     request: JavaRunConfigurationsRequest,
 ) -> Result<JavaRunConfigurationsResponse, CoreError> {
@@ -97,28 +89,16 @@ pub fn run_configurations(
     let mut configurations = main_classes
         .iter()
         .map(|value| JavaRunConfigurationResponse {
-            id: if value.is_spring_boot {
-                format!("spring:{}", value.qualified_name)
-            } else {
-                format!("java-main:{}", value.qualified_name)
-            },
+            id: format!("java-main:{}", value.qualified_name),
             name: value.simple_name.clone(),
-            kind: if value.is_spring_boot {
-                "springBoot".to_string()
-            } else {
-                "javaMain".to_string()
-            },
+            kind: "javaMain".to_string(),
             module_path: module_path(&value.path, &request.module_paths),
             main_class: Some(value.qualified_name.clone()),
             source_path: value.path.clone(),
             source_set: java_source_set(&value.path),
         })
         .collect::<Vec<_>>();
-    configurations.sort_by(|left, right| {
-        kind_order(&left.kind)
-            .cmp(&kind_order(&right.kind))
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
-    });
+    configurations.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
 
     Ok(JavaRunConfigurationsResponse {
         main_classes,
@@ -259,53 +239,6 @@ pub fn source_definition(
     Ok(None)
 }
 
-/// Reads a Spring server port from properties or YAML content.
-pub fn server_port(request: JavaServerPortRequest) -> Result<JavaServerPortResponse, CoreError> {
-    if request.file_extension.eq_ignore_ascii_case("properties") {
-        for line in request.content.lines() {
-            let value = line.trim();
-            if value.starts_with('#') {
-                continue;
-            }
-            let Some((key, port)) =
-                value.split_once(|character| character == ':' || character == '=')
-            else {
-                continue;
-            };
-            if key.trim() == "server.port" {
-                return Ok(JavaServerPortResponse {
-                    port: port.trim().parse().ok(),
-                });
-            }
-        }
-        return Ok(JavaServerPortResponse { port: None });
-    }
-
-    let mut in_server_section = false;
-    for line in request.content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if trimmed == "server:" {
-            in_server_section = true;
-            continue;
-        }
-        if in_server_section && line.chars().next().is_some_and(char::is_whitespace) {
-            if let Some((key, port)) = trimmed.split_once(':') {
-                if key.trim() == "port" {
-                    return Ok(JavaServerPortResponse {
-                        port: port.trim().parse().ok(),
-                    });
-                }
-            }
-            continue;
-        }
-        in_server_section = false;
-    }
-    Ok(JavaServerPortResponse { port: None })
-}
-
 fn main_class(path: &str, source: &str) -> Option<JavaMainClassResponse> {
     let main_pattern = Regex::new(r"\bstatic\s+(?:final\s+)?void\s+main\s*\(").ok()?;
     if !main_pattern.is_match(source) {
@@ -325,7 +258,6 @@ fn main_class(path: &str, source: &str) -> Option<JavaMainClassResponse> {
         path: path.to_string(),
         qualified_name,
         simple_name,
-        is_spring_boot: source.contains("@SpringBootApplication"),
     })
 }
 
@@ -350,14 +282,6 @@ fn java_source_set(path: &str) -> JavaSourceSetResponse {
 
 fn is_inside(path: &str, directory: &str) -> bool {
     path == directory || path.starts_with(&(directory.trim_end_matches('/').to_string() + "/"))
-}
-
-fn kind_order(kind: &str) -> usize {
-    match kind {
-        "springBoot" => 0,
-        "javaMain" => 1,
-        _ => 2,
-    }
 }
 
 fn fold_regions(source: &str) -> Vec<JavaFoldRegionResponse> {

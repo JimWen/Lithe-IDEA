@@ -36,7 +36,6 @@ body:
       label: Target platform / 目标平台
       options:
         - macOS
-        - Windows
         - Cross-platform / 跨平台
         - Other / 其他
     validations:
@@ -49,7 +48,6 @@ body:
       options:
         - Editor / 编辑器
         - Language support / 语言服务
-        - Maven
         - Run / 运行
         - Debug / 调试
         - Test / 测试

@@ -16,7 +16,6 @@ body:
       label: Platform / 平台
       options:
         - macOS
-        - Windows
         - Other / 其他
     validations:
       required: true
@@ -28,7 +27,6 @@ body:
       options:
         - Editor / 编辑器
         - Language support / 语言服务
-        - Maven
         - Run / 运行
         - Debug / 调试
         - Test / 测试
@@ -81,10 +79,9 @@ body:
     id: environment
     attributes:
       label: Environment / 环境信息
-      description: Include relevant JDK, Maven, JDT LS, Rust, WebView2, or Tauri versions. / 请填写相关的 JDK、Maven、JDT LS、Rust、WebView2 或 Tauri 版本。
+      description: Include relevant Go, Rust, Python, Node, or language-server versions. / 请填写相关的 Go、Rust、Python、Node 或语言服务器 版本。
       placeholder: |
         JDK:
-        Maven:
         JDT LS:
         Other:
 

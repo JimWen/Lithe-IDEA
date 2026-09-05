@@ -786,7 +786,7 @@ private final class ReadyRunConfigurationOperations: RunConfigurationOperations,
     static let serviceEntryPoint = RunConfiguration(
         id: "spring-boot:demo.App",
         name: "App (Spring Boot)",
-        kind: .mavenFramework(.springBoot),
+        kind: .javaMain,
         execution: .service,
         modulePath: nil,
         mainClass: "demo.App"
@@ -824,7 +824,6 @@ private final class ReadyRunConfigurationOperations: RunConfigurationOperations,
         throw RunConfigurationOperationFailure(message: "Launching is out of scope for this test")
     }
 
-    func createConfiguration(_ draft: RunConfigurationDraft, at projectURL: URL) throws -> String { draft.name }
     func migrateLegacySettings(at projectURL: URL, configurationIDs: [String]) throws {}
 }
 
@@ -930,7 +929,6 @@ private final class InspectionGatedRunConfigurationOperations: RunConfigurationO
         throw RunConfigurationOperationFailure(message: "Launching is out of scope for this test")
     }
 
-    func createConfiguration(_ draft: RunConfigurationDraft, at projectURL: URL) throws -> String { draft.name }
     func migrateLegacySettings(at projectURL: URL, configurationIDs: [String]) throws {}
 }
 
@@ -1053,7 +1051,6 @@ private final class InventoryRecordingGatedRunConfigurationOperations: RunConfig
         throw RunConfigurationOperationFailure(message: "Launching is out of scope for this test")
     }
 
-    func createConfiguration(_ draft: RunConfigurationDraft, at projectURL: URL) throws -> String { draft.name }
     func migrateLegacySettings(at projectURL: URL, configurationIDs: [String]) throws {}
 }
 

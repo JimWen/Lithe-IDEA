@@ -5,7 +5,6 @@ typealias JavaRunOptions = LitheCoreContracts.RunOptions
 typealias RunSession = LitheCoreContracts.RunSession
 typealias RunPortConflict = LitheCoreContracts.RunPortConflict
 typealias RunConfigurationCapabilities = LitheCoreContracts.RunConfigurationCapabilities
-typealias MavenFrameworkKind = LitheCoreContracts.MavenFrameworkKind
 typealias RunConfigurationKind = LitheCoreContracts.RunConfigurationKind
 typealias RunConfigurationExecution = LitheCoreContracts.RunConfigurationExecution
 typealias RunConfiguration = LitheCoreContracts.RunConfiguration

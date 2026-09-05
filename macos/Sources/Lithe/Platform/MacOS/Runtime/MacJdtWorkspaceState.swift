@@ -5,8 +5,7 @@ import Foundation
 /// The adapter only inspects immediate build-system inputs. Rust Core remains
 /// the sole owner of workspace-key normalization and hashing.
 struct MacJdtWorkspaceState {
-    private static let buildFileNames = ["pom.xml", "build.gradle", "build.gradle.kts"]
-    private static let mavenDescriptorName = "pom.xml"
+    private static let buildFileNames = ["build.gradle", "build.gradle.kts"]
     private static let manifestName = "manifest.json"
     private static let corePluginPrefix = "org.eclipse.jdt.ls.core_"
     private static let lastUsedMarkerName = ".lithe-last-used"
@@ -14,7 +13,6 @@ struct MacJdtWorkspaceState {
     private let cacheDirectoryURL: URL
     private let workspaceFingerprintResolver: ((
         [RustCoreBridge.JdtBuildFileObservation],
-        [String],
         String
     ) throws -> String)?
     private let workspaceKeyResolver: (URL, String?) throws -> String
@@ -27,10 +25,9 @@ struct MacJdtWorkspaceState {
     init(core: RustCoreBridge, cacheDirectoryURL: URL) {
         self.init(
             cacheDirectoryURL: cacheDirectoryURL,
-            workspaceFingerprintResolver: { buildFiles, directMavenModules, jdtlsVersion in
+            workspaceFingerprintResolver: { buildFiles, jdtlsVersion in
                 try core.jdtWorkspaceFingerprint(
                     buildFiles: buildFiles,
-                    directMavenModules: directMavenModules,
                     jdtlsVersion: jdtlsVersion
                 ).get()
             },
@@ -54,7 +51,6 @@ struct MacJdtWorkspaceState {
         cacheDirectoryURL: URL,
         workspaceFingerprintResolver: ((
             [RustCoreBridge.JdtBuildFileObservation],
-            [String],
             String
         ) throws -> String)? = nil,
         workspaceKeyResolver: @escaping (URL, String?) throws -> String,
@@ -103,28 +99,8 @@ struct MacJdtWorkspaceState {
             }
         }
 
-        var modules: [String] = []
-        let entries = try fileManager.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: []
-        )
-        for entry in entries {
-            let isDirectory = try entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory
-            guard isDirectory == true else { continue }
-            let descriptorPath = entry.appendingPathComponent(Self.mavenDescriptorName).path
-            do {
-                let attributes = try fileManager.attributesOfItem(atPath: descriptorPath)
-                guard attributes[.type] as? FileAttributeType == .typeRegular else { continue }
-                modules.append(entry.lastPathComponent)
-            } catch where isMissingFileError(error) {
-                continue
-            }
-        }
-
         return try workspaceFingerprintResolver(
             buildFiles,
-            modules,
             languageServerCacheIdentity(for: languageServerExecutableURL)
         )
     }

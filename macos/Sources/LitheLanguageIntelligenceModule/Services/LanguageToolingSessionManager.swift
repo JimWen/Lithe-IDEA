@@ -60,7 +60,6 @@ package final class LanguageToolingSessionManager: ObservableObject,
     private let workspaceFingerprintProvider: (LanguageProviderDescriptor, URL) throws -> String?
     private let workspaceStateResetter: ((LanguageProviderDescriptor, URL, String?) throws -> Void)?
     private let workspaceStateCleaner: ((LanguageProviderDescriptor, URL, String?) throws -> Int)?
-    private var mavenContextProvider: (LanguageProviderDescriptor, URL) -> MavenLaunchContext? = { _, _ in nil }
 
     package init(
         catalog: LanguageProviderCatalog = .compatibilityFallback,
@@ -93,11 +92,6 @@ package final class LanguageToolingSessionManager: ObservableObject,
         })
     }
 
-    package func configureMavenContextProvider(
-        _ provider: @escaping (LanguageProviderDescriptor, URL) -> MavenLaunchContext?
-    ) {
-        mavenContextProvider = provider
-    }
 
     package func updateCatalog(_ catalog: LanguageProviderCatalog) {
         let previousDescriptors = Dictionary(
@@ -336,7 +330,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
             // Older JDT LS builds may omit filePath when the workspace has a
             // single launch target. If a path is present, do not silently use
             // another class for the current editor file: that turns a
-            // Spring-dependent source into an invalid bare-java launch.
+            // classpath-dependent source into an invalid bare-java launch.
             selected = targets[0].target
         } else {
             let message = exactMatches.isEmpty
@@ -1319,7 +1313,6 @@ package final class LanguageToolingSessionManager: ObservableObject,
             try created.start(
                 rootURL: rootURL,
                 workspaceFingerprint: workspaceFingerprint,
-                mavenContext: mavenContextProvider(descriptor, rootURL)
             )
         } catch {
             if languageServerSessionIdentities[descriptor.id] == sessionIdentity {

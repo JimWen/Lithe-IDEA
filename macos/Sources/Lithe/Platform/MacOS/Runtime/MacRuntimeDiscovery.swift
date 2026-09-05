@@ -7,38 +7,10 @@ enum MacRuntimeDiscovery {
             .sorted { lhs, rhs in
                 lhs.version.localizedStandardCompare(rhs.version) == .orderedDescending
             }
-        let mavenRuntimes = discoverMavenExecutables(environment: environment)
-            .compactMap(probeMaven)
-            .sorted { lhs, rhs in
-                lhs.version.localizedStandardCompare(rhs.version) == .orderedDescending
-            }
-        return RuntimeDiscoveryResult(javaRuntimes: javaRuntimes, mavenRuntimes: mavenRuntimes)
+        return RuntimeDiscoveryResult(javaRuntimes: javaRuntimes)
     }
 
-    static func systemMavenExecutable(environment: [String: String]) -> URL? {
-        discoverMavenExecutables(environment: environment).first
-    }
 
-    static func mavenExecutable(forHomePath path: String) -> URL? {
-        let expanded = (path as NSString).expandingTildeInPath
-        let url = URL(fileURLWithPath: expanded).standardizedFileURL
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
-            return nil
-        }
-        let executable = isDirectory.boolValue
-            ? url.appendingPathComponent("bin/mvn")
-            : url
-        var executableIsDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(
-            atPath: executable.path,
-            isDirectory: &executableIsDirectory
-        ), !executableIsDirectory.boolValue,
-        FileManager.default.isExecutableFile(atPath: executable.path) else {
-            return nil
-        }
-        return executable.standardizedFileURL
-    }
 
     static func validJavaHome(_ path: String) -> URL? {
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
@@ -81,33 +53,6 @@ enum MacRuntimeDiscovery {
         return paths.values.sorted { $0.path < $1.path }
     }
 
-    private static func discoverMavenExecutables(environment: [String: String]) -> [URL] {
-        var paths = Set<String>()
-        func add(_ path: String?) {
-            guard let path else { return }
-            let expanded = (path as NSString).expandingTildeInPath
-            let url = URL(fileURLWithPath: expanded).standardizedFileURL
-            guard FileManager.default.isExecutableFile(atPath: url.path) else { return }
-            paths.insert(url.path)
-        }
-
-        if let mavenHome = environment["MAVEN_HOME"] {
-            add(URL(fileURLWithPath: mavenHome).appendingPathComponent("bin/mvn").path)
-        }
-        for component in (environment["PATH"] ?? "").split(separator: ":").map(String.init) {
-            add(URL(fileURLWithPath: component).appendingPathComponent("mvn").path)
-        }
-        for path in [
-            "/opt/homebrew/opt/maven/bin/mvn",
-            "/opt/homebrew/bin/mvn",
-            "/usr/local/opt/maven/bin/mvn",
-            "/usr/local/bin/mvn",
-            "/usr/bin/mvn"
-        ] {
-            add(path)
-        }
-        return paths.sorted().map(URL.init(fileURLWithPath:))
-    }
 
     static func probeJavaHome(_ home: URL) -> JavaRuntimeCandidate? {
         let output = commandOutput(
@@ -125,12 +70,6 @@ enum MacRuntimeDiscovery {
         return JavaRuntimeCandidate(homePath: home.path, version: version, vendor: vendor)
     }
 
-    static func probeMaven(_ executable: URL) -> MavenRuntimeCandidate? {
-        let output = commandOutput(executable: executable, arguments: ["-version"])
-        let version = firstCapture(pattern: #"Apache Maven\s+([^\s]+)"#, in: output) ?? ""
-        let home = executable.deletingLastPathComponent().deletingLastPathComponent().path
-        return MavenRuntimeCandidate(homePath: home, executablePath: executable.path, version: version)
-    }
 
     private static func javaHomeOutput() -> [String] {
         let output = commandOutput(

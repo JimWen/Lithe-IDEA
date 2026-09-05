@@ -25,7 +25,7 @@ final class AppServices {
     let debugBreakpointPersistence: (any DebugBreakpointPersisting)?
     let workspaceOperations: any WorkspaceOperations
     let documentLifecycleDecider: any DocumentLifecycleDeciding
-    let javaMavenOperations: any JavaMavenOperations
+    let javaOperations: any JavaOperations
     let markdownRenderer: any MarkdownRendering
     let markdownImageImporter: any MarkdownImageImporting
     let store: any KeyValueStore
@@ -38,7 +38,6 @@ final class AppServices {
     let githubService: GitHubService
     let secureStore: any SecureStore
     let databaseSecureStore: any SecureStore
-    let discourseCommunityService: DiscourseCommunityService
     let credentialResolver: any AIProviderCredentialResolver
     let aiConfigurationSources: [any AIConfigurationSource]
     let recentProjectsStore: RecentProjectsStore
@@ -62,7 +61,7 @@ final class AppServices {
         debugBreakpointPersistence: (any DebugBreakpointPersisting)? = nil,
         workspaceOperations: any WorkspaceOperations,
         documentLifecycleDecider: any DocumentLifecycleDeciding,
-        javaMavenOperations: any JavaMavenOperations,
+        javaOperations: any JavaOperations,
         markdownRenderer: any MarkdownRendering,
         markdownImageImporter: any MarkdownImageImporting,
         store: any KeyValueStore,
@@ -74,7 +73,6 @@ final class AppServices {
         githubService: GitHubService,
         secureStore: any SecureStore,
         databaseSecureStore: any SecureStore,
-        discourseCommunityService: DiscourseCommunityService,
         credentialResolver: any AIProviderCredentialResolver,
         aiConfigurationSources: [any AIConfigurationSource],
         recentProjectsStore: RecentProjectsStore,
@@ -106,7 +104,7 @@ final class AppServices {
         self.debugBreakpointPersistence = debugBreakpointPersistence
         self.workspaceOperations = workspaceOperations
         self.documentLifecycleDecider = documentLifecycleDecider
-        self.javaMavenOperations = javaMavenOperations
+        self.javaOperations = javaOperations
         self.markdownRenderer = markdownRenderer
         self.markdownImageImporter = markdownImageImporter
         self.store = store
@@ -118,7 +116,6 @@ final class AppServices {
         self.githubService = githubService
         self.secureStore = secureStore
         self.databaseSecureStore = databaseSecureStore
-        self.discourseCommunityService = discourseCommunityService
         self.credentialResolver = credentialResolver
         self.aiConfigurationSources = aiConfigurationSources
         self.recentProjectsStore = recentProjectsStore

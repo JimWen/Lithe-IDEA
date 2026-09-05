@@ -39,6 +39,7 @@ extension AppModel {
     func prepareJavaLanguageServerRuntimeIfNeeded(
         for document: EditorDocument
     ) -> JavaLanguageServerActivationReadiness {
+        guard services.projectRuntimeService.hasJavaLanguageServerRuntime else { return .unavailable }
         if services.projectRuntimeService.isJavaLanguageServerRuntimePrepared() {
             return .ready
         }
@@ -57,8 +58,9 @@ extension AppModel {
         files: [URL],
         fallbackDocument: EditorDocument? = nil
     ) {
+        guard services.projectRuntimeService.hasJavaLanguageServerRuntime else { return }
         let normalizedRoot = workspaceURL.standardizedFileURL
-        guard services.javaMavenOperations.javaWorkspacePolicy(
+        guard services.javaOperations.javaWorkspacePolicy(
             at: normalizedRoot,
             files: files,
             changedFiles: []
@@ -228,7 +230,7 @@ extension AppModel {
 
     func handleJavaWorkspaceFileChanges(_ changes: [WorkspaceFileChange]) {
         guard let workspaceURL,
-              let policy = services.javaMavenOperations.javaWorkspacePolicy(
+              let policy = services.javaOperations.javaWorkspacePolicy(
                 at: workspaceURL,
                 files: projectFiles,
                 changedFiles: changes.map(\.fileURL)

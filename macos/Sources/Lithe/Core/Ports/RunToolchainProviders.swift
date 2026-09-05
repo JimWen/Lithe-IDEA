@@ -15,7 +15,7 @@ protocol RunToolchainProvider: AnyObject {
     var identifiers: Set<String> { get }
     var toolchainType: String { get }
     /// Owning language pack, when this provider is language-specific.  A nil
-    /// value is reserved for shared build tools such as Maven or Gradle.
+    /// value is reserved for shared build tools such as Gradle.
     var languageProviderID: String? { get }
     func resolve(
         projectURL: URL,
@@ -135,7 +135,6 @@ final class RunToolchainRegistry {
     static func standardProviders() -> [any RunToolchainProvider] {
         [
             JavaRunToolchainProvider(),
-            MavenRunToolchainProvider(),
             GradleRunToolchainProvider(),
             PathRunToolchainProvider(
                 identifiers: ["go", "project-go"], command: "go",
@@ -213,36 +212,6 @@ private final class JavaRunToolchainProvider: RunToolchainProvider {
     }
 }
 
-@MainActor
-private final class MavenRunToolchainProvider: RunToolchainProvider {
-    let identifiers: Set<String> = ["project-maven"]
-    let toolchainType = "maven"
-    let languageProviderID: String? = "java"
-
-    func resolve(
-        projectURL: URL,
-        options: RunOptions,
-        runtimeService: ProjectRuntimeService
-    ) throws -> ResolvedRunToolchain {
-        guard let executable = runtimeService.mavenExecutable(
-            at: projectURL,
-            overridePath: options.mavenExecutablePath
-        ) else {
-            throw RunExecutableResolutionError(
-                message: String(localized: "No Maven executable was found. Edit this service configuration.")
-            )
-        }
-        return ResolvedRunToolchain(
-            executableURL: executable,
-            environment: runtimeService.environment(
-                for: .maven,
-                javaHomeOverride: options.mavenJavaHomePath.isEmpty
-                    ? options.javaHomePath
-                    : options.mavenJavaHomePath
-            )
-        )
-    }
-}
 
 @MainActor
 private final class PathRunToolchainProvider: RunToolchainProvider {

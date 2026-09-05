@@ -2977,14 +2977,10 @@ struct LitheCoreLogicTests {
             javaHomePath: "/jdk/legacy",
             workingDirectoryPath: "backend",
             vmArguments: "-Xmx2g",
-            programArguments: "--spring.profiles.active=dev",
-            activeProfiles: ["dev"]
+            programArguments: "--environment=dev"
         )), forKey: "lithe.java-run-options.\(projectKey).current-file")
         store.set(try JSONEncoder().encode(ProjectRuntimeSettings(
-            javaHomePath: "/Library/Java/jdk-21",
-            mavenHomeSelection: .custom,
-            mavenHomePath: "/opt/maven",
-            mavenJavaHomePath: "/Library/Java/jdk-17"
+            javaHomePath: "/Library/Java/jdk-21"
         )), forKey: "lithe.project-runtime.\(projectKey)")
 
         let adapter = MacRunConfigurationStore(
@@ -2999,8 +2995,7 @@ struct LitheCoreLogicTests {
                 javaHomePath: "/Library/Java/jdk-22",
                 workingDirectoryPath: "backend app",
                 vmArguments: "\"-Dlabel=hello world\" -Xmx1g",
-                programArguments: "--dev",
-                activeProfiles: ["local"]
+                programArguments: "--dev"
             ),
             configurationID: "current-file",
             scope: .local,
@@ -4216,7 +4211,7 @@ struct EditorDocumentTests {
     func workspaceWatcherProjectsTypedJavaChangesWithoutReloadingForSourceEdits() async throws {
         let workspace = URL(fileURLWithPath: "/tmp/lithe-java-watcher")
         let source = workspace.appendingPathComponent("src/Main.java")
-        let build = workspace.appendingPathComponent("pom.xml")
+        let build = workspace.appendingPathComponent("build.gradle")
         let watcherFactory = TestDirectoryWatcherFactory()
         var projectedChanges: [WorkspaceFileChange] = []
         var projectReloadCount = 0

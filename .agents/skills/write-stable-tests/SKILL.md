@@ -13,15 +13,13 @@ fail locally with a useful diagnostic instead of waiting for a CI job timeout.
 - macOS uses Swift, `zsh`, and Node.js. It does not require Bun, `npm`, or a
   JavaScript package installation for stability checks, timing, JUnit output,
   or HTML report generation.
-- Windows Rust scopes use Node.js plus Cargo. Windows `Frontend` additionally
-  uses the repository's Bun toolchain because the product tests run under Bun;
-  this dependency is isolated to that scope.
+- Shared Rust timing uses Node.js and Cargo.
 
 ## Read the platform guidance
 
 - For Swift or macOS tests, read [references/macos-swift.md](references/macos-swift.md).
 - For TypeScript, Tauri Rust, or shared Rust tests exercised by Windows, read
-  [references/windows-and-rust.md](references/windows-and-rust.md).
+  [references/rust.md](references/rust.md).
 - Read both references when a shared contract or cross-platform behavior changes.
 - For HTML/JUnit output, performance budgets, or CI artifacts, read
   [references/test-reporting.md](references/test-reporting.md).
@@ -60,19 +58,12 @@ fail locally with a useful diagnostic instead of waiting for a CI job timeout.
    ./.agents/skills/write-stable-tests/scripts/verify-test-stability.sh
    ```
 
-   On Windows use:
-
-   ```powershell
-   ./.agents/skills/write-stable-tests/scripts/verify-test-stability.ps1
-   ```
-
 4. Run the platform timing harness. A changed test is not verified until its
    individual duration appears in the generated HTML and JUnit reports:
 
    ```bash
    ./.agents/skills/write-stable-tests/scripts/test-stability-macos.sh -- --filter '<focused-test>'
-   ./.agents/skills/write-stable-tests/scripts/test-stability-windows.ps1 -Scope Frontend
-   ./.agents/skills/write-stable-tests/scripts/test-stability-windows.ps1 -Scope WindowsRust
+   node .agents/skills/write-stable-tests/scripts/run-rust-tests-with-timing.mjs --manifest rust/Cargo.toml --package lithe-core
    ```
 
 5. Run the broader affected validation required by `develop-lithe`. Report the

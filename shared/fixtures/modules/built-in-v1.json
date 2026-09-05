@@ -7,16 +7,28 @@
       "scope": "application",
       "defaultState": "disabled",
       "activationPolicy": "onDemand",
-      "sleepPolicy": { "kind": "whenIdle", "afterSeconds": 300 },
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 300
+      },
       "dependencies": [],
       "capabilities": [
         "dev.lithe.capability.ai-commit-message",
         "dev.lithe.capability.ai-pull-request-description"
       ],
       "contributions": [
-        { "id": "ai.commit-message", "kind": "command" },
-        { "id": "ai.pull-request-description", "kind": "command" },
-        { "id": "ai.settings", "kind": "settings" }
+        {
+          "id": "ai.commit-message",
+          "kind": "command"
+        },
+        {
+          "id": "ai.pull-request-description",
+          "kind": "command"
+        },
+        {
+          "id": "ai.settings",
+          "kind": "settings"
+        }
       ],
       "required": false
     },
@@ -26,11 +38,21 @@
       "scope": "workspace",
       "defaultState": "disabled",
       "activationPolicy": "onDemand",
-      "sleepPolicy": { "kind": "whenIdle", "afterSeconds": 600 },
-      "dependencies": ["dev.lithe.workspace"],
-      "capabilities": ["dev.lithe.capability.database-workspace"],
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "dependencies": [
+        "dev.lithe.workspace"
+      ],
+      "capabilities": [
+        "dev.lithe.capability.database-workspace"
+      ],
       "contributions": [
-        { "id": "database.workspace", "kind": "toolWindow" }
+        {
+          "id": "database.workspace",
+          "kind": "toolWindow"
+        }
       ],
       "required": false
     },
@@ -40,11 +62,25 @@
       "scope": "workspace",
       "defaultState": "enabled",
       "activationPolicy": "onDemand",
-      "sleepPolicy": { "kind": "whenIdle", "afterSeconds": 600 },
-      "dependencies": ["dev.lithe.execution", "dev.lithe.language-intelligence", "dev.lithe.workspace"],
-      "capabilities": ["dev.lithe.capability.debug-workspace"],
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "dependencies": [
+        "dev.lithe.execution",
+        "dev.lithe.language-intelligence",
+        "dev.lithe.workspace"
+      ],
+      "capabilities": [
+        "dev.lithe.capability.debug-workspace"
+      ],
       "contributions": [
-        { "id": "debug.session", "kind": "toolWindow", "actionID": "debug.toggle", "rendererID": "debug.session" }
+        {
+          "id": "debug.session",
+          "kind": "toolWindow",
+          "actionID": "debug.toggle",
+          "rendererID": "debug.session"
+        }
       ],
       "required": false
     },
@@ -54,13 +90,29 @@
       "scope": "workspace",
       "defaultState": "enabled",
       "activationPolicy": "onDemand",
-      "sleepPolicy": { "kind": "whenIdle", "afterSeconds": 600 },
-      "dependencies": ["dev.lithe.workspace"],
-      "capabilities": ["dev.lithe.capability.execution-workspace"],
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "dependencies": [
+        "dev.lithe.workspace"
+      ],
+      "capabilities": [
+        "dev.lithe.capability.execution-workspace"
+      ],
       "contributions": [
-        { "id": "execution.maven", "kind": "toolWindow", "actionID": "execution.maven.toggle", "rendererID": "execution.maven" },
-        { "id": "execution.run", "kind": "toolWindow", "actionID": "execution.run.toggle", "rendererID": "execution.run" },
-        { "id": "execution.tests", "kind": "toolWindow", "actionID": "execution.tests.toggle", "rendererID": "execution.tests" }
+        {
+          "id": "execution.run",
+          "kind": "toolWindow",
+          "actionID": "execution.run.toggle",
+          "rendererID": "execution.run"
+        },
+        {
+          "id": "execution.tests",
+          "kind": "toolWindow",
+          "actionID": "execution.tests.toggle",
+          "rendererID": "execution.tests"
+        }
       ],
       "required": false
     },
@@ -70,12 +122,27 @@
       "scope": "workspace",
       "defaultState": "enabled",
       "activationPolicy": "onDemand",
-      "sleepPolicy": { "kind": "whenIdle", "afterSeconds": 600 },
-      "dependencies": ["dev.lithe.workspace"],
-      "capabilities": ["dev.lithe.capability.git-workspace"],
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "dependencies": [
+        "dev.lithe.workspace"
+      ],
+      "capabilities": [
+        "dev.lithe.capability.git-workspace"
+      ],
       "contributions": [
-        { "id": "git.changes", "kind": "toolWindow" },
-        { "id": "git.log", "kind": "toolWindow", "actionID": "git.log.toggle", "rendererID": "git.log" }
+        {
+          "id": "git.changes",
+          "kind": "toolWindow"
+        },
+        {
+          "id": "git.log",
+          "kind": "toolWindow",
+          "actionID": "git.log.toggle",
+          "rendererID": "git.log"
+        }
       ],
       "required": false
     },
@@ -85,12 +152,27 @@
       "scope": "workspace",
       "defaultState": "enabled",
       "activationPolicy": "onDemand",
-      "sleepPolicy": { "kind": "whenIdle", "afterSeconds": 600 },
-      "dependencies": ["dev.lithe.workspace"],
-      "capabilities": ["dev.lithe.capability.language-intelligence"],
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "dependencies": [
+        "dev.lithe.workspace"
+      ],
+      "capabilities": [
+        "dev.lithe.capability.language-intelligence"
+      ],
       "contributions": [
-        { "id": "language.problems", "kind": "toolWindow", "actionID": "language.problems.toggle", "rendererID": "language.problems" },
-        { "id": "language.settings", "kind": "settings" }
+        {
+          "id": "language.problems",
+          "kind": "toolWindow",
+          "actionID": "language.problems.toggle",
+          "rendererID": "language.problems"
+        },
+        {
+          "id": "language.settings",
+          "kind": "settings"
+        }
       ],
       "required": false
     },
@@ -100,11 +182,21 @@
       "scope": "workspace",
       "defaultState": "enabled",
       "activationPolicy": "onDemand",
-      "sleepPolicy": { "kind": "whenIdle", "afterSeconds": 600 },
-      "dependencies": ["dev.lithe.workspace"],
-      "capabilities": ["dev.lithe.capability.history-workspace"],
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "dependencies": [
+        "dev.lithe.workspace"
+      ],
+      "capabilities": [
+        "dev.lithe.capability.history-workspace"
+      ],
       "contributions": [
-        { "id": "history.local", "kind": "toolWindow" }
+        {
+          "id": "history.local",
+          "kind": "toolWindow"
+        }
       ],
       "required": false
     },
@@ -114,11 +206,21 @@
       "scope": "workspace",
       "defaultState": "enabled",
       "activationPolicy": "onDemand",
-      "sleepPolicy": { "kind": "whenIdle", "afterSeconds": 600 },
-      "dependencies": ["dev.lithe.workspace"],
-      "capabilities": ["dev.lithe.capability.search-workspace"],
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "dependencies": [
+        "dev.lithe.workspace"
+      ],
+      "capabilities": [
+        "dev.lithe.capability.search-workspace"
+      ],
       "contributions": [
-        { "id": "search.workspace", "kind": "toolWindow" }
+        {
+          "id": "search.workspace",
+          "kind": "toolWindow"
+        }
       ],
       "required": false
     },
@@ -128,11 +230,23 @@
       "scope": "workspace",
       "defaultState": "enabled",
       "activationPolicy": "onDemand",
-      "sleepPolicy": { "kind": "whenIdle", "afterSeconds": 600 },
-      "dependencies": ["dev.lithe.workspace"],
-      "capabilities": ["dev.lithe.capability.terminal-workspace"],
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "dependencies": [
+        "dev.lithe.workspace"
+      ],
+      "capabilities": [
+        "dev.lithe.capability.terminal-workspace"
+      ],
       "contributions": [
-        { "id": "terminal.sessions", "kind": "toolWindow", "actionID": "terminal.toggle", "rendererID": "terminal.sessions" }
+        {
+          "id": "terminal.sessions",
+          "kind": "toolWindow",
+          "actionID": "terminal.toggle",
+          "rendererID": "terminal.sessions"
+        }
       ],
       "required": false
     },
@@ -142,9 +256,13 @@
       "scope": "workspace",
       "defaultState": "enabled",
       "activationPolicy": "eager",
-      "sleepPolicy": { "kind": "never" },
+      "sleepPolicy": {
+        "kind": "never"
+      },
       "dependencies": [],
-      "capabilities": ["dev.lithe.capability.workspace-foundation"],
+      "capabilities": [
+        "dev.lithe.capability.workspace-foundation"
+      ],
       "contributions": [],
       "required": true
     }

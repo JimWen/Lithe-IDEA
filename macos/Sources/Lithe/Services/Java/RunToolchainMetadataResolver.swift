@@ -10,8 +10,8 @@ struct ProcessRunToolchainMetadataResolver: RunToolchainMetadataResolving {
         let probeURLs: [URL]
         let arguments: [String]
         switch toolchainType {
-        case "java", "maven":
-            // Java and Maven use RuntimeLocator's richer vendor-aware probes.
+        case "java":
+            // Java uses RuntimeLocator's richer vendor-aware probes.
             return RunToolchainMetadata(version: "", vendor: "")
         case "go":
             arguments = ["version"]

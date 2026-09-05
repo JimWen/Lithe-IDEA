@@ -50,8 +50,6 @@
 "Navigate to the next editor location" = "跳转到下一个编辑器位置";
 "Go to Definition" = "跳转到定义";
 "Navigate to the declaration of the selected symbol" = "跳转到所选符号的声明";
-"Spring Endpoints" = "Spring 接口";
-"Show indexed Spring MVC routes" = "显示已索引的 Spring MVC 路由";
 "Navigate to a call site of the selected symbol" = "跳转到所选符号的调用位置";
 "Navigate to an implementation of the selected symbol" = "跳转到所选符号的实现";
 "Find references to the selected symbol" = "查找所选符号的引用";
@@ -220,26 +218,12 @@
 "Project JDK" = "项目 JDK";
 "JDK Home" = "JDK 主目录";
 "Effective JDK" = "实际使用的 JDK";
-"Maven" = "Maven";
-"Maven source" = "Maven 来源";
 "Automatic" = "自动";
-"Maven Wrapper" = "Maven Wrapper";
-"Custom Maven Home" = "自定义 Maven 主目录";
-"Maven Home" = "Maven 主目录";
-"Maven JDK" = "Maven JDK";
-"Detected Maven" = "检测到的 Maven";
-"Automatic uses a project mvnw first, then the system Maven on PATH." = "自动模式会优先使用项目 mvnw，然后使用 PATH 中的系统 Maven。";
 "Project runtime settings are saved locally for this project." = "项目运行时设置会保存在本机的项目配置中。";
-"Open a project to configure its JDK and Maven runtime." = "打开项目后即可配置 JDK 和 Maven 运行时。";
 "Application-wide editor and terminal settings remain available in the other categories." = "应用级编辑器和终端设置仍可在其他分类中使用。";
 "Discovering…" = "正在检测…";
 "Refresh detected runtimes" = "刷新运行时检测结果";
-"Discovering Maven…" = "正在检测 Maven…";
-"No Maven project detected" = "未检测到 Maven 项目";
-"Maven Wrapper is not executable" = "Maven Wrapper 不可执行";
-"Maven executable not resolved" = "未解析出 Maven 可执行文件";
 "Choose a JDK directory" = "选择 JDK 目录";
-"Choose Maven home or bin/mvn" = "选择 Maven 主目录或 bin/mvn";
 "Choose Runtime Directory" = "选择运行时目录";
 "Choose" = "选择";
 "Open Project…" = "打开项目…";
@@ -619,7 +603,6 @@
 "Diagnostics from JDT LS will appear here." = "JDT LS 的诊断信息会显示在这里。";
 "No problems match the current filter" = "没有问题匹配当前筛选条件";
 "Use the filter menu to show other severities." = "使用筛选菜单查看其他级别。";
-"Maven project" = "Maven 项目";
 "Profiles" = "Profiles";
 "Lifecycle" = "生命周期";
 "Build Output" = "构建输出";
@@ -629,11 +612,9 @@
 "Runtime" = "运行时";
 "Arguments" = "参数";
 "Main class" = "主类";
-"Maven module" = "Maven 模块";
 "Working directory" = "工作目录";
 "VM options" = "VM 选项";
 "Program arguments" = "程序参数";
-"Active Maven Profiles" = "启用的 Maven Profiles";
 "Reset" = "重置";
 "Project paths must stay inside the current project." = "项目路径必须位于当前项目内。";
 "Open a project before choosing project paths." = "请先打开项目，再选择项目路径。";
@@ -714,9 +695,6 @@
 "Select a file" = "选择文件";
 "Working Tree" = "工作区";
 "Working tree matches this reference" = "工作区与此引用一致";
-"Run a Maven lifecycle phase to see output." = "运行 Maven 生命周期阶段后会显示输出。";
-"Reload Maven project" = "重新加载 Maven 项目";
-"Stop Maven task" = "停止 Maven 任务";
 "Clear build output" = "清除构建输出";
 "New terminal session" = "新建终端会话";
 "Select shell" = "选择 Shell";
@@ -733,7 +711,6 @@
 "Step into" = "单步进入";
 "Step out" = "单步跳出";
 "Clear debug output" = "清除调试输出";
-"No Spring Boot or Maven Module configurations" = "没有 Spring Boot 或 Maven Module 配置";
 "No breakpoints" = "没有断点";
 "Evaluate expression" = "计算表达式";
 "Waiting for debugger output…" = "等待调试器输出…";
@@ -849,7 +826,6 @@
 "Do not ignore" = "不忽略空白";
 "Ignore whitespace" = "忽略空白";
 "Current File" = "当前文件";
-"Maven / Spring Boot" = "Maven / Spring Boot";
 "Remote JVM / Tomcat" = "远程 JVM / Tomcat";
 "Ready" = "就绪";
 "Launching" = "启动中";
@@ -969,8 +945,6 @@
 "Show or hide the Terminal tool window" = "显示或隐藏终端工具窗口";
 "Toggle Problems" = "切换问题窗口";
 "Show or hide Java diagnostics" = "显示或隐藏 Java 诊断";
-"Toggle Maven" = "切换 Maven";
-"Show or hide the Maven tool window" = "显示或隐藏 Maven 工具窗口";
 "Toggle Git Log" = "切换 Git 日志";
 "Show or hide Git history" = "显示或隐藏 Git 历史";
 "Toggle Run" = "切换运行窗口";
@@ -1022,7 +996,6 @@
 "Generated 1 runnable project entry." = "已生成 1 个可运行的项目入口。";
 "Generated %lld runnable project entries." = "已生成 %lld 个可运行的项目入口。";
 "No project entry point detected" = "未识别到项目启动入口";
-"Current File remains available. Add a supported Java or Maven entry point, then identify the project again." = "仍可使用“当前文件”运行。请添加受支持的 Java 或 Maven 启动入口，然后重新识别项目。";
 "Project identification failed" = "项目识别失败";
 "Identify Again" = "重新识别";
 "Project run configuration not found" = "未找到项目运行配置";
@@ -1039,7 +1012,6 @@
 "Clear run output" = "清除运行输出";
 "Debug target" = "调试目标";
 "Open a Java file" = "打开 Java 文件";
-"Select a Spring Boot or Maven Module configuration" = "选择 Spring Boot 或 Maven Module 配置";
 "Start debugging the current Java file" = "开始调试当前 Java 文件";
 "Attach to a remote JVM or Tomcat" = "连接到远程 JVM 或 Tomcat";
 "Start Debugging" = "开始调试";
@@ -1050,7 +1022,6 @@
 "Search implementations" = "搜索实现";
 "Hide Run tool window" = "隐藏运行工具窗口";
 "Hide Debug tool window" = "隐藏调试工具窗口";
-"Hide Maven tool window" = "隐藏 Maven 工具窗口";
 "Hide Problems tool window" = "隐藏问题工具窗口";
 "Hide Terminal tool window" = "隐藏终端工具窗口";
 
@@ -1127,8 +1098,6 @@
 "Stage at least one change before committing" = "提交前请至少暂存一项更改";
 "Committed changes, but detached HEAD cannot be pushed" = "更改已提交，但 detached HEAD 无法推送";
 "Open a Java file before starting Debug" = "开始调试前请先打开 Java 文件";
-"Select a Spring Boot or Maven Module configuration before starting Debug" = "开始调试前请选择 Spring Boot 或 Maven Module 配置";
-"No Maven project is available for Debug" = "没有可用于调试的 Maven 项目";
 "Place the caret in a Java file to set a breakpoint" = "请将光标置于 Java 文件中以设置断点";
 "Place the caret on a Java symbol first" = "请先将光标置于 Java 符号上";
 "Enter a branch name" = "请输入分支名称";
@@ -1163,8 +1132,6 @@
 "Create a shared project configuration or a local override." = "创建团队共享的项目配置，或仅本机生效的覆盖配置。";
 "Name" = "名称";
 "Type" = "类型";
-"Spring Boot" = "Spring Boot";
-"Maven Module" = "Maven 模块";
 "Docker Compose" = "Docker Compose";
 "Procfile" = "Procfile";
 "Applications" = "应用";
@@ -1208,9 +1175,6 @@
 "This Mac only" = "仅本机";
 "Shared with project" = "项目共享";
 "Edit Service" = "编辑服务";
-"Maven executable" = "Maven 可执行文件";
-"Maven JDK Home" = "Maven JDK 主目录";
-"Use mvnw or detected Maven" = "使用 mvnw 或检测到的 Maven";
 "Use service JDK" = "使用服务 JDK";
 
 /* Managed memory. */

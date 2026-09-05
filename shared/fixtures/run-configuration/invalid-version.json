@@ -1,7 +1,18 @@
 {
   "version": 1,
-  "generated": { "version": 2, "configurations": [] },
-  "team": { "version": 1, "configurations": [] },
-  "local": { "version": 1, "configurations": [] },
-  "expected": { "errorCode": "not_supported" }
+  "generated": {
+    "version": 2,
+    "configurations": []
+  },
+  "team": {
+    "version": 1,
+    "configurations": []
+  },
+  "local": {
+    "version": 1,
+    "configurations": []
+  },
+  "expected": {
+    "errorCode": "not_supported"
+  }
 }

@@ -56,17 +56,8 @@ struct MacRuntimeLocator: RuntimeLocator {
         FileManager.default.isExecutableFile(atPath: url.path)
     }
 
-    func systemMavenExecutable() -> URL? {
-        MacRuntimeDiscovery.systemMavenExecutable(environment: environment())
-    }
 
-    func mavenExecutable(forHomePath path: String) -> URL? {
-        MacRuntimeDiscovery.mavenExecutable(forHomePath: path)
-    }
 
-    func mavenRuntime(at executableURL: URL) -> MavenRuntimeCandidate? {
-        MacRuntimeDiscovery.probeMaven(executableURL)
-    }
 
     /// Returns the bundled JDK matching the current process architecture.
     /// Universal apps carry separate runtimes because a JDK contains native

@@ -1,6 +1,5 @@
 use super::support::temporary_root;
 use crate::execute_json;
-use crate::project::{jdt_configuration, MavenLaunchContextRequest};
 use serde_json::Value;
 use std::fs;
 
@@ -78,7 +77,6 @@ fn jdt_workspace_fingerprint_matches_the_shared_compatibility_fixture() {
             "command": "java.jdtWorkspaceFingerprint",
             "payload": {
                 "buildFiles": case["buildFiles"],
-                "directMavenModules": case["directMavenModules"],
                 "jdtlsVersion": case["jdtlsVersion"]
             }
         });
@@ -123,443 +121,19 @@ fn jdt_cache_retention_matches_the_shared_compatibility_fixture() {
 }
 
 #[test]
-fn maven_scan_returns_recursive_shared_project_model() {
-    let source_roots_fixture: Value = serde_json::from_str(include_str!(
-        "../../../../shared/fixtures/maven/source-roots-v1.json"
-    ))
-    .expect("Maven source-roots fixture should be valid JSON");
-    let root = temporary_root("maven");
-    fs::create_dir_all(root.join("module-a/module-b")).expect("modules should be creatable");
-    fs::write(
-        root.join("pom.xml"),
-        r#"<project><groupId>com.example</groupId><artifactId>demo</artifactId><version>1</version><packaging>pom</packaging><modules><module>module-a</module></modules><profiles><profile><id>dev</id><activation><activeByDefault>true</activeByDefault></activation></profile></profiles></project>"#,
-    )
-    .expect("root pom should be writable");
-    fs::write(
-        root.join("module-a/pom.xml"),
-        r#"<project><artifactId>one</artifactId><modules><module>module-b</module></modules></project>"#,
-    )
-    .expect("module pom should be writable");
-    fs::write(
-        root.join("module-a/module-b/pom.xml"),
-        r#"<project><artifactId>two</artifactId></project>"#,
-    )
-    .expect("nested pom should be writable");
-    fs::write(root.join("mvnw.cmd"), "@echo off\n").expect("wrapper should be writable");
-
-    let request = serde_json::json!({
-        "id": "maven",
-        "command": "maven.scan",
-        "payload": {"root": root, "paths": ["module-a/pom.xml", "pom.xml"]}
-    });
-    let response: Value = serde_json::from_str(&execute_json(
-        &serde_json::to_string(&request).expect("Maven request should encode"),
-    ))
-    .expect("Maven response should be JSON");
-    assert_eq!(response["ok"], true);
-    assert_eq!(response["data"]["relativePath"], ".");
-    assert_eq!(response["data"]["artifactId"], "demo");
-    assert_eq!(response["data"]["packaging"], "pom");
-    assert_eq!(response["data"]["profiles"][0]["id"], "dev");
-    assert_eq!(response["data"]["hasWrapper"], true);
-    assert_eq!(response["data"]["sourceRoots"].as_array().unwrap().len(), 0);
-    assert_eq!(response["data"]["modules"][0]["relativePath"], "module-a");
-    assert_eq!(
-        response["data"]["modules"][0]["sourceRoots"],
-        source_roots_fixture["cases"][0]["sourceRoots"]
-    );
-    assert_eq!(
-        response["data"]["modules"][0]["modules"][0]["relativePath"],
-        "module-a/module-b"
-    );
-    let diagnostics = serde_json::json!({
-        "id": "maven-diagnostics",
-        "command": "maven.diagnostics",
-        "payload": {
-            "root": root,
-            "output": "[ERROR] src/App.java:[12,4] cannot find symbol\n[ERROR] src/App.java:[12,4] cannot find symbol\n[WARNING] src/App.java:[4] unused import\n"
-        }
-    });
-    let diagnostics_response: Value = serde_json::from_str(&execute_json(
-        &serde_json::to_string(&diagnostics).expect("diagnostics request should encode"),
-    ))
-    .expect("diagnostics response should be JSON");
-    assert_eq!(diagnostics_response["ok"], true);
-    assert_eq!(
-        diagnostics_response["data"]["issues"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
-    assert_eq!(
-        diagnostics_response["data"]["issues"][0]["severity"],
-        "error"
-    );
-    fs::remove_dir_all(root).expect("Maven fixture should be removable");
-}
-
-#[test]
-fn maven_scan_recognizes_configured_and_generated_source_roots_per_module() {
-    let source_roots_fixture: Value = serde_json::from_str(include_str!(
-        "../../../../shared/fixtures/maven/source-roots-v1.json"
-    ))
-    .expect("Maven source-roots fixture should be valid JSON");
-    let root = temporary_root("maven-source-roots");
-    fs::create_dir_all(root.join("module")).expect("module should be creatable");
-    fs::write(
-        root.join("pom.xml"),
-        r#"<project><artifactId>demo</artifactId><packaging>pom</packaging><modules><module>module</module></modules></project>"#,
-    )
-    .expect("reactor pom should be writable");
-    fs::write(
-        root.join("module/pom.xml"),
-        r#"<project><artifactId>configured</artifactId><build><sourceDirectory>${project.basedir}/custom/java</sourceDirectory><resources><resource><directory>custom/resources</directory></resource><resource><directory>custom/resources</directory></resource><resource><directory>../outside</directory></resource></resources><testSourceDirectory>custom\test-java</testSourceDirectory><testResources><testResource><directory>custom/test-resources</directory></testResource></testResources><plugins><plugin><artifactId>maven-compiler-plugin</artifactId><configuration><generatedSourcesDirectory>${project.build.directory}/generated-sources/annotations</generatedSourcesDirectory><generatedTestSourcesDirectory>target/generated-test-sources</generatedTestSourcesDirectory></configuration></plugin></plugins></build></project>"#,
-    )
-    .expect("configured pom should be writable");
-
-    let request = serde_json::json!({
-        "id": "maven-source-roots",
-        "command": "maven.scan",
-        "payload": {"root": root, "paths": ["module/pom.xml"]}
-    });
-    let response: Value = serde_json::from_str(&execute_json(&request.to_string()))
-        .expect("Maven response should be JSON");
-
-    assert_eq!(response["ok"], true, "{response}");
-    assert_eq!(
-        response["data"]["modules"][0]["sourceRoots"],
-        source_roots_fixture["cases"][1]["sourceRoots"]
-    );
-    fs::remove_dir_all(root).expect("Maven fixture should be removable");
-}
-
-#[test]
-fn maven_scan_expands_custom_build_directory_and_execution_scoped_sources() {
-    let source_roots_fixture: Value = serde_json::from_str(include_str!(
-        "../../../../shared/fixtures/maven/source-roots-v1.json"
-    ))
-    .expect("Maven source-roots fixture should be valid JSON");
-    let root = temporary_root("maven-source-root-regressions");
-    fs::create_dir_all(root.join("custom-build")).expect("custom module should be creatable");
-    fs::create_dir_all(root.join("execution-scoped"))
-        .expect("execution module should be creatable");
-    fs::write(
-        root.join("pom.xml"),
-        r#"<project><artifactId>demo</artifactId><packaging>pom</packaging><modules><module>custom-build</module><module>execution-scoped</module></modules></project>"#,
-    )
-    .expect("reactor pom should be writable");
-    fs::write(
-        root.join("custom-build/pom.xml"),
-        r#"<project><artifactId>custom-build</artifactId><build><directory>build-output</directory><plugins><plugin><artifactId>maven-compiler-plugin</artifactId><configuration><generatedSourcesDirectory>${project.build.directory}/generated-sources/annotations</generatedSourcesDirectory><generatedTestSourcesDirectory>${project.build.directory}/generated-test-sources/fixtures</generatedTestSourcesDirectory></configuration></plugin></plugins></build></project>"#,
-    )
-    .expect("custom build pom should be writable");
-    fs::write(
-        root.join("execution-scoped/pom.xml"),
-        r#"<project><artifactId>execution-scoped</artifactId><build><plugins><plugin><executions><execution><id>add-generated</id><configuration><sources><source>target/generated-sources/openapi</source></sources><testSources><testSource>target/generated-test-sources/fixtures</testSource></testSources></configuration></execution></executions><artifactId>build-helper-maven-plugin</artifactId></plugin></plugins></build></project>"#,
-    )
-    .expect("execution-scoped pom should be writable");
-
-    let request = serde_json::json!({
-        "id": "maven-source-root-regressions",
-        "command": "maven.scan",
-        "payload": {"root": root, "paths": ["custom-build/pom.xml"]}
-    });
-    let response: Value = serde_json::from_str(&execute_json(&request.to_string()))
-        .expect("Maven response should be JSON");
-
-    assert_eq!(response["ok"], true, "{response}");
-    assert_eq!(
-        response["data"]["modules"][0]["sourceRoots"],
-        source_roots_fixture["cases"][2]["sourceRoots"]
-    );
-    assert_eq!(
-        response["data"]["modules"][1]["sourceRoots"],
-        source_roots_fixture["cases"][3]["sourceRoots"]
-    );
-    fs::remove_dir_all(root).expect("Maven fixture should be removable");
-}
-
-#[test]
-fn maven_scan_ignores_unrelated_plugin_sources_and_invalid_build_directory() {
-    let source_roots_fixture: Value = serde_json::from_str(include_str!(
-        "../../../../shared/fixtures/maven/source-roots-v1.json"
-    ))
-    .expect("Maven source-roots fixture should be valid JSON");
-    let root = temporary_root("maven-source-root-boundaries");
-    fs::create_dir_all(root.join("unrelated-plugin"))
-        .expect("unrelated plugin module should be creatable");
-    fs::create_dir_all(root.join("invalid-build"))
-        .expect("invalid build module should be creatable");
-    fs::write(
-        root.join("pom.xml"),
-        r#"<project><artifactId>demo</artifactId><packaging>pom</packaging><modules><module>unrelated-plugin</module><module>invalid-build</module></modules></project>"#,
-    )
-    .expect("reactor pom should be writable");
-    fs::write(
-        root.join("unrelated-plugin/pom.xml"),
-        r#"<project><artifactId>unrelated-plugin</artifactId><build><plugins><plugin><configuration><sources><source>target/generated-sources/not-a-source-root</source></sources></configuration><artifactId>unrelated-plugin</artifactId></plugin></plugins></build></project>"#,
-    )
-    .expect("unrelated plugin pom should be writable");
-    fs::write(
-        root.join("invalid-build/pom.xml"),
-        r#"<project><artifactId>invalid-build</artifactId><build><directory>${unresolved.output}</directory></build></project>"#,
-    )
-    .expect("invalid build pom should be writable");
-
-    let request = serde_json::json!({
-        "id": "maven-source-root-boundaries",
-        "command": "maven.scan",
-        "payload": {"root": root, "paths": ["pom.xml"]}
-    });
-    let response: Value = serde_json::from_str(&execute_json(&request.to_string()))
-        .expect("Maven response should be JSON");
-
-    assert_eq!(response["ok"], true, "{response}");
-    assert_eq!(
-        response["data"]["modules"][0]["sourceRoots"],
-        source_roots_fixture["cases"][0]["sourceRoots"]
-    );
-    let mut expected_without_generated = source_roots_fixture["cases"][0]["sourceRoots"]
-        .as_array()
-        .expect("standard source roots should be an array")
-        .clone();
-    expected_without_generated.truncate(4);
-    assert_eq!(
-        response["data"]["modules"][1]["sourceRoots"],
-        Value::Array(expected_without_generated)
-    );
-    fs::remove_dir_all(root).expect("Maven fixture should be removable");
-}
-
-#[test]
-fn maven_jdt_configuration_includes_module_java_source_paths() {
-    let root = temporary_root("maven-jdt-source-paths");
-    fs::create_dir_all(root.join("modules/api")).expect("module should be creatable");
-    fs::write(
-        root.join("pom.xml"),
-        r#"<project><artifactId>demo</artifactId><packaging>pom</packaging><modules><module>modules/api</module></modules></project>"#,
-    )
-    .expect("reactor pom should be writable");
-    fs::write(
-        root.join("modules/api/pom.xml"),
-        r#"<project><artifactId>api</artifactId><build><sourceDirectory>src/custom-java</sourceDirectory><testSourceDirectory>src/custom-test</testSourceDirectory></build></project>"#,
-    )
-    .expect("module pom should be writable");
-
-    let configuration = jdt_configuration(
-        root.to_str().expect("temporary root should be UTF-8"),
-        MavenLaunchContextRequest {
-            version: 1,
-            reactor_path: ".".to_string(),
-            profiles: Vec::new(),
-            settings_path: None,
-            local_repository_path: None,
-            skip_tests: false,
-            maven_executable_path: None,
-            java_home_path: None,
-        },
-    )
-    .expect("JDT Maven configuration should parse");
-
-    assert_eq!(configuration.project_paths, vec![".", "modules/api"]);
-    assert_eq!(
-        configuration.source_paths,
-        vec![
-            "modules/api/src/custom-java",
-            "modules/api/src/custom-test",
-            "modules/api/target/generated-sources",
-            "modules/api/target/generated-test-sources",
-        ]
-    );
-    fs::remove_dir_all(root).expect("Maven fixture should be removable");
-}
-
-#[test]
-fn maven_launch_plan_matches_the_shared_compatibility_fixture() {
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../shared/fixtures/maven/launch-plan-v1.json"
-    ))
-    .expect("Maven launch-plan fixture should be valid JSON");
-    let root = temporary_root("maven-launch-plan");
-    fs::create_dir_all(root.join("projects/demo/service-api"))
-        .expect("nested Maven reactor should be creatable");
-    fs::write(
-        root.join("projects/demo/pom.xml"),
-        r#"<project><artifactId>demo</artifactId><packaging>pom</packaging><modules><module>service-api</module></modules></project>"#,
-    )
-    .expect("reactor pom should be writable");
-    fs::write(
-        root.join("projects/demo/service-api/pom.xml"),
-        r#"<project><artifactId>service-api</artifactId></project>"#,
-    )
-    .expect("module pom should be writable");
-    fs::write(
-        root.join("pom.xml"),
-        r#"<project><artifactId>root</artifactId></project>"#,
-    )
-    .expect("root pom should be writable");
-    fs::create_dir_all(root.join(".mvn")).expect("Maven config directory should be creatable");
-    fs::write(root.join(".mvn/maven.config"), "-DfromConfig=true\n")
-        .expect("Maven config should be writable");
-
-    for case in fixture["cases"]
-        .as_array()
-        .expect("Maven launch-plan fixture should contain cases")
-    {
-        let request = serde_json::json!({
-            "id": case["name"],
-            "command": "maven.launchPlan",
-            "payload": {
-                "root": root,
-                "context": case["context"],
-                "module": case["module"],
-                "goals": case["goals"]
-            }
-        });
-        let response: Value = serde_json::from_str(&execute_json(&request.to_string()))
-            .expect("Maven launch-plan response should be JSON");
-
-        assert_eq!(response["ok"], true, "case {}: {response}", case["name"]);
-        assert_eq!(response["data"], case["expected"], "case {}", case["name"]);
-        assert!(!response["data"]["arguments"]
-            .as_array()
-            .expect("arguments should be an array")
-            .iter()
-            .any(|argument| argument == "-DfromConfig=true"));
-    }
-    fs::remove_dir_all(root).expect("Maven launch-plan fixture should be removable");
-}
-
-#[test]
-fn maven_launch_plan_rejects_unknown_modules_and_invalid_invocation_tokens() {
-    let root = temporary_root("maven-launch-invalid");
-    fs::create_dir_all(&root).expect("invalid Maven fixture should be creatable");
-    fs::write(
-        root.join("pom.xml"),
-        r#"<project><artifactId>demo</artifactId></project>"#,
-    )
-    .expect("pom should be writable");
-    for (name, module, goals) in [
-        ("unknown-module", Some("missing"), vec!["verify"]),
-        ("missing-goal", None, vec!["-q", "-DskipTests"]),
-        ("invalid-goal", None, vec!["verify;", "-q"]),
-        (
-            "control-character",
-            None,
-            vec!["verify", "-Dvalue=line\nbreak"],
-        ),
-    ] {
-        let response: Value = serde_json::from_str(&execute_json(
-            &serde_json::json!({
-                "id": name,
-                "command": "maven.launchPlan",
-                "payload": {
-                    "root": root,
-                    "context": {"version": 1, "reactorPath": "."},
-                    "module": module,
-                    "goals": goals
-                }
-            })
-            .to_string(),
-        ))
-        .expect("invalid Maven response should be JSON");
-        assert_eq!(response["ok"], false, "case {name}: {response}");
-        assert_eq!(response["error"]["code"], "invalid_request");
-    }
-    fs::remove_dir_all(root).expect("invalid Maven fixture should be removable");
-}
-
-#[test]
-fn maven_scan_discovers_a_deterministic_project_below_the_workspace() {
-    let root = temporary_root("nested-maven");
-    fs::create_dir_all(root.join("apps-a/module-a")).expect("first project should be creatable");
-    fs::create_dir_all(root.join("apps-z")).expect("second project should be creatable");
-    fs::write(
-        root.join("apps-a/pom.xml"),
-        r#"<project><artifactId>selected</artifactId><packaging>pom</packaging><modules><module>module-a</module></modules></project>"#,
-    )
-    .expect("first pom should be writable");
-    fs::write(
-        root.join("apps-a/module-a/pom.xml"),
-        r#"<project><artifactId>child</artifactId></project>"#,
-    )
-    .expect("module pom should be writable");
-    fs::write(
-        root.join("apps-z/pom.xml"),
-        r#"<project><artifactId>other</artifactId></project>"#,
-    )
-    .expect("second pom should be writable");
-
-    let request = serde_json::json!({
-        "id": "nested-maven",
-        "command": "maven.scan",
-        "payload": {
-            "root": root,
-            "paths": [
-                "apps-z/pom.xml",
-                "apps-a/module-a/pom.xml",
-                "apps-a/pom.xml"
-            ]
-        }
-    });
-    let response: Value = serde_json::from_str(&execute_json(
-        &serde_json::to_string(&request).expect("Maven request should encode"),
-    ))
-    .expect("Maven response should be JSON");
-
-    assert_eq!(response["ok"], true);
-    assert_eq!(response["data"]["relativePath"], "apps-a");
-    assert_eq!(response["data"]["artifactId"], "selected");
-    assert_eq!(response["data"]["modules"][0]["relativePath"], "module-a");
-    fs::remove_dir_all(root).expect("Maven fixture should be removable");
-}
-
-#[test]
-fn maven_scan_skips_a_malformed_root_descriptor_for_a_valid_nested_project() {
-    let root = temporary_root("nested-maven-malformed-root");
-    fs::create_dir_all(root.join("projects/demo")).expect("nested project should be creatable");
-    fs::write(root.join("pom.xml"), "<project><artifactId>broken")
-        .expect("malformed root pom should be writable");
-    fs::write(
-        root.join("projects/demo/pom.xml"),
-        r#"<project><artifactId>selected</artifactId></project>"#,
-    )
-    .expect("nested pom should be writable");
-
-    let request = serde_json::json!({
-        "id": "nested-maven-malformed-root",
-        "command": "maven.scan",
-        "payload": {
-            "root": root,
-            "paths": ["pom.xml", "projects/demo/pom.xml"]
-        }
-    });
-    let response: Value = serde_json::from_str(&execute_json(
-        &serde_json::to_string(&request).expect("Maven request should encode"),
-    ))
-    .expect("Maven response should be JSON");
-
-    assert_eq!(response["ok"], true, "{response}");
-    assert_eq!(response["data"]["relativePath"], "projects/demo");
-    assert_eq!(response["data"]["artifactId"], "selected");
-    fs::remove_dir_all(root).expect("Maven fixture should be removable");
-}
-
-#[test]
-fn java_run_configurations_match_workspace_relative_nested_maven_modules() {
-    let root = temporary_root("java-nested-maven-module");
+fn java_run_configurations_match_workspace_relative_nested_modules() {
+    let root = temporary_root("java-nested-module");
     let source = "projects/demo/service/src/main/java/com/example/App.java";
     fs::create_dir_all(root.join("projects/demo/service/src/main/java/com/example"))
         .expect("nested Java source directory should be creatable");
     fs::write(
         root.join(source),
-        "package com.example; @SpringBootApplication class App { public static void main(String[] args) {} }",
+        "package com.example;  class App { public static void main(String[] args) {} }",
     )
     .expect("nested Java source should be writable");
 
     let request = serde_json::json!({
-        "id": "java-nested-maven-module",
+        "id": "java-nested-module",
         "command": "java.runConfigurations",
         "payload": {
             "root": root,
@@ -587,7 +161,7 @@ fn java_core_commands_return_shared_runtime_and_structure_data() {
         .expect("Java source should be creatable");
     fs::write(
         root.join("src/main/java/com/example/App.java"),
-        "package com.example;\n@SpringBootApplication\nclass App {\n    static void main(String[] args) {}\n}\n",
+        "package com.example;\n\nclass App {\n    static void main(String[] args) {}\n}\n",
     )
     .expect("Java source should be writable");
     let configurations = serde_json::json!({
@@ -608,7 +182,7 @@ fn java_core_commands_return_shared_runtime_and_structure_data() {
         response["data"]["mainClasses"][0]["qualifiedName"],
         "com.example.App"
     );
-    assert_eq!(response["data"]["configurations"][0]["kind"], "springBoot");
+    assert_eq!(response["data"]["configurations"][0]["kind"], "javaMain");
     assert_eq!(response["data"]["configurations"][0]["modulePath"], "src");
     assert_eq!(
         response["data"]["configurations"][0]["sourcePath"],
@@ -718,15 +292,5 @@ fn java_core_commands_return_shared_runtime_and_structure_data() {
     ))
     .expect("definition response should be JSON");
     assert_eq!(definition_response["data"]["line"], 1);
-    let server_port = serde_json::json!({
-        "id": "java-port",
-        "command": "java.serverPort",
-        "payload": {"content": "server:\n  port: 8080\n", "fileExtension": "yml"}
-    });
-    let port_response: Value = serde_json::from_str(&execute_json(
-        &serde_json::to_string(&server_port).expect("server port request should encode"),
-    ))
-    .expect("server port response should be JSON");
-    assert_eq!(port_response["data"]["port"], 8080);
     fs::remove_dir_all(root).expect("Java fixture should be removable");
 }

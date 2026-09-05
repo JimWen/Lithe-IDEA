@@ -5,7 +5,7 @@ import SwiftUI
 
 /// 构建/运行输出的统一渲染视图:
 /// - 支持 ANSI 转义序列着色(复用终端渲染器)
-/// - Maven 错误行 `[ERROR] path:[line,col]` 与 Java 堆栈行 `at x.y.Foo.bar(Foo.java:42)` 可点击跳转源码
+/// - Java 堆栈行 `at x.y.Foo.bar(Foo.java:42)` 可点击跳转源码
 /// - 智能滚动:用户上翻后不强制拉底,并显示 "Jump to latest" 按钮
 /// - 右上角一键复制全部输出
 struct OutputTextView: View {
@@ -190,10 +190,6 @@ struct OutputTextView: View {
         let column: Int?
     }
 
-    private static let mavenExpression = try! NSRegularExpression(
-        pattern: #"\[(ERROR|WARNING)\]\s+(.+?):\[(\d+)(?:,(\d+))?\]"#
-    )
-
     private static let stackExpression = try! NSRegularExpression(
         pattern: #"\bat\s+([\w.$]+(?:\$[\w$]+)?)\.([\w$<>]+)\(([\w$]+\.java):(\d+)\)"#
     )
@@ -205,22 +201,6 @@ struct OutputTextView: View {
         text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: [.byLines]) { substring, lineRange, _, _ in
             guard let line = substring, !line.isEmpty else { return }
             let lineNSRange = NSRange(line.startIndex..<line.endIndex, in: line)
-
-            if let match = mavenExpression.firstMatch(in: line, range: lineNSRange),
-               let path = capture(match, at: 2, in: line),
-               let lineNumber = capture(match, at: 3, in: line).flatMap(Int.init) {
-                let column = capture(match, at: 4, in: line).flatMap(Int.init)
-                guard let url = resolvePath(path, searchRoots: searchRoots, fileExists: fileExists) else { return }
-                let kind: OutputLocation.Kind = capture(match, at: 1, in: line) == "ERROR" ? .error : .warning
-                locations.append(OutputLocation(
-                    range: lineRange,
-                    kind: kind,
-                    url: url,
-                    line: lineNumber,
-                    column: column
-                ))
-                return
-            }
 
             if let match = stackExpression.firstMatch(in: line, range: lineNSRange),
                let className = capture(match, at: 1, in: line),
@@ -261,7 +241,7 @@ struct OutputTextView: View {
         return nil
     }
 
-    /// 根据 Java 类全名(如 com.example.Foo)推断 Maven 源码路径并定位存在的文件。
+    /// 根据 Java 类全名(如 com.example.Foo)推断 Java 源码路径并定位存在的文件。
     private static func resolveClassFile(_ className: String, searchRoots: [URL], fileExists: (URL) -> Bool) -> URL? {
         let outerClassName = className.split(separator: "$", maxSplits: 1).first.map(String.init) ?? className
         let relativePath = outerClassName.replacingOccurrences(of: ".", with: "/") + ".java"
@@ -557,7 +537,7 @@ private struct OutputTextStorageView: NSViewRepresentable {
 // MARK: - ANSI 渲染器
 
 /// 将含 ANSI 转义序列的文本解析为「干净文本 + 样式段」,再组装成 NSAttributedString。
-/// 终端、Maven 构建输出与运行输出共用。
+/// 终端与运行输出共用。
 enum ANSIOutputRenderer {
     struct Style {
         var foreground: NSColor

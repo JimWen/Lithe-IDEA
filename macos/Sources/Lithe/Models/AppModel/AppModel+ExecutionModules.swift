@@ -9,13 +9,11 @@ extension AppModel {
         let genericFeature: GenericDebugFeatureModel
     }
     struct ExecutionFeatureAccess {
-        let mavenFeature: MavenFeatureModel
         let runFeature: RunFeatureModel
         let tests: LanguageTestService
         let projectDevelopment: ProjectDevelopmentFeatureModel
     }
 
-    var mavenFeatureIfActive: MavenFeatureModel? { executionCapability?.mavenFeature }
     var runFeatureIfActive: RunFeatureModel? { executionCapability?.runFeature }
     var genericDebugFeatureIfActive: GenericDebugFeatureModel? {
         debugCapability?.genericFeature as? GenericDebugFeatureModel
@@ -27,16 +25,14 @@ extension AppModel {
         // hand back a run feature that teardown releases moments later, and the
         // deferred action waiting on it would never be resumed.
         await awaitModuleRuntimeShutdown()
-        if let mavenFeature = mavenFeatureIfActive,
-           let runFeature = runFeatureIfActive,
+        if let runFeature = runFeatureIfActive,
            let tests = languageTestServiceIfActive,
            let projectDevelopment = executionCapability?.projectDevelopment {
-            return ExecutionFeatureAccess(mavenFeature: mavenFeature, runFeature: runFeature, tests: tests, projectDevelopment: projectDevelopment)
+            return ExecutionFeatureAccess(runFeature: runFeature, tests: tests, projectDevelopment: projectDevelopment)
         }
         do {
             let value = try await services.moduleRuntime.activateCapability(.executionWorkspace)
             guard let capability = value as? LitheExecutionModule.ExecutionModuleCapability else { return nil }
-            let mavenFeature = capability.mavenFeature
             let runFeature = capability.runFeature
             let tests = capability.testService
             let projectDevelopment = capability.projectDevelopment
@@ -47,7 +43,7 @@ extension AppModel {
             observeModuleFeature(.execution, observation: tests.objectWillChange.sink { [weak self] _ in
                 self?.scheduleObjectWillChangeRelay()
             })
-            return ExecutionFeatureAccess(mavenFeature: mavenFeature, runFeature: runFeature, tests: tests, projectDevelopment: projectDevelopment)
+            return ExecutionFeatureAccess(runFeature: runFeature, tests: tests, projectDevelopment: projectDevelopment)
         } catch {
             showNotification(error.localizedDescription)
             return nil

@@ -50,11 +50,9 @@ enum LitheCommandCatalog {
         command("find-usages", "Find Usages", "Find references to the selected symbol", .navigation, "u", [.option, .command]),
         command("search-in-project", "Find in Files", "Search text across the workspace", .navigation, "f", [.shift, .command]),
         command("replace-in-project", "Replace in Files", "Replace text across the workspace", .navigation, "r", [.shift, .command]),
-        command("spring-endpoints", "Spring Endpoints", "Show indexed Spring MVC routes", .navigation),
 
         command("toggle-terminal", "Toggle Terminal", "Show or hide the Terminal tool window", .window),
         command("toggle-problems", "Toggle Problems", "Show or hide language diagnostics", .window),
-        command("toggle-maven", "Toggle Maven", "Show or hide the Maven tool window", .window),
         command("toggle-git-log", "Toggle Git Log", "Show or hide Git history", .window),
         command("toggle-run", "Toggle Run", "Show or hide run output", .window),
         command("toggle-tests", "Toggle Tests", "Show or hide language-neutral test runners", .window),

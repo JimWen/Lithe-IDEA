@@ -31,20 +31,6 @@ pub struct CoreRequest {
 pub enum CoreCommand {
     /// Reports the Core and protocol versions (`core.ping`).
     Ping,
-    /// Starts a Discourse user API key authorization (`community.discourse.auth.begin`).
-    CommunityDiscourseAuthBegin,
-    /// Decrypts and verifies a Discourse authorization callback (`community.discourse.auth.complete`).
-    CommunityDiscourseAuthComplete,
-    /// Lists normalized latest or top Discourse topics (`community.discourse.topics`).
-    CommunityDiscourseTopics,
-    /// Reads one normalized Discourse topic (`community.discourse.topic`).
-    CommunityDiscourseTopic,
-    /// Lists normalized Discourse categories (`community.discourse.categories`).
-    CommunityDiscourseCategories,
-    /// Searches Discourse topics and posts (`community.discourse.search`).
-    CommunityDiscourseSearch,
-    /// Revokes the current Discourse user API key (`community.discourse.auth.revoke`).
-    CommunityDiscourseAuthRevoke,
     /// Builds the visible project tree (`workspace.snapshot`).
     WorkspaceSnapshot,
     /// Builds or reuses the workspace search index (`workspace.searchIndex.warm`).
@@ -77,12 +63,6 @@ pub enum CoreCommand {
     HistoryRename,
     /// Deletes one history snapshot (`history.delete`).
     HistoryDelete,
-    /// Inspects a declared Maven reactor (`maven.scan`).
-    MavenScan,
-    /// Produces a deterministic Maven invocation (`maven.launchPlan`).
-    MavenLaunchPlan,
-    /// Normalizes diagnostics from Maven output (`maven.diagnostics`).
-    MavenDiagnostics,
     /// Renders and sanitizes shared Markdown (`markdown.render`).
     MarkdownRender,
     /// Creates one transport-neutral Debug Adapter Protocol session (`debug.createSession`).
@@ -175,8 +155,6 @@ pub enum CoreCommand {
     RunConfigUpdateOptions,
     /// Prepares one complete run-configuration editor save (`runConfig.saveEditorChanges`).
     RunConfigSaveEditorChanges,
-    /// Adds a user-authored run configuration (`runConfig.createUserConfiguration`).
-    RunConfigCreateUserConfiguration,
     /// Produces the process plan for one configuration (`runConfig.createLaunchPlan`).
     RunConfigCreateLaunchPlan,
     /// Counts workspace uses of Java declarations (`java.codeVision`).
@@ -185,12 +163,8 @@ pub enum CoreCommand {
     JavaClassName,
     /// Finds a Java type or member declaration (`java.sourceDefinition`).
     JavaSourceDefinition,
-    /// Reads a Spring server port from configuration (`java.serverPort`).
-    JavaServerPort,
     /// Computes lightweight Java structure features (`java.structure`).
     JavaStructure,
-    /// Builds Spring configuration, bean, injection, and endpoint indexes (`spring.index`).
-    SpringIndex,
     /// Reads normalized repository and working-tree state (`git.status`).
     GitStatus,
     /// Resolves paths a Git-aware watcher must observe (`git.watchContext`).
@@ -251,13 +225,6 @@ impl CoreCommand {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "core.ping" => Some(Self::Ping),
-            "community.discourse.auth.begin" => Some(Self::CommunityDiscourseAuthBegin),
-            "community.discourse.auth.complete" => Some(Self::CommunityDiscourseAuthComplete),
-            "community.discourse.topics" => Some(Self::CommunityDiscourseTopics),
-            "community.discourse.topic" => Some(Self::CommunityDiscourseTopic),
-            "community.discourse.categories" => Some(Self::CommunityDiscourseCategories),
-            "community.discourse.search" => Some(Self::CommunityDiscourseSearch),
-            "community.discourse.auth.revoke" => Some(Self::CommunityDiscourseAuthRevoke),
             "workspace.snapshot" => Some(Self::WorkspaceSnapshot),
             "workspace.searchIndex.warm" => Some(Self::WorkspaceSearchIndexWarm),
             "workspace.searchIndex.update" => Some(Self::WorkspaceSearchIndexUpdate),
@@ -274,9 +241,6 @@ impl CoreCommand {
             "history.relocate" => Some(Self::HistoryRelocate),
             "history.rename" => Some(Self::HistoryRename),
             "history.delete" => Some(Self::HistoryDelete),
-            "maven.scan" => Some(Self::MavenScan),
-            "maven.launchPlan" => Some(Self::MavenLaunchPlan),
-            "maven.diagnostics" => Some(Self::MavenDiagnostics),
             "markdown.render" => Some(Self::MarkdownRender),
             "debug.createSession" => Some(Self::DebugCreateSession),
             "debug.launch" => Some(Self::DebugLaunch),
@@ -322,15 +286,12 @@ impl CoreCommand {
             "runConfig.resolve" => Some(Self::RunConfigResolve),
             "runConfig.updateOptions" => Some(Self::RunConfigUpdateOptions),
             "runConfig.saveEditorChanges" => Some(Self::RunConfigSaveEditorChanges),
-            "runConfig.createUserConfiguration" => Some(Self::RunConfigCreateUserConfiguration),
             "runConfig.createLaunchPlan" => Some(Self::RunConfigCreateLaunchPlan),
             "java.codeVision" => Some(Self::JavaCodeVision),
             "java.className" => Some(Self::JavaClassName),
             "java.sourceDefinition" => Some(Self::JavaSourceDefinition),
-            "java.serverPort" => Some(Self::JavaServerPort),
             "java.structure" => Some(Self::JavaStructure),
             "java.navigationMarkers" => Some(Self::JavaNavigationMarkers),
-            "spring.index" => Some(Self::SpringIndex),
             "git.status" => Some(Self::GitStatus),
             "git.watchContext" => Some(Self::GitWatchContext),
             "git.worktrees" => Some(Self::GitWorktrees),
@@ -379,21 +340,6 @@ mod tests {
             "lsp.pollEvents",
             "lsp.waitEvents",
             "lsp.destroyServer",
-        ] {
-            assert!(CoreCommand::parse(command).is_some(), "missing {command}");
-        }
-    }
-
-    #[test]
-    fn parses_discourse_authorization_commands() {
-        for command in [
-            "community.discourse.auth.begin",
-            "community.discourse.auth.complete",
-            "community.discourse.auth.revoke",
-            "community.discourse.categories",
-            "community.discourse.search",
-            "community.discourse.topic",
-            "community.discourse.topics",
         ] {
             assert!(CoreCommand::parse(command).is_some(), "missing {command}");
         }

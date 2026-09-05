@@ -11,9 +11,8 @@ struct MacJdtWorkspaceStateTests {
 
         let state = MacJdtWorkspaceState(
             cacheDirectoryURL: fixture.cacheURL,
-            workspaceFingerprintResolver: { buildFiles, modules, identity in
+            workspaceFingerprintResolver: { buildFiles, identity in
                 #expect(buildFiles.isEmpty)
-                #expect(modules.isEmpty)
                 #expect(identity == "7.6.5|installation=\(fixture.executableURL.path)")
                 return "core-fingerprint"
             },
@@ -29,14 +28,14 @@ struct MacJdtWorkspaceStateTests {
     }
 
     @Test
-    func fingerprintObservesRootBuildFilesAndDirectMavenModules() throws {
+    func fingerprintObservesRootBuildFiles() throws {
         let fixture = try makeFixture()
         defer { fixture.remove() }
         let capture = FingerprintObservationCapture()
         let state = MacJdtWorkspaceState(
             cacheDirectoryURL: fixture.cacheURL,
-            workspaceFingerprintResolver: { buildFiles, modules, version in
-                capture.record(buildFiles: buildFiles, modules: modules, version: version)
+            workspaceFingerprintResolver: { buildFiles, version in
+                capture.record(buildFiles: buildFiles, version: version)
                 return "core-fingerprint"
             },
             workspaceKeyResolver: { _, _ in String(repeating: "a", count: 64) }
@@ -47,49 +46,23 @@ struct MacJdtWorkspaceStateTests {
         )
         #expect(capture.last?.buildFiles.isEmpty == true)
 
-        try write("a", to: fixture.workspaceURL.appendingPathComponent("pom.xml"))
+        try write("a", to: fixture.workspaceURL.appendingPathComponent("build.gradle"))
         _ = try state.fingerprint(
             at: fixture.workspaceURL,
             languageServerExecutableURL: fixture.executableURL
         )
-        let initialPomSize = capture.last?.buildFiles.first?.sizeBytes
-        #expect(capture.last?.buildFiles.map(\.path) == ["pom.xml"])
+        let initialBuildSize = capture.last?.buildFiles.first?.sizeBytes
+        #expect(capture.last?.buildFiles.map(\.path) == ["build.gradle"])
         try write(
             "a larger project descriptor",
-            to: fixture.workspaceURL.appendingPathComponent("pom.xml")
+            to: fixture.workspaceURL.appendingPathComponent("build.gradle")
         )
         _ = try state.fingerprint(
             at: fixture.workspaceURL,
             languageServerExecutableURL: fixture.executableURL
         )
-        #expect((capture.last?.buildFiles.first?.sizeBytes ?? 0) > (initialPomSize ?? 0))
+        #expect((capture.last?.buildFiles.first?.sizeBytes ?? 0) > (initialBuildSize ?? 0))
 
-        for moduleName in ["zeta", "alpha"] {
-            let moduleURL = fixture.workspaceURL.appendingPathComponent(
-                moduleName,
-                isDirectory: true
-            )
-            try FileManager.default.createDirectory(
-                at: moduleURL,
-                withIntermediateDirectories: true
-            )
-            try write("<project/>", to: moduleURL.appendingPathComponent("pom.xml"))
-        }
-        let gradleOnlyURL = fixture.workspaceURL.appendingPathComponent(
-            "gradle-only",
-            isDirectory: true
-        )
-        try FileManager.default.createDirectory(
-            at: gradleOnlyURL,
-            withIntermediateDirectories: true
-        )
-        try write("plugins {}", to: gradleOnlyURL.appendingPathComponent("build.gradle"))
-        _ = try state.fingerprint(
-            at: fixture.workspaceURL,
-            languageServerExecutableURL: fixture.executableURL
-        )
-
-        #expect(Set(capture.last?.modules ?? []) == Set(["alpha", "zeta"]))
         #expect(capture.last?.version == "7.6.5|installation=\(fixture.executableURL.path)")
     }
 
@@ -242,7 +215,6 @@ struct MacJdtWorkspaceStateTests {
 private final class FingerprintObservationCapture {
     struct Entry {
         let buildFiles: [RustCoreBridge.JdtBuildFileObservation]
-        let modules: [String]
         let version: String
     }
 
@@ -250,10 +222,9 @@ private final class FingerprintObservationCapture {
 
     func record(
         buildFiles: [RustCoreBridge.JdtBuildFileObservation],
-        modules: [String],
         version: String
     ) {
-        last = Entry(buildFiles: buildFiles, modules: modules, version: version)
+        last = Entry(buildFiles: buildFiles, version: version)
     }
 }
 

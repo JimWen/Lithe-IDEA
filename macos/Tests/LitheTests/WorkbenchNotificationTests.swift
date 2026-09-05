@@ -43,6 +43,28 @@ struct WorkbenchNotificationTests {
     }
 
     @Test
+    func javaWithoutBundledRuntimeStaysIdleWithoutNotifications() {
+        let store = WorkbenchNotificationTestStore()
+        let settings = AppSettings(store: store)
+        let services = MacServiceContainer(
+            store: store, settings: settings, moduleLaunchMode: .safeMode
+        ).services
+        let model = AppModel(settings: settings, services: services)
+        let root = URL(fileURLWithPath: "/workspace/plain-java", isDirectory: true)
+        let source = root.appendingPathComponent("Main.java")
+        let document = EditorDocument(
+            url: source, text: "class Main {}", modificationDate: nil
+        )
+
+        #expect(!services.projectRuntimeService.hasJavaLanguageServerRuntime)
+        model.prepareJavaLanguageServerForWorkspaceIfNeeded(at: root, files: [source])
+        #expect(model.prepareJavaLanguageServerRuntimeIfNeeded(for: document) == .unavailable)
+        #expect(model.notifications.isEmpty)
+        #expect(!services.projectRuntimeService.isJavaLanguageServerRuntimePrepared())
+        #expect(services.projectRuntimeService.javaLanguageServerRuntimeFailureMessage() == nil)
+    }
+
+    @Test
     func disabledYAMLLanguageServerDoesNotShowAStartupError() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lithe-disabled-yaml-lsp-\(UUID().uuidString)")

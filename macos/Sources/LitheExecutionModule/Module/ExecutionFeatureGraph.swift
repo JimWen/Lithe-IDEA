@@ -5,28 +5,21 @@ import LitheModuleAPI
 
 @MainActor
 package final class ExecutionFeatureGraph: NSObject, ExecutionServiceGraph {
-    package let maven: MavenService
     package let run: RunService
     package let tests: LanguageTestService
-    package let mavenFeature: MavenFeatureModel
     package let runFeature: RunFeatureModel
     package let projectDevelopment: ProjectDevelopmentFeatureModel
     private var activityObservers: Set<AnyCancellable> = []
-    private var mavenLease: ModuleLease?
     private var runLease: ModuleLease?
     private var testLease: ModuleLease?
 
-    package init(maven: MavenService, run: RunService, tests: LanguageTestService) {
-        self.maven = maven; self.run = run; self.tests = tests
-        mavenFeature = MavenFeatureModel(service: maven)
+    package init(run: RunService, tests: LanguageTestService) {
+        self.run = run; self.tests = tests
         runFeature = RunFeatureModel(service: run)
-        projectDevelopment = ProjectDevelopmentFeatureModel(mavenFeature: mavenFeature, runFeature: runFeature)
-        run.configureMavenContextProvider { [weak maven] in
-            maven?.launchContext
-        }
+        projectDevelopment = ProjectDevelopmentFeatureModel(runFeature: runFeature)
     }
 
-    package var isActive: Bool { maven.isRunning || run.isRunning || tests.isRunning }
+    package var isActive: Bool { run.isRunning || tests.isRunning }
     package var hasActiveExecutionWork: Bool { isActive }
     package func activate(context: ModuleContext) {
         configureModuleLeases { reason in context.leases.acquireLease(reason: reason) }
@@ -36,16 +29,6 @@ package final class ExecutionFeatureGraph: NSObject, ExecutionServiceGraph {
     }
 
     package func configureModuleLeases(acquire: @escaping @MainActor (String) -> ModuleLease) {
-        maven.$taskState.map { state in
-            switch state {
-            case .running, .stopping: true
-            case .idle, .cancelled, .failed: false
-            }
-        }.removeDuplicates().sink { [weak self] active in
-            guard let self else { return }
-            if active, mavenLease == nil { mavenLease = acquire("Maven build is running") }
-            if !active { mavenLease?.release(); mavenLease = nil }
-        }.store(in: &activityObservers)
         run.$isRunning.removeDuplicates().sink { [weak self] active in
             guard let self else { return }
             if active, runLease == nil { runLease = acquire("Run configuration is running") }
@@ -59,13 +42,12 @@ package final class ExecutionFeatureGraph: NSObject, ExecutionServiceGraph {
     }
 
     package func stop() {
-        maven.stop(); run.stop(); tests.stop()
+        run.stop(); tests.stop()
         releaseLeases()
         activityObservers.removeAll()
     }
 
     private func releaseLeases() {
-        mavenLease?.release(); mavenLease = nil
         runLease?.release(); runLease = nil
         testLease?.release(); testLease = nil
     }

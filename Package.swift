@@ -114,7 +114,11 @@ let package = Package(
                 .copy("Resources/WorkbenchBackgrounds")
             ],
             swiftSettings: [
-                .swiftLanguageMode(.v5)
+                .swiftLanguageMode(.v5),
+                // Swift 6.2 aborts while reconstructing debug types for mutable
+                // CGFloat captures in layout helpers. Keep direct SwiftPM builds
+                // consistent with the supported build and preview scripts.
+                .unsafeFlags(["-Xfrontend", "-disable-round-trip-debug-types"])
             ]
         ),
         .testTarget(

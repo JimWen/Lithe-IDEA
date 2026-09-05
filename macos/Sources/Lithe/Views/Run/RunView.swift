@@ -726,14 +726,6 @@ struct RunView: View {
                            let javaHome = nonEmpty(options.javaHomePath) {
                             configurationDetailRow("JDK home", value: javaHome, monospaced: true)
                         }
-                        if configuration.kind.isMavenBacked,
-                           let mavenExecutable = nonEmpty(options.mavenExecutablePath) {
-                            configurationDetailRow("Maven", value: mavenExecutable, monospaced: true)
-                        }
-                        if configuration.kind.isMavenBacked,
-                           let mavenJavaHome = nonEmpty(options.mavenJavaHomePath) {
-                            configurationDetailRow("Maven JDK", value: mavenJavaHome, monospaced: true)
-                        }
                         if capabilities.contains(.javaVMArguments),
                            let vmArguments = nonEmpty(options.vmArguments) {
                             configurationDetailRow("VM arguments", value: vmArguments, monospaced: true)
@@ -741,20 +733,12 @@ struct RunView: View {
                         if let programArguments = nonEmpty(options.programArguments) {
                             configurationDetailRow("Program arguments", value: programArguments, monospaced: true)
                         }
-                        if capabilities.contains(.mavenProfiles), !options.activeProfiles.isEmpty {
-                            configurationDetailRow(
-                                "Active profiles",
-                                value: options.activeProfiles.sorted().joined(separator: ", "),
-                                monospaced: true
-                            )
-                        }
                     }
 
                     Group {
                         if (!capabilities.contains(.javaRuntime) || options.javaHomePath.isEmpty),
                            (!capabilities.contains(.javaVMArguments) || options.vmArguments.isEmpty),
-                           options.programArguments.isEmpty,
-                           (!capabilities.contains(.mavenProfiles) || options.activeProfiles.isEmpty) {
+                           options.programArguments.isEmpty {
                             configurationDetailRow("Options", value: String(localized: "Default options"))
                         }
 

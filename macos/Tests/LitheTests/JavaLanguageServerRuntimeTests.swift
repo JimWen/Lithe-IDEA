@@ -291,6 +291,10 @@ struct JavaLanguageServerRuntimeTests {
             store: JavaLanguageServerTestStore()
         )
 
+        #expect(!service.hasJavaLanguageServerRuntime)
+        #expect(!service.isJavaLanguageServerRuntimePrepared())
+        #expect(service.javaLanguageServerRuntimeFailureMessage() == nil)
+
         let result = await service.prepareJavaLanguageServerRuntime()
 
         #expect(service.javaLanguageServerExecutableURL() == nil)
@@ -359,7 +363,7 @@ private struct JavaLanguageServerTestRuntimeLocator: RuntimeLocator {
     func environment() -> [String: String] { [:] }
 
     func discover() -> RuntimeDiscoveryResult {
-        return RuntimeDiscoveryResult(javaRuntimes: runtimes, mavenRuntimes: [])
+        return RuntimeDiscoveryResult(javaRuntimes: runtimes)
     }
 
     func validJavaHome(path: String) -> URL? {
@@ -373,9 +377,6 @@ private struct JavaLanguageServerTestRuntimeLocator: RuntimeLocator {
     }
 
     func isExecutable(at url: URL) -> Bool { false }
-    func systemMavenExecutable() -> URL? { nil }
-    func mavenExecutable(forHomePath path: String) -> URL? { nil }
-    func mavenRuntime(at executableURL: URL) -> MavenRuntimeCandidate? { nil }
     func bundledJdkHome() -> URL? {
         bundledHomePath.map { URL(fileURLWithPath: $0, isDirectory: true) }
     }

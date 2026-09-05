@@ -360,21 +360,8 @@ struct SearchEverywhereView: View {
         return parent
     }
 
-    /// 结果归属的 Maven 模块 artifactID；非 Maven 项目或匹配不到时回退到顶层目录名。
+    /// Show the containing top-level workspace directory.
     private func moduleLabel(for url: URL) -> String {
-        let path = url.standardizedFileURL.path
-        if let project = model.mavenFeatureIfActive?.project {
-            // 多个模块可能嵌套，取路径最长（最深）的那个才是直接归属。
-            let owning = project.allModules
-                .filter { path.hasPrefix($0.url.standardizedFileURL.path + "/") }
-                .max { $0.url.standardizedFileURL.path.count < $1.url.standardizedFileURL.path.count }
-            if let owning {
-                return owning.displayName
-            }
-            if path.hasPrefix(project.rootURL.standardizedFileURL.path + "/") {
-                return project.displayName
-            }
-        }
         return model.relativePath(for: url).components(separatedBy: "/").first ?? ""
     }
 

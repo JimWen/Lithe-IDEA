@@ -30,7 +30,7 @@ struct DebugModuleTests {
     }
 
     @Test
-    func springPortConflictOutputProducesAnActionableDiagnostic() {
+    func servicePortConflictOutputProducesAnActionableDiagnostic() {
         let manager = DebugAdapterSessionManager(providers: []) { _, _ in nil }
         let feature = GenericDebugFeatureModel(sessions: manager)
 
@@ -1215,7 +1215,7 @@ struct DebugModuleTests {
             ),
             DebugStackFrame(
                 id: 3,
-                name: "org.springframework.cglib.Proxy.invoke",
+                name: "net.sf.cglib.Proxy.invoke",
                 sourceURL: nil,
                 line: 1,
                 column: 1,

@@ -159,112 +159,11 @@ pub struct HistoryEntriesResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-/// Maven profile identity and its default activation state.
-pub struct MavenProfileResponse {
-    pub id: String,
-    pub is_active_by_default: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// One module in the declared Maven reactor hierarchy.
-pub struct MavenModuleResponse {
-    pub relative_path: String,
-    pub group_id: Option<String>,
-    pub artifact_id: String,
-    pub version: Option<String>,
-    pub packaging: String,
-    pub source_roots: Vec<MavenSourceRootResponse>,
-    pub modules: Vec<MavenModuleResponse>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// One Maven source root relative to its owning module.
-pub struct MavenSourceRootResponse {
-    /// Module-relative path using `/` separators.
-    pub path: String,
-    /// Semantic source-set used by project and Java tooling views.
-    pub kind: MavenSourceRootKind,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Maven source-root categories kept distinct for main, test, and generated code.
-pub enum MavenSourceRootKind {
-    /// Production Java sources.
-    MainJava,
-    /// Production resource files.
-    MainResources,
-    /// Test Java sources.
-    TestJava,
-    /// Test resource files.
-    TestResources,
-    /// Generated production sources.
-    GeneratedMain,
-    /// Generated test sources.
-    GeneratedTest,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Maven reactor identity, modules, profiles, and wrapper availability.
-pub struct MavenScanResponse {
-    pub relative_path: String,
-    pub group_id: Option<String>,
-    pub artifact_id: String,
-    pub version: Option<String>,
-    pub packaging: String,
-    pub source_roots: Vec<MavenSourceRootResponse>,
-    pub modules: Vec<MavenModuleResponse>,
-    pub profiles: Vec<MavenProfileResponse>,
-    pub has_wrapper: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Platform-neutral executable reference returned by Maven launch planning.
-pub struct MavenLaunchExecutableResponse {
-    pub toolchain: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Deterministic Maven invocation consumed by native process adapters.
-pub struct MavenLaunchPlanResponse {
-    pub version: u32,
-    pub executable: MavenLaunchExecutableResponse,
-    pub arguments: Vec<String>,
-    pub working_directory: String,
-    pub configuration_fingerprint: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// One normalized issue parsed from Maven process output.
-pub struct MavenDiagnosticResponse {
-    pub path: String,
-    pub line: usize,
-    pub column: Option<usize>,
-    pub severity: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Maven diagnostics in stable source order.
-pub struct MavenDiagnosticsResponse {
-    pub issues: Vec<MavenDiagnosticResponse>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 /// Java class containing a runnable main method.
 pub struct JavaMainClassResponse {
     pub path: String,
     pub qualified_name: String,
     pub simple_name: String,
-    pub is_spring_boot: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -275,17 +174,17 @@ pub enum JavaSourceSetResponse {
     Main,
     /// Test source compiled into the test project output.
     Test,
-    /// Java source outside the conventional Maven main and test layouts.
+    /// Java source outside the conventional Java main and test layouts.
     Other,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-/// UI-facing Java or Spring Boot run entry.
+/// UI-facing Java run entry.
 pub struct JavaRunConfigurationResponse {
     pub id: String,
     pub name: String,
-    /// UI category such as `javaMain`, `springBoot`, or `mavenModule`.
+    /// UI category such as `javaMain`.
     pub kind: String,
     pub module_path: Option<String>,
     pub main_class: Option<String>,
@@ -333,13 +232,6 @@ pub struct JavaClassNameResponse {
 pub struct JavaSourceDefinitionResponse {
     pub line: usize,
     pub utf16_column: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Server port declared by Spring configuration, when one is present.
-pub struct JavaServerPortResponse {
-    pub port: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -733,106 +625,4 @@ pub struct GitDiffResponse {
     pub patch: String,
     pub rows: Vec<GitDiffRowResponse>,
     pub hunks: Vec<GitDiffHunkResponse>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// One Spring configuration property and its optional Java declaration.
-pub struct SpringPropertyResponse {
-    pub name: String,
-    pub type_name: Option<String>,
-    pub description: Option<String>,
-    pub default_value: Option<String>,
-    pub source_path: Option<String>,
-    pub source_line: Option<usize>,
-    pub source_column: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// One key/value occurrence from a Spring application configuration document.
-pub struct SpringConfigurationValueResponse {
-    pub key: String,
-    pub value: String,
-    pub path: String,
-    pub line: usize,
-    pub column: usize,
-    pub profile: Option<String>,
-    pub overrides_base_value: bool,
-    pub target_path: Option<String>,
-    pub target_line: Option<usize>,
-    pub target_column: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Java `@Value` reference to a Spring configuration property.
-pub struct SpringPropertyReferenceResponse {
-    pub key: String,
-    pub path: String,
-    pub line: usize,
-    pub column: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Spring configuration problem projected onto one source location.
-pub struct SpringDiagnosticResponse {
-    pub path: String,
-    pub line: usize,
-    pub column: usize,
-    pub severity: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Component or `@Bean` declaration available for dependency injection.
-pub struct SpringBeanResponse {
-    pub id: String,
-    pub name: String,
-    pub type_name: String,
-    pub path: String,
-    pub line: usize,
-    pub column: usize,
-    pub kind: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Injection point and the bean declarations that satisfy it.
-pub struct SpringInjectionResponse {
-    pub path: String,
-    pub line: usize,
-    pub column: usize,
-    pub type_name: String,
-    pub qualifier: Option<String>,
-    pub bean_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// HTTP endpoint declared by a Spring MVC controller method.
-pub struct SpringEndpointResponse {
-    pub id: String,
-    pub http_methods: Vec<String>,
-    pub route: String,
-    pub controller: String,
-    pub method: String,
-    pub path: String,
-    pub line: usize,
-    pub column: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// Complete deterministic Spring semantic index for one workspace snapshot.
-pub struct SpringIndexResponse {
-    pub properties: Vec<SpringPropertyResponse>,
-    pub values: Vec<SpringConfigurationValueResponse>,
-    pub property_references: Vec<SpringPropertyReferenceResponse>,
-    pub diagnostics: Vec<SpringDiagnosticResponse>,
-    pub beans: Vec<SpringBeanResponse>,
-    pub injections: Vec<SpringInjectionResponse>,
-    pub endpoints: Vec<SpringEndpointResponse>,
 }

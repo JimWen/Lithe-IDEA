@@ -308,13 +308,10 @@ private struct LanguageServerToolTestRuntimeLocator: RuntimeLocator {
     let executablePaths: Set<String>
 
     func environment() -> [String: String] { ["PATH": ""] }
-    func discover() -> RuntimeDiscoveryResult { RuntimeDiscoveryResult(javaRuntimes: [], mavenRuntimes: []) }
+    func discover() -> RuntimeDiscoveryResult { RuntimeDiscoveryResult(javaRuntimes: []) }
     func validJavaHome(path _: String) -> URL? { nil }
     func javaRuntime(at _: URL) -> JavaRuntimeCandidate? { nil }
     func isExecutable(at url: URL) -> Bool { executablePaths.contains(url.standardizedFileURL.path) }
-    func systemMavenExecutable() -> URL? { nil }
-    func mavenExecutable(forHomePath _: String) -> URL? { nil }
-    func mavenRuntime(at _: URL) -> MavenRuntimeCandidate? { nil }
 }
 
 private struct LanguageServerToolTestDiscovery: RuntimeToolDiscovery {

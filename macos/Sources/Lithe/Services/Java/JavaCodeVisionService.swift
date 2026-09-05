@@ -7,7 +7,7 @@ enum JavaCodeVisionService {
         projectFiles: [URL],
         workspaceRoot: URL,
         blameLines: [GitBlameLine],
-        operations: any JavaMavenOperations
+        operations: any JavaOperations
     ) async -> [JavaCodeVisionHint] {
         let root = workspaceRoot.standardizedFileURL
         let target = fileURL.standardizedFileURL

@@ -2,7 +2,6 @@
 
 use std::path::Path;
 
-mod community;
 mod debug;
 mod execution;
 mod git;

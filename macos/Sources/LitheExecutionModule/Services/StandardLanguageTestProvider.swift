@@ -20,7 +20,6 @@ package enum LanguageTestPlanError: LocalizedError, Equatable, Sendable {
 
 package struct StandardLanguageTestProvider: LanguageTestProvider {
     private enum StandardTestFramework: String {
-        case maven
         case gradle
         case go
         case pytest
@@ -42,7 +41,7 @@ package struct StandardLanguageTestProvider: LanguageTestProvider {
     }
 
     /// Real workspace discovery carries project markers so a plain source
-    /// directory is not misidentified as Maven/npm/Cargo merely because it
+    /// directory is not misidentified as npm/Cargo merely because it
     /// contains a file whose name looks like a test. The legacy overload above
     /// remains permissive for callers that only have a file list.
     package func discoverTests(context: LanguageTestContext) -> [LanguageTestItem] {
@@ -88,12 +87,6 @@ package struct StandardLanguageTestProvider: LanguageTestProvider {
         }
         let plan: SharedLaunchPlan
         switch framework {
-        case .maven:
-            plan = SharedLaunchPlan(
-                executable: .toolchain("project-maven"),
-                arguments: javaArguments(scope: scope, root: root),
-                workingDirectory: "."
-            )
         case .gradle:
             plan = SharedLaunchPlan(
                 executable: .toolchain("project-gradle"),
@@ -149,10 +142,7 @@ package struct StandardLanguageTestProvider: LanguageTestProvider {
                 || names.contains("gradlew") {
                 return .gradle
             }
-            // Keep the old workspaceURL-only overload usable by treating an
-            // empty marker set as Maven, but never claim Maven for a real
-            // workspace that has no Maven/Gradle descriptor.
-            return names.isEmpty || names.contains("pom.xml") ? .maven : nil
+            return nil
         case "go":
             return context.projectFiles.isEmpty
                 || names.contains("go.mod")
@@ -193,16 +183,6 @@ package struct StandardLanguageTestProvider: LanguageTestProvider {
         }
     }
 
-    private func javaArguments(scope: LanguageTestScope, root: URL) -> [String] {
-        switch scope {
-        case .workspace:
-            return ["test"]
-        case .file(let url):
-            return ["-Dtest=" + url.deletingPathExtension().lastPathComponent, "test"]
-        case .testCase(let identifier, _):
-            return ["-Dtest=" + normalizedJavaTestIdentifier(identifier), "test"]
-        }
-    }
 
     private func gradleArguments(scope: LanguageTestScope, root: URL) throws -> [String] {
         var arguments = ["test"]

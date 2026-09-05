@@ -4,20 +4,30 @@
     "version": 1,
     "configurations": [
       {
-        "id": "spring:com.example.App",
+        "id": "java-main:com.example.App",
         "name": "App",
-        "type": "spring-boot.maven",
+        "type": "java.main",
         "module": ".",
         "mainClass": "com.example.App",
-        "toolchains": { "java": "project-jdk", "maven": "project-maven" },
+        "toolchains": {
+          "java": "project-jdk"
+        },
         "workingDirectory": ".",
         "jvmArguments": [],
-        "programArguments": [],
-        "mavenProfiles": []
+        "programArguments": []
       }
     ]
   },
-  "team": { "version": 1, "configurations": [] },
-  "local": { "version": 1, "configurations": [] },
-  "expected": { "configurationCount": 1, "selectedId": "spring:com.example.App" }
+  "team": {
+    "version": 1,
+    "configurations": []
+  },
+  "local": {
+    "version": 1,
+    "configurations": []
+  },
+  "expected": {
+    "configurationCount": 1,
+    "selectedId": "java-main:com.example.App"
+  }
 }

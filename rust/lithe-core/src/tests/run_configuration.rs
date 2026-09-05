@@ -11,8 +11,11 @@ fn run_configuration_commands_generate_merge_and_plan() {
     let root = temporary_root("run-config");
     fs::create_dir_all(root.join("src/main/java/com/example"))
         .expect("source directory should be creatable");
-    fs::write(root.join("src/main/java/com/example/App.java"), "package com.example; @SpringBootApplication class App { public static void main(String[] args) {} }").expect("source should be writable");
-    fs::write(root.join("pom.xml"), "<project><artifactId>demo</artifactId><properties><maven.compiler.release>21</maven.compiler.release></properties><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>").expect("pom should be writable");
+    fs::write(
+        root.join("src/main/java/com/example/App.java"),
+        "package com.example;  class App { public static void main(String[] args) {} }",
+    )
+    .expect("source should be writable");
 
     let request = serde_json::json!({"id":"generate","command":"runConfig.generate","payload":{"root":root,"paths":["src/main/java/com/example/App.java"],"modulePaths":[]}});
     let generated: Value = serde_json::from_str(&execute_json(&request.to_string()))
@@ -28,7 +31,7 @@ fn run_configuration_commands_generate_merge_and_plan() {
     let generated_doc = serde_json::to_string(&generated["data"]["generated"]).unwrap();
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
     fs::write(root.join(".lithe/run/generated.json"), generated_doc).unwrap();
-    fs::write(root.join(".lithe/run/configurations.json"), r#"{"version":1,"configurations":[{"id":"current-file","name":"My File","type":"java.current-file","workingDirectory":"backend","jvmArguments":["-Xmx2g"],"toolchains":{"maven":"custom-maven"}}]}"#).unwrap();
+    fs::write(root.join(".lithe/run/configurations.json"), r#"{"version":1,"configurations":[{"id":"current-file","name":"My File","type":"java.current-file","workingDirectory":"backend","jvmArguments":["-Xmx2g"],"toolchains":{}}]}"#).unwrap();
     fs::write(root.join(".lithe/run/local.json"), r#"{"version":1,"configurations":[{"id":"current-file","name":"Local File","type":"java.current-file","workingDirectory":".","programArguments":["--dev"],"toolchains":{"java":"custom-jdk"}}]}"#).unwrap();
 
     let resolve: Value = serde_json::from_str(&execute_json(
@@ -45,7 +48,6 @@ fn run_configuration_commands_generate_merge_and_plan() {
         .unwrap();
     assert_eq!(current["name"], "Local File");
     assert_eq!(current["toolchains"]["java"], "custom-jdk");
-    assert_eq!(current["toolchains"]["maven"], "custom-maven");
     let plan: Value = serde_json::from_str(&execute_json(&serde_json::json!({"id":"plan","command":"runConfig.createLaunchPlan","payload":{"root":root,"configurationId":"current-file","currentFile":"src/main/java/com/example/App.java"}}).to_string())).unwrap();
     assert_eq!(plan["ok"], true);
     assert_eq!(plan["data"]["executable"]["toolchain"], "custom-jdk");
@@ -55,7 +57,8 @@ fn run_configuration_commands_generate_merge_and_plan() {
             "command":"runConfig.createLaunchPlan",
             "payload":{
                 "root":root,
-                "configurationId":"spring-boot.maven:demo",
+                "configurationId":"current-file",
+                "currentFile":"src/main/java/com/example/App.java",
                 "debugPort":5005
             }
         })
@@ -73,444 +76,6 @@ fn run_configuration_commands_generate_merge_and_plan() {
 }
 
 #[test]
-fn run_configuration_generation_infers_maven_modules_from_nearest_pom() {
-    let root = temporary_root("run-config-inferred-modules");
-    let backend = "backend-api/src/main/java/com/example/BackendApplication.java";
-    let worker = "batch-worker/src/main/java/com/example/WorkerMain.java";
-    fs::create_dir_all(root.join("backend-api/src/main/java/com/example")).unwrap();
-    fs::create_dir_all(root.join("batch-worker/src/main/java/com/example")).unwrap();
-    fs::write(root.join("pom.xml"), "<project/>").unwrap();
-    fs::write(root.join("backend-api/pom.xml"), "<project/>").unwrap();
-    fs::write(root.join("batch-worker/pom.xml"), "<project/>").unwrap();
-    fs::write(
-        root.join(backend),
-        "package com.example; @SpringBootApplication class BackendApplication { public static void main(String[] args) {} }",
-    )
-    .unwrap();
-    fs::write(
-        root.join(worker),
-        "package com.example; class WorkerMain { public static void main(String[] args) {} }",
-    )
-    .unwrap();
-
-    let response: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "generate-inferred-modules",
-            "command": "runConfig.generate",
-            "payload": {
-                "root": root,
-                "paths": [backend, worker],
-                "modulePaths": []
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(response["ok"], true);
-    let configurations = response["data"]["generated"]["configurations"]
-        .as_array()
-        .unwrap();
-    // No pom declares `spring-boot-maven-plugin`, so neither module is a service.
-    // The annotated class is still a runnable main class, and module inference --
-    // what this test is about -- has to place it in its own module either way.
-    assert!(configurations.iter().any(|value| {
-        value["id"] == "java-main:com.example.BackendApplication"
-            && value["extensions"]["maven"]["module"] == "backend-api"
-    }));
-    assert!(configurations.iter().any(|value| {
-        value["id"] == "java-main:com.example.WorkerMain"
-            && value["extensions"]["maven"]["module"] == "batch-worker"
-            && value["execution"] == "application"
-    }));
-    assert!(!configurations
-        .iter()
-        .any(|value| value["provider"] == "maven.module"));
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn run_configuration_generation_uses_a_maven_project_below_the_workspace() {
-    let root = temporary_root("run-config-nested-maven-root");
-    let source = "projects/demo/service/src/main/java/com/example/App.java";
-    fs::create_dir_all(root.join("projects/demo/service/src/main/java/com/example")).unwrap();
-    fs::create_dir_all(root.join("projects/demo/.mvn/wrapper")).unwrap();
-    fs::write(
-        root.join("projects/demo/pom.xml"),
-        r#"<project><artifactId>demo</artifactId><packaging>pom</packaging><modules><module>service</module></modules><properties><maven.compiler.release>21</maven.compiler.release></properties></project>"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("projects/demo/service/pom.xml"),
-        r#"<project><artifactId>service</artifactId><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>"#,
-    )
-    .unwrap();
-    fs::write(root.join("projects/demo/mvnw"), "#!/bin/sh\n").unwrap();
-    fs::write(root.join("projects/demo/.sdkmanrc"), "java=21.0.5-tem\n").unwrap();
-    fs::write(
-        root.join("projects/demo/.mvn/wrapper/maven-wrapper.properties"),
-        "distributionUrl=https://example.invalid/apache-maven-3.9.9-bin.zip\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join(source),
-        "package com.example; @SpringBootApplication class App { public static void main(String[] args) {} }",
-    )
-    .unwrap();
-
-    let response: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "generate-nested-maven-root",
-            "command": "runConfig.generate",
-            "payload": {
-                "root": root,
-                "paths": [source],
-                "modulePaths": []
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(response["ok"], true, "{response}");
-    let configurations = response["data"]["generated"]["configurations"]
-        .as_array()
-        .unwrap();
-    let service = configurations
-        .iter()
-        .find(|value| value["provider"] == "spring-boot.maven")
-        .unwrap_or_else(|| panic!("missing nested Maven service in {configurations:?}"));
-    assert_eq!(service["cwd"], "projects/demo");
-    assert_eq!(service["source"], "projects/demo/service/pom.xml");
-    assert_eq!(service["extensions"]["maven"]["module"], "service");
-    assert_eq!(
-        service["extensions"]["maven"]["mainClass"],
-        "com.example.App"
-    );
-    let java_main = configurations
-        .iter()
-        .find(|value| value["provider"] == "java.main")
-        .unwrap();
-    assert_eq!(java_main["cwd"], "projects/demo");
-    assert_eq!(java_main["extensions"]["maven"]["module"], "service");
-    assert_eq!(java_main["toolchains"]["maven"], "project-maven");
-    assert_eq!(
-        response["data"]["toolchainRequirements"]["toolchains"]["project-jdk"]["minimumVersion"],
-        "21"
-    );
-    assert_eq!(
-        response["data"]["toolchainRequirements"]["toolchains"]["project-jdk"]["preferredVendor"],
-        "temurin"
-    );
-    assert_eq!(
-        response["data"]["toolchainRequirements"]["toolchains"]["project-maven"]["wrapper"],
-        "./mvnw"
-    );
-    assert_eq!(
-        response["data"]["toolchainRequirements"]["toolchains"]["project-maven"]["minimumVersion"],
-        "3.9.9"
-    );
-    assert!(
-        response["data"]["toolchainRequirements"]["toolchains"]["project-maven"]["version"]
-            .is_null()
-    );
-
-    fs::create_dir_all(root.join(".lithe/run")).unwrap();
-    fs::write(
-        root.join(".lithe/run/generated.json"),
-        serde_json::to_string(&response["data"]["generated"]).unwrap(),
-    )
-    .unwrap();
-    let plan: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "plan-nested-maven-root",
-            "command": "runConfig.createLaunchPlan",
-            "payload": {
-                "root": root,
-                "configurationId": service["id"],
-                "mavenContext": {
-                    "version": 1,
-                    "reactorPath": "projects/demo",
-                    "profiles": ["qa", "dev"],
-                    "settingsPath": "/local/settings.xml",
-                    "skipTests": true,
-                    "mavenExecutablePath": "/local/apache-maven/bin/mvn",
-                    "javaHomePath": "/local/jdk"
-                }
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(plan["ok"], true, "{plan}");
-    assert_eq!(plan["data"]["workingDirectory"], "projects/demo");
-    assert_eq!(
-        &plan["data"]["arguments"].as_array().unwrap()[..12],
-        [
-            "-B",
-            "-ntp",
-            "-P",
-            "dev,qa",
-            "-s",
-            "/local/settings.xml",
-            "-pl",
-            "service",
-            "-am",
-            "-DskipTests",
-            "-Dspring-boot.run.main-class=com.example.App",
-            "spring-boot:run"
-        ]
-    );
-    assert!(plan["data"]["arguments"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|argument| argument == "-am"));
-
-    fs::create_dir_all(root.join("custom-run/service")).unwrap();
-    fs::write(
-        root.join(".lithe/run/configurations.json"),
-        serde_json::json!({
-            "version": 2,
-            "configurations": [{
-                "id": service["id"],
-                "cwd": "custom-run",
-                "extensions": {"maven": {
-                    "profiles": ["release"],
-                    "skipTests": false
-                }}
-            }]
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let overridden_plan: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "plan-explicit-profile",
-            "command": "runConfig.createLaunchPlan",
-            "payload": {
-                "root": root,
-                "configurationId": service["id"],
-                "mavenContext": {
-                    "version": 1,
-                    "reactorPath": "projects/demo",
-                    "profiles": ["dev", "qa"],
-                    "skipTests": true
-                }
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(overridden_plan["ok"], true, "{overridden_plan}");
-    assert_eq!(overridden_plan["data"]["workingDirectory"], "custom-run");
-    assert_eq!(
-        &overridden_plan["data"]["arguments"].as_array().unwrap()[..4],
-        ["-B", "-ntp", "-P", "release"]
-    );
-    assert!(!overridden_plan["data"]["arguments"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|argument| argument == "-DskipTests"));
-
-    let java_plan: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "plan-nested-maven-java-main",
-            "command": "runConfig.createLaunchPlan",
-            "payload": {
-                "root": root,
-                "configurationId": java_main["id"]
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(java_plan["ok"], true, "{java_plan}");
-    assert_eq!(
-        java_plan["data"]["executable"]["toolchain"],
-        "project-maven"
-    );
-    assert!(java_plan["data"]["arguments"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|argument| argument == "-Dexec.mainClass=com.example.App"));
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn nested_maven_generation_keeps_standalone_java_on_the_jdk() {
-    let root = temporary_root("run-config-mixed-nested-maven");
-    let maven_source = "projects/demo/src/main/java/com/example/App.java";
-    let standalone_source = "samples/Standalone.java";
-    fs::create_dir_all(root.join("projects/demo/src/main/java/com/example")).unwrap();
-    fs::create_dir_all(root.join("samples")).unwrap();
-    fs::write(
-        root.join("projects/demo/pom.xml"),
-        "<project><artifactId>demo</artifactId></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join(maven_source),
-        "package com.example; class App { public static void main(String[] args) {} }",
-    )
-    .unwrap();
-    fs::write(
-        root.join(standalone_source),
-        "class Standalone { public static void main(String[] args) {} }",
-    )
-    .unwrap();
-
-    let response: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "generate-mixed-nested-maven",
-            "command": "runConfig.generate",
-            "payload": {
-                "root": root,
-                "paths": [maven_source, standalone_source],
-                "modulePaths": []
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(response["ok"], true, "{response}");
-    let configurations = response["data"]["generated"]["configurations"]
-        .as_array()
-        .unwrap();
-    let maven_main = configurations
-        .iter()
-        .find(|value| value["id"] == "java-main:com.example.App")
-        .unwrap();
-    assert_eq!(maven_main["cwd"], "projects/demo");
-    assert_eq!(maven_main["toolchains"]["maven"], "project-maven");
-    let standalone = configurations
-        .iter()
-        .find(|value| value["id"] == "java-main:Standalone")
-        .unwrap();
-    assert_eq!(standalone["cwd"], ".");
-    assert!(standalone["toolchains"]["maven"].is_null());
-    assert_eq!(standalone["source"], standalone_source);
-
-    fs::create_dir_all(root.join(".lithe/run")).unwrap();
-    fs::write(
-        root.join(".lithe/run/generated.json"),
-        serde_json::to_string(&response["data"]["generated"]).unwrap(),
-    )
-    .unwrap();
-    let plan: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "plan-mixed-standalone",
-            "command": "runConfig.createLaunchPlan",
-            "payload": {
-                "root": root,
-                "configurationId": "java-main:Standalone"
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(plan["ok"], true, "{plan}");
-    assert_eq!(plan["data"]["executable"]["toolchain"], "project-jdk");
-    assert_eq!(plan["data"]["workingDirectory"], ".");
-    assert_eq!(
-        plan["data"]["arguments"],
-        serde_json::json!([standalone_source])
-    );
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn java_mains_use_their_own_independent_nested_maven_reactors() {
-    let root = temporary_root("run-config-independent-maven-reactors");
-    let alpha_source = "services/alpha/src/main/java/example/Alpha.java";
-    let beta_source = "services/beta/src/main/java/example/Beta.java";
-    fs::create_dir_all(root.join("services/alpha/src/main/java/example")).unwrap();
-    fs::create_dir_all(root.join("services/beta/src/main/java/example")).unwrap();
-    fs::write(
-        root.join("services/alpha/pom.xml"),
-        "<project><artifactId>alpha</artifactId></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join("services/beta/pom.xml"),
-        "<project><artifactId>beta</artifactId></project>",
-    )
-    .unwrap();
-    fs::write(
-        root.join(alpha_source),
-        "package example; class Alpha { public static void main(String[] args) {} }",
-    )
-    .unwrap();
-    fs::write(
-        root.join(beta_source),
-        "package example; class Beta { public static void main(String[] args) {} }",
-    )
-    .unwrap();
-
-    let response: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "generate-independent-maven-reactors",
-            "command": "runConfig.generate",
-            "payload": {
-                "root": root,
-                "paths": [alpha_source, beta_source],
-                "modulePaths": []
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(response["ok"], true, "{response}");
-    let configurations = response["data"]["generated"]["configurations"]
-        .as_array()
-        .unwrap();
-    let alpha = configurations
-        .iter()
-        .find(|value| value["id"] == "java-main:example.Alpha")
-        .unwrap();
-    let beta = configurations
-        .iter()
-        .find(|value| value["id"] == "java-main:example.Beta")
-        .unwrap();
-    assert_eq!(alpha["cwd"], "services/alpha");
-    assert_eq!(beta["cwd"], "services/beta");
-    assert_eq!(alpha["extensions"]["maven"]["module"], ".");
-    assert_eq!(beta["extensions"]["maven"]["module"], ".");
-    assert_eq!(alpha["toolchains"]["maven"], "project-maven");
-    assert_eq!(beta["toolchains"]["maven"], "project-maven");
-
-    fs::create_dir_all(root.join(".lithe/run")).unwrap();
-    fs::write(
-        root.join(".lithe/run/generated.json"),
-        serde_json::to_string(&response["data"]["generated"]).unwrap(),
-    )
-    .unwrap();
-    let beta_plan: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "plan-beta-reactor",
-            "command": "runConfig.createLaunchPlan",
-            "payload": {
-                "root": root,
-                "configurationId": "java-main:example.Beta"
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(beta_plan["ok"], true, "{beta_plan}");
-    assert_eq!(beta_plan["data"]["workingDirectory"], "services/beta");
-    assert_eq!(
-        beta_plan["data"]["executable"]["toolchain"],
-        "project-maven"
-    );
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
 fn run_configuration_generation_deduplicates_nested_checkout_sources() {
     let root = temporary_root("run-config-worktree-duplicate");
     let source = "src/main/java/com/example/App.java";
@@ -519,7 +84,6 @@ fn run_configuration_generation_deduplicates_nested_checkout_sources() {
     fs::create_dir_all(root.join("src/main/java/com/example")).unwrap();
     fs::create_dir_all(root.join("copied/src/main/java/com/example")).unwrap();
     fs::create_dir_all(root.join(".worktree/feature/src/main/java/com/example")).unwrap();
-    fs::write(root.join("pom.xml"), "<project/>").unwrap();
     let java = "package com.example; class App { public static void main(String[] args) {} }";
     fs::write(root.join(source), java).unwrap();
     fs::write(root.join(duplicate_source), java).unwrap();
@@ -572,12 +136,11 @@ fn run_configuration_generation_deduplicates_nested_checkout_sources() {
 #[test]
 fn run_configuration_generation_disambiguates_same_main_class_across_modules() {
     let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../shared/fixtures/execution/maven-java-main-source-sets-v1.json"
+        "../../../../shared/fixtures/execution/java-main-source-sets-v1.json"
     ))
-    .expect("Maven Java main source-set fixture should be valid JSON");
+    .expect("Java main source-set fixture should be valid JSON");
     let root = temporary_root("run-config-duplicate-main-classes");
     fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("pom.xml"), "<project/>").unwrap();
     let java = "package com.example; class App { public static void main(String[] args) {} }";
     let cases = fixture["cases"]
         .as_array()
@@ -674,8 +237,6 @@ fn ordinary_java_main_uses_an_application_launch_plan() {
     let root = temporary_root("run-config-java-main");
     let source = "batch-worker/src/main/java/com/example/WorkerMain.java";
     fs::create_dir_all(root.join("batch-worker/src/main/java/com/example")).unwrap();
-    fs::write(root.join("pom.xml"), "<project/>").unwrap();
-    fs::write(root.join("batch-worker/pom.xml"), "<project/>").unwrap();
     fs::write(
         root.join(source),
         "package com.example; class WorkerMain { public static void main(String[] args) {} }",
@@ -686,7 +247,7 @@ fn ordinary_java_main_uses_an_application_launch_plan() {
         &serde_json::json!({
             "id": "generate-java-main",
             "command": "runConfig.generate",
-            "payload": {"root": root, "paths": [source], "modulePaths": []}
+            "payload": {"root": root, "paths": [source], "modulePaths": ["batch-worker"]}
         })
         .to_string(),
     ))
@@ -699,7 +260,7 @@ fn ordinary_java_main_uses_an_application_launch_plan() {
         .find(|value| value["provider"] == "java.main")
         .unwrap();
     assert_eq!(java_main["execution"], "application");
-    assert_eq!(java_main["extensions"]["maven"]["module"], "batch-worker");
+    assert_eq!(java_main["extensions"]["java"]["module"], "batch-worker");
 
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
     fs::write(
@@ -720,92 +281,8 @@ fn ordinary_java_main_uses_an_application_launch_plan() {
     ))
     .unwrap();
     assert_eq!(plan["ok"], true, "{plan}");
-    assert_eq!(plan["data"]["executable"]["toolchain"], "project-maven");
-    assert!(plan["data"]["arguments"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "-Dexec.mainClass=com.example.WorkerMain"));
-    assert!(!plan["data"]["arguments"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "-Dexec.classpathScope=test" || value == "test-compile"));
-    assert_eq!(
-        plan["data"]["arguments"]
-            .as_array()
-            .unwrap()
-            .last()
-            .unwrap(),
-        "org.codehaus.mojo:exec-maven-plugin:3.5.0:java"
-    );
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn maven_test_source_main_uses_the_test_classpath() {
-    let root = temporary_root("run-config-maven-test-main");
-    let source = "src/test/java/com/example/MainTests.java";
-    fs::create_dir_all(root.join("src/test/java/com/example")).unwrap();
-    fs::write(root.join("pom.xml"), "<project/>").unwrap();
-    fs::write(
-        root.join(source),
-        "package com.example; class MainTests { public static void main(String[] args) {} }",
-    )
-    .unwrap();
-
-    let generated_response: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "generate-maven-test-main",
-            "command": "runConfig.generate",
-            "payload": {"root": root, "paths": [source], "modulePaths": []}
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    let generated = &generated_response["data"]["generated"];
-    let java_main = generated["configurations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|value| value["id"] == "java-main:com.example.MainTests")
-        .unwrap();
-    assert_eq!(java_main["extensions"]["java"]["source"], source);
-    assert_eq!(java_main["extensions"]["java"]["sourceSet"], "test");
-
-    fs::create_dir_all(root.join(".lithe/run")).unwrap();
-    fs::write(
-        root.join(".lithe/run/generated.json"),
-        serde_json::to_string(generated).unwrap(),
-    )
-    .unwrap();
-    let plan: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "plan-maven-test-main",
-            "command": "runConfig.createLaunchPlan",
-            "payload": {
-                "root": root,
-                "configurationId": "java-main:com.example.MainTests"
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(plan["ok"], true, "{plan}");
-    let arguments = plan["data"]["arguments"].as_array().unwrap();
-    assert!(arguments
-        .iter()
-        .any(|value| value == "-Dexec.classpathScope=test"));
-    let test_compile = arguments
-        .iter()
-        .position(|value| value == "test-compile")
-        .expect("test sources should be compiled before launch");
-    let exec_java = arguments
-        .iter()
-        .position(|value| value == "org.codehaus.mojo:exec-maven-plugin:3.5.0:java")
-        .expect("the Maven Exec goal should be present");
-    assert!(test_compile < exec_java);
+    assert_eq!(plan["data"]["executable"]["toolchain"], "project-jdk");
+    assert_eq!(plan["data"]["arguments"], serde_json::json!([source]));
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -838,7 +315,6 @@ fn plain_java_main_uses_the_jdk_without_maven() {
         .find(|value| value["provider"] == "java.main")
         .unwrap();
     assert_eq!(java_main["toolchains"]["java"], "project-jdk");
-    assert!(java_main["toolchains"]["maven"].is_null());
     assert_eq!(java_main["source"], source);
 
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
@@ -862,61 +338,6 @@ fn plain_java_main_uses_the_jdk_without_maven() {
     assert_eq!(plan["ok"], true, "{plan}");
     assert_eq!(plan["data"]["executable"]["toolchain"], "project-jdk");
     assert_eq!(plan["data"]["arguments"], serde_json::json!([source]));
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn stale_plain_java_main_is_rejected_when_the_source_belongs_to_maven() {
-    let root = temporary_root("run-config-stale-maven-main");
-    let source = "projects/demo/src/main/java/com/example/App.java";
-    fs::create_dir_all(root.join("projects/demo/src/main/java/com/example")).unwrap();
-    fs::create_dir_all(root.join(".lithe/run")).unwrap();
-    fs::write(root.join("projects/demo/pom.xml"), "<project/>").unwrap();
-    fs::write(
-        root.join(source),
-        "package com.example; class App { public static void main(String[] args) {} }",
-    )
-    .unwrap();
-    fs::write(
-        root.join(".lithe/run/generated.json"),
-        serde_json::json!({
-            "version": 2,
-            "configurations": [{
-                "id": "java-main:com.example.App",
-                "name": "App",
-                "provider": "java.main",
-                "execution": "application",
-                "cwd": ".",
-                "toolchains": { "java": "project-jdk" },
-                "extensions": {
-                    "maven": { "mainClass": "com.example.App", "module": "." },
-                    "java": { "source": source }
-                }
-            }]
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    let plan: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "plan-stale-maven-main",
-            "command": "runConfig.createLaunchPlan",
-            "payload": {
-                "root": root,
-                "configurationId": "java-main:com.example.App"
-            }
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(plan["ok"], false, "{plan}");
-    assert_eq!(plan["error"]["code"], "invalid_request");
-    assert_eq!(
-        plan["error"]["message"],
-        "Java application belongs to a Maven project; regenerate run configurations"
-    );
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -1005,15 +426,12 @@ fn resolve_applies_global_toolchain_defaults_and_preserves_configuration_overrid
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[
-            {"id":"spring","name":"Spring","provider":"spring-boot.maven","execution":"service","toolchains":{"java":"project-jdk","maven":"project-maven"},"extensions":{"maven":{"module":"."},"java":{"homePath":"C:/service-jdk","mavenExecutablePath":"C:/service-mvn.cmd"}}},
-            {"id":"plain","name":"Plain","provider":"java.main","execution":"application","toolchains":{"java":"project-jdk"},"extensions":{"java":{"source":"src/App.java"}}}
-        ]}"#,
+        r#"{"version":2,"configurations":[{"id":"java-service","name":"Spring","provider":"java.current-file","execution":"service","toolchains":{"java":"project-jdk"},"extensions":{"java":{"module":".","homePath":"C:/service-jdk"}}},{"id":"plain","name":"Plain","provider":"java.main","execution":"application","toolchains":{"java":"project-jdk"},"extensions":{"java":{"source":"src/App.java"}}}]}"#,
     )
     .unwrap();
     fs::write(
         root.join(".lithe/run/local.json"),
-        r#"{"version":2,"toolchain":{"java":{"homePath":"C:/custom-jdk"},"maven":{"executablePath":"C:/mvn.cmd","javaHomePath":"C:/maven-jdk"}},"configurations":[]}"#,
+        r#"{"version":2,"toolchain":{"java":{"homePath":"C:/custom-jdk"}},"configurations":[]}"#,
     )
     .unwrap();
 
@@ -1038,27 +456,15 @@ fn resolve_applies_global_toolchain_defaults_and_preserves_configuration_overrid
         .find(|value| value["id"] == "plain")
         .unwrap();
     assert_eq!(plain["extensions"]["java"]["homePath"], "C:/custom-jdk");
-    assert_eq!(
-        plain["extensions"]["java"]["mavenExecutablePath"],
-        "C:/mvn.cmd"
-    );
     // The project default fills missing runtime paths but never changes the source path.
     assert_eq!(plain["extensions"]["java"]["source"], "src/App.java");
     let spring = resolved["data"]["configurations"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|value| value["id"] == "spring")
+        .find(|value| value["id"] == "java-service")
         .unwrap();
     assert_eq!(spring["extensions"]["java"]["homePath"], "C:/service-jdk");
-    assert_eq!(
-        spring["extensions"]["java"]["mavenExecutablePath"],
-        "C:/service-mvn.cmd"
-    );
-    assert_eq!(
-        spring["extensions"]["java"]["mavenJavaHomePath"],
-        "C:/maven-jdk"
-    );
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -1083,8 +489,6 @@ fn global_toolchain_updates_only_in_the_local_layer() {
                 "configurationId": "unused",
                 "toolchain": {
                     "javaHomePath": "C:/jdk-21",
-                    "mavenExecutablePath": "C:/apache-maven/bin/mvn.cmd",
-                    "mavenJavaHomePath": "C:/jdk-17"
                 }
             }
         })
@@ -1095,11 +499,6 @@ fn global_toolchain_updates_only_in_the_local_layer() {
     let document: Value =
         serde_json::from_str(updated["data"]["document"].as_str().unwrap()).unwrap();
     assert_eq!(document["toolchain"]["java"]["homePath"], "C:/jdk-21");
-    assert_eq!(
-        document["toolchain"]["maven"]["executablePath"],
-        "C:/apache-maven/bin/mvn.cmd"
-    );
-    assert_eq!(document["toolchain"]["maven"]["javaHomePath"], "C:/jdk-17");
 
     // Project scope must never accept toolchain paths.
     let rejected: Value = serde_json::from_str(&execute_json(
@@ -1127,12 +526,12 @@ fn editor_save_clears_local_overrides_and_falls_back_to_project_toolchain() {
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[{"id":"spring","name":"Spring","provider":"spring-boot.maven","execution":"service","toolchains":{"java":"project-jdk","maven":"project-maven"},"extensions":{"maven":{"module":"."}}}]}"#,
+        r#"{"version":2,"configurations":[{"id":"java-service","name":"Spring","provider":"java.current-file","execution":"service","toolchains":{"java":"project-jdk"},"extensions":{"java":{"module":"."}}}]}"#,
     )
     .unwrap();
     fs::write(
         root.join(".lithe/run/local.json"),
-        r#"{"version":2,"toolchain":{"java":{"homePath":"C:/old-default-jdk"},"maven":{"executablePath":"C:/old-maven","javaHomePath":"C:/old-maven-jdk"}},"configurations":[{"id":"spring","extensions":{"java":{"source":"src/App.java","homePath":"C:/override-jdk","mavenExecutablePath":"C:/override-maven","mavenJavaHomePath":"C:/override-maven-jdk"}}}]}"#,
+        r#"{"version":2,"toolchain":{"java":{"homePath":"C:/old-default-jdk"}},"configurations":[{"id":"java-service","extensions":{"java":{"source":"src/App.java","homePath":"C:/override-jdk"}}}]}"#,
     )
     .unwrap();
 
@@ -1143,12 +542,10 @@ fn editor_save_clears_local_overrides_and_falls_back_to_project_toolchain() {
             "payload": {
                 "root": root,
                 "scope": "local",
-                "configurationId": "spring",
+                "configurationId": "java-service",
                 "workingDirectory": ".",
                 "toolchain": {
                     "javaHomePath": "C:/default-jdk",
-                    "mavenExecutablePath": "C:/apache-maven",
-                    "mavenJavaHomePath": "C:/default-maven-jdk"
                 }
             }
         })
@@ -1162,8 +559,6 @@ fn editor_save_clears_local_overrides_and_falls_back_to_project_toolchain() {
     let java = &local["configurations"][0]["extensions"]["java"];
     assert_eq!(java["source"], "src/App.java");
     assert!(java.get("homePath").is_none());
-    assert!(java.get("mavenExecutablePath").is_none());
-    assert!(java.get("mavenJavaHomePath").is_none());
 
     fs::write(
         root.join(".lithe/run/local.json"),
@@ -1181,8 +576,6 @@ fn editor_save_clears_local_overrides_and_falls_back_to_project_toolchain() {
     .unwrap();
     let resolved_java = &resolved["data"]["configurations"][0]["extensions"]["java"];
     assert_eq!(resolved_java["homePath"], "C:/default-jdk");
-    assert_eq!(resolved_java["mavenExecutablePath"], "C:/apache-maven");
-    assert_eq!(resolved_java["mavenJavaHomePath"], "C:/default-maven-jdk");
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -1194,7 +587,7 @@ fn project_editor_save_prepares_local_and_team_documents_without_writing() {
     fs::create_dir_all(root.join("backend")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[{"id":"spring","name":"Spring","provider":"spring-boot.maven","execution":"service","toolchains":{"java":"project-jdk","maven":"project-maven"},"extensions":{"maven":{"module":"."}}}]}"#,
+        r#"{"version":2,"configurations":[{"id":"java-service","name":"Spring","provider":"java.current-file","execution":"service","toolchains":{"java":"project-jdk"},"extensions":{"java":{"module":"."}}}]}"#,
     )
     .unwrap();
     let original_local = r#"{"version":2,"configurations":[]}"#;
@@ -1207,13 +600,11 @@ fn project_editor_save_prepares_local_and_team_documents_without_writing() {
             "payload": {
                 "root": root,
                 "scope": "project",
-                "configurationId": "spring",
+                "configurationId": "java-service",
                 "workingDirectory": "backend",
                 "arguments": "--dev",
                 "toolchain": {
                     "javaHomePath": "C:/jdk-21",
-                    "mavenExecutablePath": "C:/apache-maven",
-                    "mavenJavaHomePath": "C:/jdk-17"
                 }
             }
         })
@@ -1228,7 +619,7 @@ fn project_editor_save_prepares_local_and_team_documents_without_writing() {
     assert_eq!(local["toolchain"]["java"]["homePath"], "C:/jdk-21");
     assert_eq!(project["configurations"][0]["cwd"], "backend");
     assert_eq!(
-        project["configurations"][0]["extensions"]["maven"]["programArguments"],
+        project["configurations"][0]["extensions"]["java"]["programArguments"],
         serde_json::json!(["--dev"])
     );
     assert_eq!(
@@ -1402,8 +793,6 @@ fn run_configuration_mutations_are_shared_and_validated() {
                 "workingDirectory": ".",
                 "jvmArguments": "\"-Dlabel=hello world\" -Xmx2g",
                 "programArguments": "--dev",
-                "mavenProfiles": ["dev"],
-                "mavenSkipTests": false
             }
         })
         .to_string(),
@@ -1413,12 +802,8 @@ fn run_configuration_mutations_are_shared_and_validated() {
     let updated_document: Value =
         serde_json::from_str(updated["data"]["document"].as_str().unwrap()).unwrap();
     assert_eq!(
-        updated_document["configurations"][0]["extensions"]["maven"]["jvmArguments"],
+        updated_document["configurations"][0]["extensions"]["java"]["jvmArguments"],
         serde_json::json!(["-Dlabel=hello world", "-Xmx2g"])
-    );
-    assert_eq!(
-        updated_document["configurations"][0]["extensions"]["maven"]["skipTests"],
-        false
     );
     fs::write(
         root.join(".lithe/run/configurations.json"),
@@ -1436,7 +821,6 @@ fn run_configuration_mutations_are_shared_and_validated() {
                 "configurationId": "current-file",
                 "jvmArguments": "-Xmx2g",
                 "programArguments": "--dev",
-                "mavenProfiles": ["dev"]
             }
         })
         .to_string(),
@@ -1446,45 +830,11 @@ fn run_configuration_mutations_are_shared_and_validated() {
     let inherited_document: Value =
         serde_json::from_str(inherited["data"]["document"].as_str().unwrap()).unwrap();
     assert!(inherited_document["configurations"][0]["cwd"].is_null());
-    assert!(inherited_document["configurations"][0]["extensions"]["maven"]["skipTests"].is_null());
     fs::write(
         root.join(".lithe/run/configurations.json"),
         inherited["data"]["document"].as_str().unwrap(),
     )
     .unwrap();
-
-    let create = |name: &str, module: &str, main_class: &str| -> Value {
-        serde_json::from_str(&execute_json(
-            &serde_json::json!({
-                "id": "create-user",
-                "command": "runConfig.createUserConfiguration",
-                "payload": {
-                    "root": root,
-                    "scope": "project",
-                    "name": name,
-                    "type": "springBoot",
-                    "module": module,
-                    "mainClass": main_class
-                }
-            })
-            .to_string(),
-        ))
-        .unwrap()
-    };
-    let first = create("Backend Dev", ".", "com.example.App");
-    assert_eq!(first["data"]["id"], "user:backend-dev");
-    fs::write(
-        root.join(".lithe/run/configurations.json"),
-        first["data"]["document"].as_str().unwrap(),
-    )
-    .unwrap();
-    let second = create("Backend Dev", ".", "com.example.App");
-    assert_eq!(second["data"]["id"], "user:backend-dev-2");
-    assert_eq!(
-        create("Outside", "../outside", "com.example.App")["ok"],
-        false
-    );
-    assert_eq!(create("Missing", ".", "com.example.Missing")["ok"], false);
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -1495,13 +845,10 @@ fn project_scoped_toolchain_paths_are_relative_and_stay_inside_the_project() {
     let outside = temporary_root("run-config-outside-toolchain");
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
     fs::create_dir_all(root.join("toolchains/jdk")).unwrap();
-    fs::create_dir_all(root.join("toolchains/maven/bin")).unwrap();
-    fs::create_dir_all(root.join("toolchains/maven-jdk")).unwrap();
     fs::create_dir_all(&outside).unwrap();
-    fs::write(root.join("toolchains/maven/bin/mvn"), "#!/bin/sh\n").unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[{"id":"spring","name":"Spring","provider":"spring-boot.maven","execution":"service","toolchains":{"java":"project-jdk","maven":"project-maven"},"extensions":{"maven":{"module":"."}}}]}"#,
+        r#"{"version":2,"configurations":[{"id":"java-service","name":"Spring","provider":"java.current-file","execution":"service","toolchains":{"java":"project-jdk"},"extensions":{"java":{"module":"."}}}]}"#,
     )
     .unwrap();
 
@@ -1512,10 +859,8 @@ fn project_scoped_toolchain_paths_are_relative_and_stay_inside_the_project() {
             "payload": {
                 "root": root,
                 "scope": "project",
-                "configurationId": "spring",
+                "configurationId": "java-service",
                 "javaHomePath": root.join("toolchains/jdk"),
-                "mavenExecutablePath": root.join("toolchains/maven/bin/mvn"),
-                "mavenJavaHomePath": root.join("toolchains/maven-jdk")
             }
         })
         .to_string(),
@@ -1526,8 +871,6 @@ fn project_scoped_toolchain_paths_are_relative_and_stay_inside_the_project() {
         serde_json::from_str(updated["data"]["document"].as_str().unwrap()).unwrap();
     let java = &document["configurations"][0]["extensions"]["java"];
     assert_eq!(java["homePath"], "toolchains/jdk");
-    assert_eq!(java["mavenExecutablePath"], "toolchains/maven/bin/mvn");
-    assert_eq!(java["mavenJavaHomePath"], "toolchains/maven-jdk");
 
     let rejected: Value = serde_json::from_str(&execute_json(
         &serde_json::json!({
@@ -1536,7 +879,7 @@ fn project_scoped_toolchain_paths_are_relative_and_stay_inside_the_project() {
             "payload": {
                 "root": root,
                 "scope": "project",
-                "configurationId": "spring",
+                "configurationId": "java-service",
                 "javaHomePath": outside
             }
         })
@@ -1552,12 +895,11 @@ fn project_scoped_toolchain_paths_are_relative_and_stay_inside_the_project() {
 #[test]
 fn run_configuration_generation_detects_declared_toolchain_versions() {
     let root = temporary_root("run-config-toolchains");
-    fs::create_dir_all(root.join(".mvn/wrapper")).unwrap();
+    fs::create_dir_all(&root).unwrap();
     fs::write(root.join(".sdkmanrc"), "java=21.0.5-tem\n").unwrap();
-    fs::write(root.join("mvnw"), "#!/bin/sh\n").unwrap();
     fs::write(
-        root.join(".mvn/wrapper/maven-wrapper.properties"),
-        "distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.zip\n",
+        root.join("App.java"),
+        "class App { public static void main(String[] args) {} }",
     )
     .unwrap();
 
@@ -1565,7 +907,7 @@ fn run_configuration_generation_detects_declared_toolchain_versions() {
         &serde_json::json!({
             "id": "generate-toolchains",
             "command": "runConfig.generate",
-            "payload": {"root": root, "paths": [], "modulePaths": []}
+            "payload": {"root": root, "paths": ["App.java"], "modulePaths": []}
         })
         .to_string(),
     ))
@@ -1579,40 +921,7 @@ fn run_configuration_generation_detects_declared_toolchain_versions() {
         generated["data"]["toolchainRequirements"]["toolchains"]["project-jdk"]["preferredVendor"],
         "temurin"
     );
-    assert_eq!(
-        generated["data"]["toolchainRequirements"]["toolchains"]["project-maven"]["minimumVersion"],
-        "3.9.9"
-    );
-    assert!(
-        generated["data"]["toolchainRequirements"]["toolchains"]["project-maven"]["version"]
-            .is_null()
-    );
 
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn run_configuration_generation_detects_maven_compiler_target() {
-    let root = temporary_root("run-config-compiler-target");
-    fs::create_dir_all(&root).unwrap();
-    fs::write(
-        root.join("pom.xml"),
-        "<project><properties><maven.compiler.target>17</maven.compiler.target></properties></project>",
-    )
-    .unwrap();
-    let generated: Value = serde_json::from_str(&execute_json(
-        &serde_json::json!({
-            "id": "generate-target",
-            "command": "runConfig.generate",
-            "payload": {"root": root, "paths": [], "modulePaths": []}
-        })
-        .to_string(),
-    ))
-    .unwrap();
-    assert_eq!(
-        generated["data"]["toolchainRequirements"]["toolchains"]["project-jdk"]["minimumVersion"],
-        "17"
-    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1623,9 +932,6 @@ fn run_configuration_inspection_invalidates_an_older_generator_revision() {
     let main_source = "module-b/src/main/java/com/example/App.java";
     fs::create_dir_all(root.join("module-a/src/test/java/com/example")).unwrap();
     fs::create_dir_all(root.join("module-b/src/main/java/com/example")).unwrap();
-    fs::write(root.join("pom.xml"), "<project/>").unwrap();
-    fs::write(root.join("module-a/pom.xml"), "<project/>").unwrap();
-    fs::write(root.join("module-b/pom.xml"), "<project/>").unwrap();
     let java = "package com.example; class App { public static void main(String[] args) {} }";
     fs::write(root.join(test_source), java).unwrap();
     fs::write(root.join(main_source), java).unwrap();
@@ -1757,67 +1063,6 @@ fn run_configuration_inspection_summarizes_changed_inputs() {
 }
 
 #[test]
-fn maven_wrapper_version_accepts_newer_system_maven() {
-    let root = temporary_root("run-config-maven-wrapper-minimum");
-    fs::create_dir_all(root.join(".lithe/run")).unwrap();
-    fs::create_dir_all(root.join(".lithe/toolchains")).unwrap();
-    fs::write(
-        root.join(".lithe/run/generated.json"),
-        r#"{"version":1,"configurations":[{"id":"spring","name":"Spring","type":"spring-boot.maven","toolchains":{"java":"project-jdk","maven":"project-maven"}}]}"#,
-    )
-    .unwrap();
-    // Legacy documents stored the wrapper distribution under `version`.
-    // That value is a floor for system Maven, not an exact pin.
-    fs::write(
-        root.join(".lithe/toolchains/requirements.json"),
-        r#"{"version":1,"toolchains":{"project-maven":{"type":"maven","version":"3.6.3","java":"project-jdk"}}}"#,
-    )
-    .unwrap();
-
-    let resolve = |version: &str| -> Value {
-        serde_json::from_str(&execute_json(
-            &serde_json::json!({
-                "id": "resolve-maven",
-                "command": "runConfig.resolve",
-                "payload": {
-                    "root": root,
-                    "toolchainCandidates": [{
-                        "id": "project-maven",
-                        "type": "maven",
-                        "version": version,
-                        "vendor": ""
-                    }]
-                }
-            })
-            .to_string(),
-        ))
-        .unwrap()
-    };
-
-    let newer = resolve("3.9.16");
-    assert!(
-        newer["data"]["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|value| value["code"] != "toolchainVersionMismatch"),
-        "{newer}"
-    );
-
-    let older = resolve("3.5.4");
-    assert!(
-        older["data"]["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value["code"] == "toolchainVersionMismatch"),
-        "{older}"
-    );
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
 fn run_configuration_resolve_matches_toolchains_and_rejects_unsafe_paths() {
     let root = temporary_root("run-config-toolchain-resolution");
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
@@ -1890,12 +1135,7 @@ fn hybrid_project_scopes_node_diagnostics_to_npm_configurations() {
     fs::create_dir_all(root.join("web")).unwrap();
     fs::write(
         root.join(java_source),
-        "package com.example; @SpringBootApplication class DemoApplication { public static void main(String[] args) {} }",
-    )
-    .unwrap();
-    fs::write(
-        root.join("pom.xml"),
-        "<project><artifactId>demo</artifactId><properties><java.version>21</java.version></properties><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>",
+        "package com.example;  class DemoApplication { public static void main(String[] args) {} }",
     )
     .unwrap();
     fs::write(
@@ -1935,7 +1175,6 @@ fn hybrid_project_scopes_node_diagnostics_to_npm_configurations() {
     let resolve = |node_version: Option<&str>| -> Value {
         let mut candidates = vec![
             serde_json::json!({"id":"project-jdk","type":"java","version":"21","vendor":"Temurin"}),
-            serde_json::json!({"id":"project-maven","type":"maven","version":"3.9.9","vendor":""}),
         ];
         if let Some(version) = node_version {
             candidates.push(serde_json::json!({
@@ -1972,25 +1211,22 @@ fn hybrid_project_scopes_node_diagnostics_to_npm_configurations() {
         .iter()
         .all(|diagnostic| npm_ids.iter().any(|id| diagnostic["id"] == id.as_str())));
 
-    let spring_id = configurations
+    let java_id = configurations
         .iter()
-        .find(|configuration| configuration["provider"] == "spring-boot.maven")
+        .find(|configuration| configuration["provider"] == "java.main")
         .and_then(|configuration| configuration["id"].as_str())
         .unwrap();
-    let spring_plan: Value = serde_json::from_str(&execute_json(
+    let java_plan: Value = serde_json::from_str(&execute_json(
         &serde_json::json!({
-            "id": "plan-hybrid-spring",
+            "id": "plan-hybrid-java",
             "command": "runConfig.createLaunchPlan",
-            "payload": {"root": root, "configurationId": spring_id}
+            "payload": {"root": root, "configurationId": java_id}
         })
         .to_string(),
     ))
     .unwrap();
-    assert_eq!(spring_plan["ok"], true, "{spring_plan}");
-    assert_eq!(
-        spring_plan["data"]["executable"]["toolchain"],
-        "project-maven"
-    );
+    assert_eq!(java_plan["ok"], true, "{java_plan}");
+    assert_eq!(java_plan["data"]["executable"]["toolchain"], "project-jdk");
 
     let mismatch = resolve(Some("18.20.4"));
     let version_mismatches = mismatch["data"]["diagnostics"]
@@ -2016,20 +1252,12 @@ fn legacy_v2_runtime_requirements_are_reconciled_without_regeneration() {
     fs::create_dir_all(root.join("bun-web")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[
-            {"id":"spring","name":"backend","provider":"spring-boot.maven","execution":"service","cwd":".","toolchains":{"java":"project-jdk","maven":"project-maven"}},
-            {"id":"npm","name":"web","provider":"npm.script","execution":"service","command":"npm","args":["run","dev"],"cwd":"web","toolchains":{}},
-            {"id":"bun","name":"bun web","provider":"npm.script","execution":"service","command":"bun","args":["run","dev"],"cwd":"bun-web","toolchains":{"runtime":"project-node"}}
-        ]}"#,
+        r#"{"version":2,"configurations":[{"id":"java-service","name":"backend","provider":"java.current-file","execution":"service","cwd":".","toolchains":{"java":"project-jdk"}},{"id":"npm","name":"web","provider":"npm.script","execution":"service","command":"npm","args":["run","dev"],"cwd":"web","toolchains":{}},{"id":"bun","name":"bun web","provider":"npm.script","execution":"service","command":"bun","args":["run","dev"],"cwd":"bun-web","toolchains":{"runtime":"project-node"}}]}"#,
     )
     .unwrap();
     fs::write(
         root.join(".lithe/toolchains/requirements.json"),
-        r#"{"version":1,"toolchains":{
-            "project-jdk":{"type":"java"},
-            "project-maven":{"type":"maven","java":"project-jdk"},
-            "project-node":{"type":"node","minimumVersion":"22"}
-        }}"#,
+        r#"{"version":1,"toolchains":{"project-jdk":{"type":"java"},"project-maven":{"type":"maven","java":"project-jdk"},"project-node":{"type":"node","minimumVersion":"22"}}}"#,
     )
     .unwrap();
 
@@ -2086,7 +1314,7 @@ fn run_configuration_main_class_validation_uses_the_declared_package() {
     .unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":1,"configurations":[{"id":"spring:com.example.App","name":"App","type":"spring-boot.maven","mainClass":"com.example.App"}]}"#,
+        r#"{"version":1,"configurations":[{"id":"java-main:com.example.App","name":"App","type":"java.current-file","mainClass":"com.example.App"}]}"#,
     )
     .unwrap();
 
@@ -2134,7 +1362,7 @@ fn shared_run_configuration_fixtures_have_the_versioned_contract_shape() {
 #[test]
 fn shared_hybrid_fixture_executes_scoped_toolchain_expectations() {
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../shared/fixtures/run-configuration/hybrid-spring-vue.json");
+        .join("../../shared/fixtures/run-configuration/hybrid-java-vue.json");
     let fixture: Value = serde_json::from_str(&fs::read_to_string(fixture_path).unwrap()).unwrap();
     let root = temporary_root("run-config-hybrid-fixture");
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
@@ -2208,7 +1436,7 @@ fn shared_editor_save_fixture_executes_the_document_contract() {
     fs::create_dir_all(root.join("backend")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[{"id":"spring","name":"Spring","provider":"spring-boot.maven","execution":"service","toolchains":{"java":"project-jdk","maven":"project-maven"},"extensions":{"maven":{"module":"."}}}]}"#,
+        r#"{"version":2,"configurations":[{"id":"java-service","name":"Spring","provider":"java.current-file","execution":"service","toolchains":{"java":"project-jdk"},"extensions":{"java":{"module":"."}}}]}"#,
     )
     .unwrap();
 
@@ -2233,7 +1461,7 @@ fn run_configuration_resolve_diagnoses_orphans_and_deleted_modules() {
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":1,"configurations":[{"id":"current-file","name":"Current File","type":"java.current-file"},{"id":"module:deleted","name":"Deleted","type":"maven.module","module":"deleted"}]}"#,
+        r#"{"version":1,"configurations":[{"id":"current-file","name":"Current File","type":"java.current-file"},{"id":"module:deleted","name":"Deleted","type":"java.current-file","module":"deleted"}]}"#,
     )
     .unwrap();
     fs::write(
@@ -2299,8 +1527,6 @@ fn migrated_v1_documents_produce_identical_launch_arguments() {
     let root = temporary_root("run-config-migration");
     fs::create_dir_all(root.join("backend/src/main/java/com/example")).unwrap();
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
-    fs::write(root.join("pom.xml"), "<project/>").unwrap();
-    fs::write(root.join("backend/pom.xml"), "<project/>").unwrap();
     fs::write(
         root.join("backend/src/main/java/com/example/App.java"),
         "package com.example; class App { public static void main(String[] args) {} }",
@@ -2308,18 +1534,7 @@ fn migrated_v1_documents_produce_identical_launch_arguments() {
     .unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":1,"configurations":[{
-            "id":"spring:com.example.App",
-            "name":"App",
-            "type":"spring-boot.maven",
-            "module":"backend",
-            "workingDirectory":".",
-            "mainClass":"com.example.App",
-            "jvmArguments":["-Xmx2g"],
-            "programArguments":["--dev"],
-            "mavenProfiles":["local"],
-            "toolchains":{"java":"project-jdk","maven":"project-maven"}
-        }]}"#,
+        r#"{"version":1,"configurations":[{"id":"java-main:com.example.App","name":"App","type":"java.current-file","module":"backend","workingDirectory":".","mainClass":"com.example.App","jvmArguments":["-Xmx2g"],"programArguments":["--dev"],"toolchains":{"java":"project-jdk"}}]}"#,
     )
     .unwrap();
 
@@ -2329,7 +1544,8 @@ fn migrated_v1_documents_produce_identical_launch_arguments() {
             "command": "runConfig.createLaunchPlan",
             "payload": {
                 "root": root,
-                "configurationId": "spring:com.example.App",
+                "configurationId": "java-main:com.example.App",
+                "currentFile": "backend/src/main/java/com/example/App.java",
                 "debugPort": 5005
             }
         })
@@ -2340,21 +1556,16 @@ fn migrated_v1_documents_produce_identical_launch_arguments() {
     assert_eq!(
         plan["data"]["arguments"],
         serde_json::json!([
-            "-B",
-            "-ntp",
-            "-pl",
-            "backend",
-            "-am",
-            "-P",
-            "local",
-            "-Dspring-boot.run.main-class=com.example.App",
-            "-Dspring-boot.run.jvmArguments=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005 -Duser.language=en -Duser.country=US -Xmx2g",
-            "-Dspring-boot.run.arguments=--dev",
-            "spring-boot:run"
+            "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005",
+            "-Duser.language=en",
+            "-Duser.country=US",
+            "-Xmx2g",
+            "backend/src/main/java/com/example/App.java",
+            "--dev"
         ])
     );
     assert_eq!(plan["data"]["workingDirectory"], ".");
-    assert_eq!(plan["data"]["executable"]["toolchain"], "project-maven");
+    assert_eq!(plan["data"]["executable"]["toolchain"], "project-jdk");
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -2408,18 +1619,7 @@ fn process_configurations_launch_without_java_assumptions() {
     fs::create_dir_all(root.join("frontend")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[{
-            "id":"npm:dev",
-            "name":"web dev",
-            "provider":"npm.script",
-            "execution":"service",
-            "confidence":"declared",
-            "command":"npm",
-            "args":["run","dev"],
-            "cwd":"frontend",
-            "env":{"PORT":"3000"},
-            "toolchains":{}
-        }]}"#,
+        r#"{"version":2,"configurations":[{"id":"npm:dev","name":"web dev","provider":"npm.script","execution":"service","confidence":"declared","command":"npm","args":["run","dev"],"cwd":"frontend","env":{"PORT":"3000"},"toolchains":{}}]}"#,
     )
     .unwrap();
 
@@ -2449,11 +1649,7 @@ fn toolchain_backed_process_uses_the_generic_runtime_binding() {
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[{
-            "id":"go:api","name":"Go API","provider":"go.main",
-            "execution":"application","args":["run","./cmd/api"],"cwd":".",
-            "env":{"APP_ENV":"dev"},"toolchains":{"runtime":"project-go"}
-        }]}"#,
+        r#"{"version":2,"configurations":[{"id":"go:api","name":"Go API","provider":"go.main","execution":"application","args":["run","./cmd/api"],"cwd":".","env":{"APP_ENV":"dev"},"toolchains":{"runtime":"project-go"}}]}"#,
     )
     .unwrap();
 
@@ -2577,10 +1773,7 @@ fn unknown_provider_without_an_executable_never_falls_into_maven() {
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[{
-            "id":"zig:app","name":"Zig App","provider":"zig.main",
-            "args":[],"cwd":".","toolchains":{}
-        }]}"#,
+        r#"{"version":2,"configurations":[{"id":"zig:app","name":"Zig App","provider":"zig.main","args":[],"cwd":".","toolchains":{}}]}"#,
     )
     .unwrap();
     let plan: Value = serde_json::from_str(&execute_json(
@@ -2612,10 +1805,7 @@ fn process_options_update_common_arguments_and_environment() {
     fs::create_dir_all(root.join("backend")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[{
-            "id":"python:api","name":"API","provider":"python.script",
-            "command":"python3","args":["app.py"],"cwd":".","toolchains":{}
-        }]}"#,
+        r#"{"version":2,"configurations":[{"id":"python:api","name":"API","provider":"python.script","command":"python3","args":["app.py"],"cwd":".","toolchains":{}}]}"#,
     )
     .unwrap();
 
@@ -2648,7 +1838,7 @@ fn process_options_update_common_arguments_and_environment() {
         serde_json::json!(["app.py", "--port", "9000"])
     );
     assert_eq!(patch["env"]["APP_ENV"], "test");
-    assert!(patch["extensions"]["maven"].is_null());
+    assert!(patch["extensions"]["java"].is_null());
 
     fs::write(
         root.join(".lithe/run/local.json"),
@@ -2682,10 +1872,7 @@ fn process_configurations_reject_path_qualified_commands() {
     fs::create_dir_all(root.join(".lithe/run")).unwrap();
     fs::write(
         root.join(".lithe/run/generated.json"),
-        r#"{"version":2,"configurations":[{
-            "id":"evil","name":"evil","provider":"shell.command",
-            "command":"../../../usr/bin/curl","args":[],"cwd":".","toolchains":{}
-        }]}"#,
+        r#"{"version":2,"configurations":[{"id":"evil","name":"evil","provider":"shell.command","command":"../../../usr/bin/curl","args":[],"cwd":".","toolchains":{}}]}"#,
     )
     .unwrap();
 
@@ -2701,5 +1888,51 @@ fn process_configurations_reject_path_qualified_commands() {
     assert_eq!(plan["ok"], false);
     assert_eq!(plan["error"]["code"], "invalid_request");
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn retired_providers_do_not_block_surviving_run_configurations() {
+    let root = temporary_root("retired-providers");
+    fs::create_dir_all(root.join(".lithe/run")).unwrap();
+    fs::create_dir_all(root.join(".lithe/toolchains")).unwrap();
+    fs::write(root.join(".lithe/run/generated.json"), serde_json::json!({
+        "version": 2,
+        "configurations": [
+            {"id": "old-service", "name": "Retired service", "provider": "spring-boot.maven", "toolchains": {"maven": "project-maven"}},
+            {"id": "old-module", "name": "Retired module", "provider": "maven.module"},
+            {"id": "go-api", "name": "Go API", "provider": "go.main", "command": "go", "args": ["run", "."], "cwd": "."}
+        ]
+    }).to_string()).unwrap();
+    fs::write(
+        root.join(".lithe/toolchains/requirements.json"),
+        r#"{"version":1,"toolchains":{"project-maven":{"type":"maven"}}}"#,
+    )
+    .unwrap();
+    let resolved: Value = serde_json::from_str(&execute_json(
+        &serde_json::json!({
+            "id": "retired", "command": "runConfig.resolve", "payload": {"root": root}
+        })
+        .to_string(),
+    ))
+    .unwrap();
+    assert_eq!(resolved["ok"], true, "{resolved}");
+    let configurations = resolved["data"]["configurations"].as_array().unwrap();
+    assert_eq!(configurations.len(), 1);
+    assert_eq!(configurations[0]["id"], "go-api");
+    let diagnostics = resolved["data"]["diagnostics"].as_array().unwrap();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|item| item["code"] == "unsupportedProvider")
+            .count(),
+        2
+    );
+    assert!(diagnostics.iter().all(|item| item["id"] != "go-api"));
+    let plan: Value = serde_json::from_str(&execute_json(&serde_json::json!({
+        "id": "go-plan", "command": "runConfig.createLaunchPlan", "payload": {"root": root, "configurationId": "go-api"}
+    }).to_string())).unwrap();
+    assert_eq!(plan["ok"], true, "{plan}");
+    assert_eq!(plan["data"]["executable"]["command"], "go");
     fs::remove_dir_all(root).unwrap();
 }

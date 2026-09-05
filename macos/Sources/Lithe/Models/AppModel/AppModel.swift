@@ -90,11 +90,8 @@ final class AppModel: ObservableObject, Identifiable {
     var pendingRunAction: PendingRunAction?
     @Published var isReferencesVisible = false
     @Published var isProblemsVisible = false
-    @Published var isMavenVisible = false
-    @Published var isSpringVisible = false
     @Published var isDebugVisible = false
     @Published var debugBreakpointPresentation = DebugBreakpointPresentationState()
-    @Published var isDiscourseCommunityVisible = false
     @Published var isImplementationChooserVisible = false
     var languageProviderCatalog: LanguageProviderCatalog { languageToolingFeature.catalog }
     var languageProviderCatalogSnapshot: LanguageProviderCatalogSnapshot { languageToolingFeature.catalogSnapshot }
@@ -136,7 +133,6 @@ final class AppModel: ObservableObject, Identifiable {
     let debugPortAvailabilityChecker: any DebugPortAvailabilityChecking
     let workspaceFeature: WorkspaceFeatureModel
     let githubFeature: GitHubFeatureModel
-    let discourseCommunityFeature: DiscourseCommunityFeatureModel
     let editorTabOrderFeature = EditorTabOrderFeatureModel()
     let mediaFeature = MediaDocumentFeatureModel()
     let terminalPlacementFeature: TerminalPlacementFeatureModel
@@ -170,7 +166,6 @@ final class AppModel: ObservableObject, Identifiable {
     }
     let documentFeature: DocumentFeatureModel
     let javaFeature: JavaFeatureModel
-    let springFeature: SpringFeatureModel
     private var activeDatabaseFeature: DatabaseFeatureModel? {
         let capability: LitheDatabaseModule.DatabaseModuleCapability? = cachedModuleCapability(.databaseWorkspace)
         return capability?.feature
@@ -221,10 +216,7 @@ final class AppModel: ObservableObject, Identifiable {
         executionCapability?.testService as? LanguageTestService
     }
     var languageDiagnostics: [URL: [LanguageServerDiagnostic]] {
-        var combined = languageToolingSessionsIfActive?.diagnostics ?? [:]
-        for (url, diagnostics) in springFeature.languageDiagnostics {
-            combined[url, default: []].append(contentsOf: diagnostics)
-        }
+        let combined = languageToolingSessionsIfActive?.diagnostics ?? [:]
         return combined
     }
     var editorDiagnostics: [URL: [EditorDiagnostic]] {
@@ -256,7 +248,6 @@ final class AppModel: ObservableObject, Identifiable {
 
     private var documentFeatureObservation: AnyCancellable?
     private var javaFeatureObservation: AnyCancellable?
-    private var springFeatureObservation: AnyCancellable?
     private var navigationHistoryFeatureObservation: AnyCancellable?
     private var isObjectWillChangeRelayScheduled = false
     private var languageToolingObservation: AnyCancellable?
@@ -320,7 +311,6 @@ final class AppModel: ObservableObject, Identifiable {
         platformUI = services.platformUI
         keyboardShortcutFeature = KeyboardShortcutFeatureModel(settings: settings)
         workbenchBackgroundFeature = WorkbenchBackgroundFeatureModel(settings: settings, platform: services.workbenchBackgroundPlatform)
-        discourseCommunityFeature = DiscourseCommunityFeatureModel(service: services.discourseCommunityService)
         terminalPlacementFeature = TerminalPlacementFeatureModel()
         workspaceFeature = WorkspaceFeatureModel(
             operations: services.workspaceOperations,
@@ -352,8 +342,7 @@ final class AppModel: ObservableObject, Identifiable {
             binaryFileViewerRegistry: services.binaryFileViewerRegistry
         )
         navigationHistoryFeature = NavigationHistoryFeatureModel()
-        javaFeature = JavaFeatureModel(operations: services.javaMavenOperations)
-        springFeature = SpringFeatureModel(operations: services.javaMavenOperations)
+        javaFeature = JavaFeatureModel(operations: services.javaOperations)
         recentProjects = services.recentProjectsStore.load()
         languageToolingFeature.configureSessions { [weak self] in
             self?.languageToolingSessionsIfActive
@@ -577,10 +566,6 @@ final class AppModel: ObservableObject, Identifiable {
         javaFeatureObservation = javaFeature.objectWillChange.sink { [weak self] _ in
             self?.scheduleObjectWillChangeRelay()
         }
-        springFeatureObservation = springFeature.objectWillChange.sink { [weak self] _ in
-            self?.refreshEditorDiagnosticsStore()
-            self?.scheduleObjectWillChangeRelay()
-        }
         fileVisibilityRulesObserverID = settings.addFileVisibilityRulesObserver { [weak self] in
             guard let self else { return }
             self.workspaceFeature.updateVisibilityRules(self.settings.fileVisibilityRules)
@@ -739,10 +724,8 @@ final class AppModel: ObservableObject, Identifiable {
     private func reloadJavaRuntimeServices() {
         cancelJavaTestWorkflows()
         genericDebugFeatureIfActive?.stop()
-        mavenFeatureIfActive?.stop()
         languageToolingSessionsIfActive?.stopLanguageServer(providerID: "java")
         javaFeature.stop()
-        springFeature.reset()
         if let workspaceURL {
             if let document = activeDocument,
                document.url.pathExtension.lowercased() == "java" {
@@ -912,7 +895,6 @@ final class AppModel: ObservableObject, Identifiable {
         languageTestServiceIfActive?.reset()
         languageToolingFeature.resetWorkspaceState()
         runtimeFeature.openProject(at: normalizedURL)
-        mavenFeatureIfActive?.reset()
         runFeatureIfActive?.reset()
         pendingRunAction = nil
         scheduleObjectWillChangeRelay()
@@ -920,14 +902,11 @@ final class AppModel: ObservableObject, Identifiable {
         debugBreakpointPresentation.reset()
         clearLanguageNavigationProjection()
         javaFeature.stop()
-        springFeature.reset()
         workspaceFeature.reset()
         searchFeatureIfActive?.reset()
         isTerminalVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
-        isSpringVisible = false
         isRunVisible = false
         isTestsVisible = false
         isDebugVisible = false
@@ -1021,8 +1000,6 @@ final class AppModel: ObservableObject, Identifiable {
         isTerminalVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
-        isSpringVisible = false
         isRunVisible = false
         isTestsVisible = false
         isDebugVisible = false
@@ -1031,14 +1008,12 @@ final class AppModel: ObservableObject, Identifiable {
         languageToolingSessionsIfActive?.stopAll()
         languageTestServiceIfActive?.reset()
         runtimeFeature.closeProject()
-        mavenFeatureIfActive?.reset()
         runFeatureIfActive?.reset()
         pendingRunAction = nil
         scheduleObjectWillChangeRelay()
         genericDebugFeatureIfActive?.reset()
         debugBreakpointPresentation.reset()
         javaFeature.stop()
-        springFeature.reset()
         editorChrome.reset()
         editorNavigationTarget = nil
         navigationHistoryFeature.reset()
@@ -1280,14 +1255,6 @@ final class AppModel: ObservableObject, Identifiable {
 
     private func handleDocumentChanged(_ document: EditorDocument) {
         activateLanguageServerIfAvailable(for: document)
-        if let workspaceURL {
-            springFeature.scheduleReload(
-                changedDocument: document,
-                workspaceURL: workspaceURL,
-                files: projectFiles,
-                openDocuments: openDocuments
-            )
-        }
         Task { @MainActor [weak self, weak document] in
             try? await Task.sleep(for: .milliseconds(450))
             guard !Task.isCancelled, let self, let document else { return }
@@ -1316,7 +1283,7 @@ final class AppModel: ObservableObject, Identifiable {
         if descriptor.id == "java" {
             switch prepareJavaLanguageServerRuntimeIfNeeded(for: document) {
             case .ready: break
-            case .preparing: return false
+            case .preparing, .unavailable: return false
             }
         }
         if let ownership = services.pluginCatalog.languageSupport(for: document.url),
@@ -1534,7 +1501,6 @@ final class AppModel: ObservableObject, Identifiable {
             isTerminalVisible = false
             isReferencesVisible = false
             isProblemsVisible = false
-            isMavenVisible = false
             isRunVisible = false
             isDebugVisible = false
         }
@@ -1603,7 +1569,6 @@ final class AppModel: ObservableObject, Identifiable {
         isTerminalVisible = false
         isReferencesVisible = false
         isProblemsVisible = false
-        isMavenVisible = false
         isRunVisible = false
         isDebugVisible = false
         isTestsVisible = false

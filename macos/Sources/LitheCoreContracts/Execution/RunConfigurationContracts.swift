@@ -162,27 +162,6 @@ package struct RunConfigurationGenerationResult: Sendable {
     package init(entryCount: Int) { self.entryCount = entryCount }
 }
 
-package struct RunConfigurationDraft: Sendable {
-    package let name: String
-    package let kind: RunConfigurationKind
-    package let modulePath: String
-    package let mainClass: String
-    package let scope: RunConfigurationSaveScope
-
-    package init(
-        name: String,
-        kind: RunConfigurationKind,
-        modulePath: String,
-        mainClass: String,
-        scope: RunConfigurationSaveScope
-    ) {
-        self.name = name
-        self.kind = kind
-        self.modulePath = modulePath
-        self.mainClass = mainClass
-        self.scope = scope
-    }
-}
 
 package struct RunConfigurationDocumentMutation: Sendable {
     package let configurationID: String?
@@ -201,25 +180,15 @@ package protocol RunConfigurationDocumentMutating: Sendable {
         scope: RunConfigurationSaveScope,
         options: RunOptions
     ) throws -> RunConfigurationDocumentMutation
-    func createConfigurationDocument(
-        at projectURL: URL,
-        draft: RunConfigurationDraft
-    ) throws -> RunConfigurationDocumentMutation
 }
 
 package struct ProjectToolchainSelection: Codable, Equatable, Sendable {
     package var javaHomePath = ""
-    package var mavenExecutablePath = ""
-    package var mavenJavaHomePath = ""
 
     package init(
-        javaHomePath: String = "",
-        mavenExecutablePath: String = "",
-        mavenJavaHomePath: String = ""
+        javaHomePath: String = ""
     ) {
         self.javaHomePath = javaHomePath
-        self.mavenExecutablePath = mavenExecutablePath
-        self.mavenJavaHomePath = mavenJavaHomePath
     }
 }
 
@@ -241,14 +210,6 @@ package protocol RunConfigurationOperations: Sendable {
         classPath: String?,
         debugPort: Int?
     ) throws -> SharedLaunchPlan
-    func launchPlan(
-        at projectURL: URL,
-        configurationID: String,
-        currentFile: String?,
-        classPath: String?,
-        debugPort: Int?,
-        mavenContext: MavenLaunchContext?
-    ) throws -> SharedLaunchPlan
     func saveEditorChanges(
         _ options: RunOptions,
         toolchain: ProjectToolchainSelection,
@@ -256,27 +217,10 @@ package protocol RunConfigurationOperations: Sendable {
         scope: RunConfigurationSaveScope,
         at projectURL: URL
     ) throws
-    func createConfiguration(_ draft: RunConfigurationDraft, at projectURL: URL) throws -> String
     func migrateLegacySettings(at projectURL: URL, configurationIDs: [String]) throws
 }
 
 package extension RunConfigurationOperations {
-    func launchPlan(
-        at projectURL: URL,
-        configurationID: String,
-        currentFile: String?,
-        classPath: String?,
-        debugPort: Int?,
-        mavenContext _: MavenLaunchContext?
-    ) throws -> SharedLaunchPlan {
-        try launchPlan(
-            at: projectURL,
-            configurationID: configurationID,
-            currentFile: currentFile,
-            classPath: classPath,
-            debugPort: debugPort
-        )
-    }
 
     func saveEditorChanges(
         _: RunOptions,

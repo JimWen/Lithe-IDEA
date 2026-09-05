@@ -78,7 +78,6 @@ enum LitheActionRegistry {
             action("go-to-implementation", model: model) { model.goToImplementation() },
             action("toggle-terminal", model: model) { model.toggleTerminal() },
             action("toggle-problems", model: model) { model.toggleProblems() },
-            action("toggle-maven", model: model) { model.toggleMaven() },
             action("toggle-git-log", model: model) { Task { await model.toggleGitLog() } },
             action("toggle-run", model: model) { model.isRunVisible.toggle() },
             action("toggle-tests", model: model) { model.toggleTests() },
@@ -90,7 +89,6 @@ enum LitheActionRegistry {
             action("go-to-line", model: model) { model.showGoToLine() },
             action("go-to-definition", model: model) { model.goToDefinition() },
             action("find-usages", model: model) { model.findReferences() },
-            action("spring-endpoints", model: model) { model.toggleSpringEndpoints() },
             action("local-history", model: model) {
                 if let url = model.activeDocument?.url { model.showLocalHistory(for: url) }
             },
