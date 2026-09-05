@@ -1,214 +1,159 @@
 import SwiftUI
 
-/// Menu actions observe the focused project, including when several projects
-/// share a native tab group. They reuse the same model entry points as tools.
+/// Menus observe a deduplicated, tracking-aware projection. Closures capture the
+/// displayed project context, then revalidate it before dispatching an action.
 struct LitheProjectCommands: Commands {
-    @FocusedObject private var focusedModel: AppModel?
-    @ObservedObject var projectWindows: ProjectWindowManager
-    @ObservedObject var windowPresentation: ProjectWindowPresentation
-    @ObservedObject var updateChecker: UpdateChecker
+    @ObservedObject var presentation: MenuPresentationCoordinator
 
-    private var model: AppModel { focusedModel ?? projectWindows.activeSessions.activeModel }
+    private var items: ProjectCommandMenuItems {
+        return ProjectCommandMenuItems(snapshot: presentation.renderState, presentation: presentation)
+    }
 
     var body: some Commands {
-        LitheFileCommands(model: model, presentation: windowPresentation)
-        LitheFindCommands(model: model)
-        LitheToolCommands(model: model)
-
+        LitheFileCommands(items: items)
+        LitheFindCommands(items: items)
+        LitheToolCommands(items: items)
         CommandGroup(replacing: .appSettings) {
-            Button("Settings…") { model.showSettings() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "settings"))
+            items.button("Settings…", .settings)
         }
         CommandGroup(after: .appInfo) {
-            Button("Check for Updates…") {
-                Task { await updateChecker.checkForUpdates(manual: true) }
-            }
-            .disabled(updateChecker.isChecking)
+            items.button("Check for Updates…", .checkUpdates)
         }
         CommandGroup(after: .windowArrangement) {
             Menu("Tool Windows") {
-                Button("Project") { model.toggleSidebar(.project) }
-                Button("Commit") { model.toggleSidebar(.changes) }
-                Button("Find") { model.selectedSidebar = .search }
+                items.button("Project", .project)
+                items.button("Commit", .commit)
+                items.button("Find", .find)
                 Divider()
-                Button("Git") { Task { await model.toggleGitLog() } }
-                Button("Terminal") { model.toggleTerminal() }
-                Button("Run") { model.toggleRun() }
-                Button("Problems") { model.toggleProblems() }
+                items.button("Git", .git)
+                items.button("Terminal", .terminal)
+                items.button("Run", .run)
+                items.button("Problems", .problems)
             }
-            .disabled(model.workspaceURL == nil)
             Divider()
-            Button("Merge All Project Windows") { windowPresentation.mergeAllProjectWindows() }
-                .disabled(projectWindows.windowIDs.count < 2 || model.workspaceURL == nil)
-            Button("Move Project to New Window") { windowPresentation.detachSelectedProject() }
-                .disabled(!windowPresentation.canDetachSelectedProject)
+            items.button("Merge All Project Windows", .mergeWindows)
+            items.button("Move Project to New Window", .detachWindow)
             Divider()
-            Button("Previous Project Tab") { windowPresentation.selectProjectTab(next: false) }
-                .disabled(!windowPresentation.canDetachSelectedProject)
-            Button("Next Project Tab") { windowPresentation.selectProjectTab(next: true) }
-                .disabled(!windowPresentation.canDetachSelectedProject)
+            items.button("Previous Project Tab", .previousProject)
+            items.button("Next Project Tab", .nextProject)
         }
         CommandMenu("Navigate") {
-            Button("Back") { model.navigateBack() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "navigate-back"))
-                .disabled(!model.canNavigateBack)
-            Button("Forward") { model.navigateForward() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "navigate-forward"))
-                .disabled(!model.canNavigateForward)
+            items.button("Back", .back)
+            items.button("Forward", .forward)
             Divider()
-            Button("Search Everywhere…") { model.toggleSearchEverywhere() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "search-everywhere"))
-                .disabled(model.workspaceURL == nil)
-            Button("Go to Line…") { model.showGoToLine() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "go-to-line"))
-                .disabled(model.activeDocument == nil)
+            items.button("Search Everywhere…", .searchEverywhere)
+            items.button("Go to Line…", .goToLine)
             Divider()
-            Button("Go to Definition") { model.goToDefinition() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "go-to-definition"))
-                .disabled(!model.canPerformShortcutCommand(id: "go-to-definition"))
-            Button("Go to Implementation") { model.goToImplementation() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "go-to-implementation"))
-                .disabled(!model.supportsLanguageServerFeature(.implementation))
-            Button("Find Usages") { model.findReferences() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "find-usages"))
-                .disabled(!model.supportsLanguageServerFeature(.references))
+            items.button("Go to Definition", .definition)
+            items.button("Go to Implementation", .implementation)
+            items.button("Find Usages", .usages)
         }
     }
 }
 
+private struct ProjectCommandMenuItems {
+    let snapshot: ProjectMenuRenderState
+    let presentation: MenuPresentationCoordinator
+
+    func button(_ title: LocalizedStringKey, _ command: ProjectMenuCommand) -> some View {
+        Button(title) { presentation.perform(command, from: snapshot) }
+            .disabled(!snapshot.isEnabled(command))
+            .litheKeyboardShortcut(snapshot.project.bindings[command])
+    }
+
+    func recentTitle(_ project: RecentProject) -> String {
+        let duplicates = snapshot.project.recentProjects.filter { $0.name == project.name }
+        guard duplicates.count > 1 else { return project.name }
+        return "\(project.name) — \(project.url.deletingLastPathComponent().path)"
+    }
+}
+
 private struct LitheFileCommands: Commands {
-    @ObservedObject var model: AppModel
-    let presentation: ProjectWindowPresentation
+    let items: ProjectCommandMenuItems
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Menu("New") {
-                Button("Project from Existing Folder…") { model.chooseProject(title: "New Project", prompt: "Choose Folder") }
-                Button("File…") {
-                    if let root = model.workspaceURL { model.requestCreateFile(in: root) }
-                }
-                .disabled(model.workspaceURL == nil)
-                Button("Directory…") {
-                    if let root = model.workspaceURL { model.requestCreateDirectory(in: root) }
-                }
-                .disabled(model.workspaceURL == nil)
+                items.button("Project from Existing Folder…", .newProject)
+                items.button("File…", .newFile)
+                items.button("Directory…", .newDirectory)
             }
-            Button("Open…") { model.chooseProject() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "open-project"))
-            Button("Open File…") { model.chooseEditorFile() }
+            items.button("Open…", .openProject)
+            items.button("Open File…", .openFile)
             Menu("Recent Projects") {
-                if model.recentProjects.isEmpty {
+                if items.snapshot.project.recentProjects.isEmpty {
                     Text("No recent projects")
                 }
-                ForEach(model.recentProjects) { project in
-                    Button(project.url.lastPathComponent) { model.openProject(project.url) }
-                        .help(project.url.path)
-                        .disabled(!model.fileExists(at: project.url))
+                ForEach(items.snapshot.project.recentProjects) { project in
+                    Button(items.recentTitle(project)) {
+                        items.presentation.openRecent(project.url)
+                    }
+                    .help(project.url.path)
+                    .disabled(!items.snapshot.isEnabled(.openProject)
+                        || items.snapshot.access[project.url.standardizedFileURL] == .missing)
                 }
             }
-            Button("Clone Repository…") { model.showCloneRepository() }
+            items.button("Clone Repository…", .cloneRepository)
             Divider()
-            Button("Close Project") { presentation.closeSelectedProject() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "close-project"))
-                .disabled(model.workspaceURL == nil)
+            items.button("Close Project", .closeProject)
         }
         CommandGroup(replacing: .saveItem) {
-            Button("Save") { model.saveActiveDocument() }
-                .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "save"))
-                .disabled(model.activeDocument == nil)
-            Button("Save All") { _ = model.saveAllDocuments() }
-                .disabled(!model.hasUnsavedDocuments)
-            Button("Close Editor Tab") { _ = model.requestCloseActiveWorkbenchItem() }
-                .disabled(model.activeDocument == nil && model.activeMediaDocument == nil
-                    && model.activeEditorTerminalSession == nil && model.standaloneFileURL == nil)
+            items.button("Save", .save)
+            items.button("Save All", .saveAll)
+            items.button("Close Editor Tab", .closeEditor)
             Divider()
-            Button("Synchronize") { Task { await model.refreshWorkspace() } }
-                .disabled(model.workspaceURL == nil)
+            items.button("Synchronize", .synchronize)
         }
     }
 }
 
 private struct LitheFindCommands: Commands {
-    @ObservedObject var model: AppModel
+    let items: ProjectCommandMenuItems
 
     var body: some Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
             Menu("Find") {
-                Button("Find…") { model.showFindBar() }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "find-in-file"))
-                    .disabled(model.activeDocument == nil)
-                Button("Replace…") { model.showReplaceBar() }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "replace-in-file"))
-                    .disabled(model.activeDocument == nil)
+                items.button("Find…", .findInFile)
+                items.button("Replace…", .replaceInFile)
                 Divider()
-                Button("Find in Files…") { model.openProjectSearch() }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "search-in-project"))
-                    .disabled(model.workspaceURL == nil)
-                Button("Replace in Files…") { model.openProjectReplace() }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "replace-in-project"))
-                    .disabled(model.workspaceURL == nil)
+                items.button("Find in Files…", .findInFiles)
+                items.button("Replace in Files…", .replaceInFiles)
                 Divider()
-                Button("Find Next") { model.navigateFind(offset: 1) }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "find-next"))
-                    .disabled(!model.isFindBarVisible || model.findMatchCount == 0)
-                Button("Find Previous") { model.navigateFind(offset: -1) }
-                    .litheKeyboardShortcut(model.keyboardShortcutFeature.primaryKeyPress(for: "find-previous"))
-                    .disabled(!model.isFindBarVisible || model.findMatchCount == 0)
-                Button("Find Usages") { model.findReferences() }
-                    .disabled(!model.supportsLanguageServerFeature(.references))
+                items.button("Find Next", .findNext)
+                items.button("Find Previous", .findPrevious)
+                items.button("Find Usages", .usages)
             }
         }
     }
 }
 
 private struct LitheToolCommands: Commands {
-    @ObservedObject var model: AppModel
+    let items: ProjectCommandMenuItems
 
     var body: some Commands {
         CommandMenu("Tools") {
-            Button("Terminal") { model.toggleTerminal() }
-                .disabled(model.workspaceURL == nil)
-            Button("Edit Configurations…") { model.showRunConfigurationEditor() }
-                .disabled(model.workspaceURL == nil)
-            Button("Identify / Rescan Project…") { model.requestRunConfigurationRescan() }
-                .disabled(model.workspaceURL == nil)
+            items.button("Terminal", .terminal)
+            items.button("Edit Configurations…", .editConfigurations)
+            items.button("Identify / Rescan Project…", .rescan)
             Divider()
-            Button("Language Support…") { model.showSettings(category: .lsp) }
-            Button("Restart Language Servers") { model.restartLanguageServers() }
-                .disabled(model.workspaceURL == nil)
+            items.button("Language Support…", .languageSettings)
+            items.button("Restart Language Servers", .restartLanguageServers)
             Divider()
             Menu("Local History") {
-                Button("Show File History…") {
-                    if let url = model.activeDocument?.url { model.showLocalHistory(for: url) }
-                }
-                .disabled(model.activeDocument == nil)
-                Button("Show Project History…") { model.showProjectLocalHistory() }
-                    .disabled(model.workspaceURL == nil)
+                items.button("Show File History…", .fileHistory)
+                items.button("Show Project History…", .projectHistory)
             }
         }
         CommandMenu("Git") {
-            Button("Commit…") { model.selectedSidebar = .changes }
-                .disabled(model.gitRepositoryRoot == nil)
-            Button("Push…") { model.pendingGitPushReference = model.currentGitReference }
-                .disabled(model.currentGitReference == nil || model.isPerformingBranchOperation)
-            Button("Update Project…") {
-                if let reference = model.currentGitReference {
-                    Task { await model.updateCurrentBranch(reference) }
-                }
-            }
-            .disabled(model.currentGitReference == nil || model.isPerformingBranchOperation)
-            Button("Fetch") { Task { await model.fetchGit() } }
-                .disabled(model.gitRepositoryRoot == nil || model.isPerformingBranchOperation)
+            items.button("Commit…", .showCommit)
+            items.button("Push…", .push)
+            items.button("Update Project…", .update)
+            items.button("Fetch", .fetch)
             Divider()
-            Button("Branches…") { model.branchSwitcherRequest += 1 }
-                .disabled(model.gitRepositoryRoot == nil)
-            Button("New Branch…") { model.pendingNewBranchReference = model.currentGitReference }
-                .disabled(model.currentGitReference == nil || model.isPerformingBranchOperation)
-            Button("Show Log") {
-                if !model.isGitLogVisible { Task { await model.toggleGitLog() } }
-            }
-            .disabled(model.gitRepositoryRoot == nil)
+            items.button("Branches…", .branches)
+            items.button("New Branch…", .newBranch)
+            items.button("Show Log", .showLog)
         }
     }
 }

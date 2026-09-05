@@ -38,6 +38,14 @@ final class MacServiceContainer {
     let runConfigurationStore: MacRunConfigurationStore
     let moduleLifecycleCoordinator: ModuleLifecycleCoordinator
 
+    static func makeCommandEnvironmentObserver() -> MacCommandEnvironmentObserver {
+        MacCommandEnvironmentObserver(feature: CommandEnvironmentFeatureModel())
+    }
+
+    static func makeRecentProjectAccessChecker() -> any RecentProjectAccessChecking {
+        MacRecentProjectAccessChecker()
+    }
+
     static func makeLogDirectoryProvider() -> any LogDirectoryProviding {
         MacLogDirectoryProvider()
     }
@@ -522,7 +530,8 @@ final class MacServiceContainer {
             workbenchBackgroundPlatform: MacWorkbenchBackgroundPlatform(store: store),
             directoryWatcherFactory: MacDirectoryWatcherFactory(),
             platformUI: platformUI,
-            shortcutDetectorFactory: MacShortcutDetectorFactory()
+            shortcutDetectorFactory: MacShortcutDetectorFactory(),
+            commandProjectionScheduler: MacCommandProjectionScheduler()
         )
         moduleLifecycleCoordinator.start()
         Task { try? await moduleRegistry.startEagerModules() }

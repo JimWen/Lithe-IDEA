@@ -48,6 +48,7 @@ final class AppServices {
     let directoryWatcherFactory: any DirectoryWatcherFactory
     let platformUI: any PlatformUI
     let shortcutDetectorFactory: any ShortcutDetectorFactory
+    let commandProjectionScheduler: any CommandProjectionScheduling
 
     init(
         moduleRuntime: ModuleRuntime,
@@ -82,7 +83,8 @@ final class AppServices {
         workbenchBackgroundPlatform: any WorkbenchBackgroundPlatformProviding,
         directoryWatcherFactory: any DirectoryWatcherFactory,
         platformUI: any PlatformUI,
-        shortcutDetectorFactory: any ShortcutDetectorFactory
+        shortcutDetectorFactory: any ShortcutDetectorFactory,
+        commandProjectionScheduler: any CommandProjectionScheduling
     ) {
         self.moduleRuntime = moduleRuntime
         self.pluginManager = pluginManager
@@ -126,5 +128,6 @@ final class AppServices {
         self.directoryWatcherFactory = directoryWatcherFactory
         self.platformUI = platformUI
         self.shortcutDetectorFactory = shortcutDetectorFactory
+        self.commandProjectionScheduler = commandProjectionScheduler
     }
 }

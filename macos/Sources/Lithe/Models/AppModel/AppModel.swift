@@ -15,7 +15,10 @@ import LitheCoreContracts
 final class AppModel: ObservableObject, Identifiable {
     let id = UUID()
     @Published private(set) var workspaceURL: URL?
-    @Published private(set) var standaloneFileURL: URL?
+    @Published private(set) var standaloneFileURL: URL? {
+        didSet { standaloneCommandGeneration += 1 }
+    }
+    private(set) var standaloneCommandGeneration = 0
     @Published var isSidebarVisible = true
     @Published var selectedSidebar: SidebarDestination = .project {
         didSet {
@@ -119,7 +122,10 @@ final class AppModel: ObservableObject, Identifiable {
     }
     @Published var blameVisibleURL: URL?
     @Published var gitLogSearchQuery = ""
-    private var shortcutDetector: (any ShortcutDetector)?
+    var shortcutDetector: (any ShortcutDetector)?
+    var commandStateFeatureStorage: ProjectCommandStateFeatureModel?
+    var menuCommandTasks: [UUID: Task<Void, Never>] = [:]
+    var usesApplicationCommandRouter = false
     private var sidebarRefreshTask: Task<Void, Never>?
     // Keep the runtime shutdown operation alive and coalesce close paths that
     // can race (for example, project close followed by window teardown).
@@ -633,10 +639,6 @@ final class AppModel: ObservableObject, Identifiable {
         shortcutDetector?.start()
     }
 
-    private func refreshShortcutDetector() {
-        shortcutDetector?.update(registrations: keyboardShortcutFeature.registrations)
-    }
-
     func activateDatabaseModule() async {
         do {
             let value = try await services.moduleRuntime.activateCapability(.databaseWorkspace)
@@ -695,6 +697,12 @@ final class AppModel: ObservableObject, Identifiable {
 
     func shutdownProjectSession() async {
         shortcutDetector?.stop()
+        menuCommandTasks.values.forEach { $0.cancel() }
+        let pendingMenuCommands = Array(menuCommandTasks.values)
+        for task in pendingMenuCommands { await task.value }
+        menuCommandTasks.removeAll()
+        commandStateFeatureStorage?.stop()
+        commandStateFeatureStorage = nil
         cancelJavaTestWorkflows()
         languageToolingSessionsIfActive?.stopAll()
         languageTestServiceIfActive?.stop()

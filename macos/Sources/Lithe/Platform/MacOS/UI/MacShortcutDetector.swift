@@ -15,6 +15,7 @@ extension View {
 }
 
 private struct MacReturnKeyMonitor: NSViewRepresentable {
+    @Environment(\.commandInputEnvironment) private var commandEnvironment
     let isEnabled: Bool
     let action: (_ isShiftPressed: Bool) -> Void
 
@@ -23,13 +24,17 @@ private struct MacReturnKeyMonitor: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.view = view
+        context.coordinator.commandEnvironment = commandEnvironment
         context.coordinator.start()
-        return NSView(frame: .zero)
+        return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.isEnabled = isEnabled
         context.coordinator.action = action
+        context.coordinator.commandEnvironment = commandEnvironment
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -37,6 +42,8 @@ private struct MacReturnKeyMonitor: NSViewRepresentable {
     }
 
     final class Coordinator {
+        weak var view: NSView?
+        weak var commandEnvironment: CommandEnvironmentFeatureModel?
         var isEnabled: Bool
         var action: (_ isShiftPressed: Bool) -> Void
         private var monitor: Any?
@@ -52,6 +59,12 @@ private struct MacReturnKeyMonitor: NSViewRepresentable {
                 guard let self, self.isEnabled, event.keyCode == 36 || event.keyCode == 76 else {
                     return event
                 }
+                guard let window = self.view?.window, window === NSApp.keyWindow,
+                      event.window == nil || event.window === window,
+                      MainActor.assumeIsolated({
+                          guard let environment = self.commandEnvironment else { return true }
+                          return environment.permitsApplicationCommand && !environment.isTrackingMenu
+                      }) else { return event }
                 let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 guard modifiers.isDisjoint(with: [.command, .control, .option]) else { return event }
                 self.action(modifiers.contains(.shift))
@@ -152,6 +165,10 @@ private final class MacShortcutDetector: ShortcutDetector, @unchecked Sendable {
     private var isSuspended = false
     private var doubleShiftRecognizer: DoubleShiftGestureRecognizer
     private let onCommand: @MainActor (String) -> Void
+    private var permitsCommand: @MainActor (String) -> Bool = { _ in true }
+    private var focusGeneration: @MainActor () -> Int = { 0 }
+    private var lastFocusGeneration = 0
+    private var dispatchGeneration = 0
     private var keyMonitor: Any?
     private var flagsMonitor: Any?
 
@@ -163,13 +180,37 @@ private final class MacShortcutDetector: ShortcutDetector, @unchecked Sendable {
     }
 
     func update(registrations: [KeyboardShortcutRegistration]) {
+        guard self.registrations != registrations else { return }
+        dispatchGeneration += 1
         self.registrations = registrations
     }
 
     func setSuspended(_ suspended: Bool) {
+        guard isSuspended != suspended else { return }
+        dispatchGeneration += 1
         isSuspended = suspended
         if suspended {
             resetDoubleShiftRecognizer()
+        }
+    }
+
+    func setCommandEligibility(
+        _ permits: @escaping @MainActor (String) -> Bool,
+        generation: @escaping @MainActor () -> Int
+    ) {
+        permitsCommand = permits
+        dispatchGeneration += 1
+        focusGeneration = generation
+        resetDoubleShiftRecognizer()
+    }
+
+    private func resetForFocusChange() {
+        MainActor.assumeIsolated {
+            let generation = focusGeneration()
+            if generation != lastFocusGeneration {
+                lastFocusGeneration = generation
+                resetDoubleShiftRecognizer()
+            }
         }
     }
 
@@ -177,6 +218,7 @@ private final class MacShortcutDetector: ShortcutDetector, @unchecked Sendable {
         guard keyMonitor == nil, flagsMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
+            self.resetForFocusChange()
             self.doubleShiftRecognizer.handleKeyDown()
             guard !self.isSuspended,
                   let binding = MacKeyboardShortcutEventMapper.binding(
@@ -190,14 +232,28 @@ private final class MacShortcutDetector: ShortcutDetector, @unchecked Sendable {
                   ) else {
                 return event
             }
-            Task { @MainActor in
+            // A failed command must not swallow input in Settings or a sheet.
+            guard MainActor.assumeIsolated({ self.permitsCommand(commandID) }),
+                  event.window == nil || event.window === NSApp.keyWindow else { return event }
+            let generation = MainActor.assumeIsolated { self.focusGeneration() }
+            let dispatchGeneration = self.dispatchGeneration
+            Task { @MainActor [weak self] in
+                guard let self, !self.isSuspended, self.keyMonitor != nil,
+                      self.dispatchGeneration == dispatchGeneration,
+                      self.permitsCommand(commandID), self.focusGeneration() == generation else { return }
                 self.onCommand(commandID)
             }
             return nil
         }
 
         flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            guard let self, !self.isSuspended else { return event }
+            guard let self, !self.isSuspended,
+                  let commandID = MacKeyboardShortcutMatcher.commandID(
+                    for: .doubleTap(.shift), registrations: self.registrations
+                  ) else { return event }
+            let permitted = MainActor.assumeIsolated { self.permitsCommand(commandID) }
+            self.resetForFocusChange()
+            guard permitted else { self.resetDoubleShiftRecognizer(); return event }
             let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let shouldTrigger = self.doubleShiftRecognizer.handleFlagsChanged(
                 isShiftDown: modifiers.contains(.shift),
@@ -206,14 +262,15 @@ private final class MacShortcutDetector: ShortcutDetector, @unchecked Sendable {
                 ]).isEmpty,
                 timestamp: event.timestamp
             )
-            guard shouldTrigger,
-                  let commandID = MacKeyboardShortcutMatcher.commandID(
-                    for: .doubleTap(.shift),
-                    registrations: self.registrations
-                  ) else {
+            guard shouldTrigger else {
                 return event
             }
-            Task { @MainActor in
+            let generation = MainActor.assumeIsolated { self.focusGeneration() }
+            let dispatchGeneration = self.dispatchGeneration
+            Task { @MainActor [weak self] in
+                guard let self, !self.isSuspended, self.flagsMonitor != nil,
+                      self.dispatchGeneration == dispatchGeneration,
+                      self.permitsCommand(commandID), self.focusGeneration() == generation else { return }
                 self.onCommand(commandID)
             }
             return event
@@ -221,6 +278,7 @@ private final class MacShortcutDetector: ShortcutDetector, @unchecked Sendable {
     }
 
     func stop() {
+        dispatchGeneration += 1
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
             self.keyMonitor = nil

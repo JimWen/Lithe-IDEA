@@ -54,6 +54,7 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     var recordCleanPluginShutdown: (() -> Void)?
+    var stopCommandPresentation: (() -> Void)?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
@@ -130,6 +131,9 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
         sender: NSApplication,
         timeoutNanoseconds: UInt64? = nil
     ) -> NSApplication.TerminateReply {
+        // Confirmation already succeeded. Stop accepting new commands before
+        // session teardown yields, so Open cannot create an unowned late session.
+        stopCommandPresentation?()
         terminationCleanupState = .cleaning
         terminationCleanupTask = Task { @MainActor [weak self, projectWindows, sender] in
             if let timeoutNanoseconds {
@@ -165,6 +169,7 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        stopCommandPresentation?()
         isUpdateInstallTermination = false
         updateForceExitTask?.cancel()
         updateForceExitTask = nil
@@ -261,9 +266,14 @@ struct LitheApp: App {
     @StateObject private var settings: AppSettings
     @StateObject private var projectWindows: ProjectWindowManager
     @StateObject private var windowPresentation: ProjectWindowPresentation
-    @StateObject private var memoryUsageMonitor: MemoryUsageMonitor
-    @StateObject private var frameRateMonitor = FrameRateMonitor()
+    // Keep monitor identity stable without observing frequent samples at the
+    // app root: rebuilding Scene commands interrupts native submenu tracking.
+    // Status-bar views subscribe through their environment objects instead.
+    @State private var memoryUsageMonitor: MemoryUsageMonitor
+    @State private var frameRateMonitor = FrameRateMonitor()
     @StateObject private var updateChecker: UpdateChecker
+    @StateObject private var menuPresentation: MenuPresentationCoordinator
+    private let commandEnvironmentObserver: MacCommandEnvironmentObserver
     private let applicationLogWriter: MacApplicationLogWriter
 
     init() {
@@ -316,9 +326,10 @@ struct LitheApp: App {
             projectWindows.activeSessions.openStartupProject(startupProjectURL)
         }
         _projectWindows = StateObject(wrappedValue: projectWindows)
-        _windowPresentation = StateObject(wrappedValue: ProjectWindowPresentation(manager: projectWindows))
+        let windowPresentation = ProjectWindowPresentation(manager: projectWindows)
+        _windowPresentation = StateObject(wrappedValue: windowPresentation)
         NSWindow.allowsAutomaticWindowTabbing = false
-        _memoryUsageMonitor = StateObject(wrappedValue: MemoryUsageMonitor(
+        _memoryUsageMonitor = State(initialValue: MemoryUsageMonitor(
             startedAt: litheProcessLaunchDate,
             baselineReporter: { marker in
                 Self.appendApplicationLog(applicationLogWriter, message: marker + "\n")
@@ -329,7 +340,35 @@ struct LitheApp: App {
         ))
         let updateChecker = UpdateChecker()
         _updateChecker = StateObject(wrappedValue: updateChecker)
+        let commandEnvironmentObserver = MacServiceContainer.makeCommandEnvironmentObserver()
+        self.commandEnvironmentObserver = commandEnvironmentObserver
+        let commandServices = projectWindows.activeSessions.activeModel.services
+        let menuPresentation = MenuPresentationCoordinator(
+            windows: projectWindows, presentation: windowPresentation,
+            environment: commandEnvironmentObserver.feature, settings: settings,
+            updates: updateChecker, platformUI: commandServices.platformUI,
+            scheduler: commandServices.commandProjectionScheduler,
+            accessChecker: MacServiceContainer.makeRecentProjectAccessChecker(),
+            shortcutFactory: commandServices.shortcutDetectorFactory,
+            refreshNativeFocus: { [weak commandEnvironmentObserver] in commandEnvironmentObserver?.refresh() }
+        )
+        _menuPresentation = StateObject(wrappedValue: menuPresentation)
+        windowPresentation.onCommandWindowAttached = { [weak projectWindows, weak menuPresentation, weak commandEnvironmentObserver] window, id in
+            commandEnvironmentObserver?.register(window, id: id) { [weak projectWindows] in
+                projectWindows?.existingSessions(for: id)?.activeModel.commandContext(windowID: id)
+            }
+            menuPresentation?.windowAttached(id)
+        }
+        windowPresentation.onCommandWindowClosed = { [weak menuPresentation, weak commandEnvironmentObserver] id in
+            commandEnvironmentObserver?.unregister(id)
+            menuPresentation?.windowClosed(id)
+        }
+        commandEnvironmentObserver.start()
         appDelegate.projectWindows = projectWindows
+        appDelegate.stopCommandPresentation = { [weak menuPresentation, weak commandEnvironmentObserver] in
+            menuPresentation?.stop()
+            commandEnvironmentObserver?.stop()
+        }
         appDelegate.recordCleanPluginShutdown = {
             pluginRuntimeRecovery.recordCleanShutdown(using: moduleStore)
         }
@@ -385,6 +424,7 @@ struct LitheApp: App {
                 .environmentObject(memoryUsageMonitor)
                 .environmentObject(frameRateMonitor)
                 .environmentObject(updateChecker)
+                .environment(\.commandInputEnvironment, commandEnvironmentObserver.feature)
                 .environment(\.locale, settings.language.locale)
                 // SwiftUI does not consistently re-resolve every existing
                 // LocalizedStringKey when only the locale environment value
@@ -405,11 +445,7 @@ struct LitheApp: App {
         )
         .windowStyle(.hiddenTitleBar)
         .commands {
-            LitheProjectCommands(
-                projectWindows: projectWindows,
-                windowPresentation: windowPresentation,
-                updateChecker: updateChecker
-            )
+            LitheProjectCommands(presentation: menuPresentation)
         }
 
         Window(settingsWindowTitle(for: settings.language), id: LitheWindowID.settings) {
@@ -417,6 +453,7 @@ struct LitheApp: App {
             .environmentObject(settings)
             .environmentObject(updateChecker)
             .environment(\.locale, settings.language.locale)
+            .environment(\.commandInputEnvironment, commandEnvironmentObserver.feature)
         }
         .defaultSize(width: 980, height: 720)
         .windowResizability(.contentMinSize)
@@ -436,12 +473,18 @@ struct LitheApp: App {
 }
 
 private struct ProjectSettingsWindow: View {
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var windows: ProjectWindowManager
     @ObservedObject var settings: AppSettings
 
     var body: some View {
         SettingsWindow(model: windows.activeSessions.activeModel, settings: settings)
             .id(windows.activeSessions.activeModel.id)
+            .onAppear {
+                windows.presentWindow = { id in
+                    openWindow(id: LitheWindowID.workspace, value: id)
+                }
+            }
     }
 }
 

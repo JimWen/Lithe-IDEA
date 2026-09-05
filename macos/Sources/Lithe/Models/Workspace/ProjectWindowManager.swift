@@ -19,6 +19,7 @@ final class ProjectWindowManager: ObservableObject, UnsavedDocumentHandling {
     private var mostRecentSessions: ProjectSessionManager?
     private var pendingTabParents: [UUID: UUID] = [:]
     private var hasClaimedInitialWindow = false
+    private var retiredWindowIDs: Set<UUID> = []
     private var closingWindows: [UUID: Task<Void, Never>] = [:]
 
     init(settings: AppSettings, modelFactory: @escaping () -> AppModel) {
@@ -30,6 +31,70 @@ final class ProjectWindowManager: ObservableObject, UnsavedDocumentHandling {
 
     var activeSessions: ProjectSessionManager {
         managers[activeWindowID] ?? mostRecentSessions ?? sessions(for: initialWindowID)
+    }
+
+    /// Command lookup must never manufacture a replacement session or return
+    /// a closing model merely because it was the most recently active one.
+    func existingSessions(for id: UUID) -> ProjectSessionManager? {
+        guard windowIDs.contains(id), closingWindows[id] == nil else { return nil }
+        return managers[id]
+    }
+
+    /// WindowGroup may restore a prior process's UUID without calling its
+    /// default-value factory. Accept that identity once, but never revive a
+    /// window this process has closed or cancelled, even after teardown ends.
+    @discardableResult
+    func acceptRestoredScene(_ id: UUID) -> ProjectSessionManager? {
+        guard !retiredWindowIDs.contains(id), closingWindows[id] == nil else { return nil }
+        return sessions(for: id)
+    }
+
+    func commandModel(for context: ProjectCommandContext) -> AppModel? {
+        guard let sessions = existingSessions(for: context.windowID),
+              sessions.activeSessionID == context.sessionID,
+              let model = sessions.sessions.first(where: { $0.id == context.sessionID }),
+              model.commandContext(windowID: context.windowID) == context else { return nil }
+        return model
+    }
+
+    func existingCommandHost(in presentedWindowIDs: Set<UUID>) -> (windowID: UUID, model: AppModel)? {
+        let ordered = [activeWindowID] + windowIDs.filter { $0 != activeWindowID }
+        for id in ordered {
+            guard presentedWindowIDs.contains(id) else { continue }
+            if let manager = existingSessions(for: id) { return (id, manager.activeModel) }
+        }
+        return nil
+    }
+
+    @discardableResult
+    func openProjectFromApplication(_ url: URL) -> UUID? {
+        if let existing = windowID(containing: url) {
+            activate(existing)
+            focusWindow?(existing)
+            return existing
+        }
+        guard let presentWindow else { return nil }
+        let id = UUID()
+        sessions(for: id).openStartupProject(url)
+        presentWindow(id)
+        return id
+    }
+
+    @discardableResult
+    func openFileFromApplication(_ url: URL) -> UUID? {
+        guard let presentWindow else { return nil }
+        let id = UUID()
+        sessions(for: id).openStandaloneFile(url)
+        presentWindow(id)
+        return id
+    }
+
+    @discardableResult
+    func presentWelcomeWindow(id: UUID = UUID()) -> UUID? {
+        guard let presentWindow else { return nil }
+        _ = sessions(for: id)
+        presentWindow(id)
+        return id
     }
 
     var hasUnsavedDocuments: Bool {
@@ -45,7 +110,9 @@ final class ProjectWindowManager: ObservableObject, UnsavedDocumentHandling {
             hasClaimedInitialWindow = true
             return initialWindowID
         }
-        return UUID()
+        let id = UUID()
+        _ = sessions(for: id)
+        return id
     }
 
     func sessions(for id: UUID) -> ProjectSessionManager {
@@ -122,6 +189,7 @@ final class ProjectWindowManager: ObservableObject, UnsavedDocumentHandling {
     }
 
     func windowClosed(_ id: UUID) {
+        retiredWindowIDs.insert(id)
         guard let manager = managers[id], closingWindows[id] == nil else { return }
         pendingTabParents[id] = nil
         windowIDs.removeAll { $0 == id }

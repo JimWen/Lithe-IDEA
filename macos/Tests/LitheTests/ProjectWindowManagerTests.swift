@@ -346,6 +346,126 @@ struct ProjectWindowManagerTests {
         #expect(last.lines.last?.text == "line 40")
     }
 
+    @Test
+    func menuTrackingFreezesRenderingButImmediatelyRejectsStaleProjectActions() async throws {
+        try await withFixture { fixture in
+            let manager = fixture.manager
+            let model = manager.activeSessions.activeModel
+            model.openProjectDirectly(fixture.alpha)
+            let origin = model.commandContext(windowID: manager.initialWindowID)
+            let environment = CommandEnvironmentFeatureModel()
+            environment.update(context: origin, isApplicationActive: true, isModal: false)
+            let scheduler = ManualCommandScheduler()
+            let coordinator = makeMenuCoordinator(fixture, environment: environment, scheduler: scheduler)
+            defer { coordinator.stop(); environment.stop() }
+            let original = coordinator.renderState
+            let first = NSObject()
+            let second = NSObject()
+            environment.beginTracking(first)
+            environment.beginTracking(second)
+            model.isSidebarVisible = false
+            environment.update(context: nil, isApplicationActive: true, isModal: false)
+            scheduler.drain()
+            #expect(coordinator.renderState == original)
+            coordinator.perform(.project, from: original)
+            #expect(!model.isSidebarVisible)
+            environment.endTracking(first)
+            scheduler.drain()
+            #expect(coordinator.renderState == original)
+            environment.endTracking(second)
+            scheduler.drain()
+            #expect(coordinator.renderState.context == nil)
+            #expect(!coordinator.renderState.isEnabled(.project))
+            environment.update(context: origin, isApplicationActive: true, isModal: false)
+            scheduler.drain()
+            coordinator.perform(.project, from: coordinator.renderState)
+            #expect(model.isSidebarVisible)
+            coordinator.stop()
+            coordinator.perform(.project, from: coordinator.renderState)
+            #expect(model.isSidebarVisible)
+        }
+    }
+
+    @Test
+    func menuHostTimeoutRejectsRepeatedRequestsAndLateSceneDelivery() async throws {
+        try await withFixture { fixture in
+            let manager = fixture.manager
+            let environment = CommandEnvironmentFeatureModel()
+            environment.update(context: nil, isApplicationActive: true, isModal: false)
+            let scheduler = ManualCommandScheduler()
+            let ui = MenuTestPlatformUI()
+            let coordinator = makeMenuCoordinator(fixture, environment: environment, scheduler: scheduler, ui: ui)
+            defer { coordinator.stop(); environment.stop() }
+            var presented: [UUID] = []
+            manager.presentWindow = { presented.append($0) }
+            coordinator.perform(.settings, from: nil)
+            coordinator.perform(.settings, from: nil)
+            #expect(presented.count == 1)
+            let id = try #require(presented.first)
+            scheduler.drain(includingDeadlines: true)
+            #expect(ui.failures.count == 1)
+            #expect(!manager.windowIDs.contains(id))
+            await manager.stopAllSessions()
+            let scene = ProjectWindowScene(windows: manager, presentation: ProjectWindowPresentation(manager: manager), windowID: id)
+            _ = scene.body
+            #expect(!manager.windowIDs.contains(id))
+            let existingIDs = manager.windowIDs
+            coordinator.perform(.openProject, from: nil)
+            #expect(ui.chooserCalls == 1)
+            #expect(manager.windowIDs == existingIDs)
+        }
+    }
+
+    private func makeMenuCoordinator(
+        _ fixture: WindowFixture, environment: CommandEnvironmentFeatureModel,
+        scheduler: ManualCommandScheduler, ui: MenuTestPlatformUI = MenuTestPlatformUI()
+    ) -> MenuPresentationCoordinator {
+        MenuPresentationCoordinator(
+            windows: fixture.manager, presentation: ProjectWindowPresentation(manager: fixture.manager),
+            environment: environment, settings: fixture.settings, updates: UpdateChecker(), platformUI: ui,
+            scheduler: scheduler, accessChecker: MenuTestAccessChecker(),
+            shortcutFactory: MacShortcutDetectorFactory(), refreshNativeFocus: {}
+        )
+    }
+
+    @Test
+    func restoredSceneAcceptsUnknownIdentityOnceAndRetiresItOnClose() async throws {
+        try await withFixture { fixture in
+            let manager = fixture.manager
+            let id = UUID()
+            let session = try #require(manager.acceptRestoredScene(id))
+            #expect(manager.acceptRestoredScene(id) === session)
+            #expect(manager.windowIDs.filter { $0 == id }.count == 1)
+            manager.windowClosed(id)
+            await manager.stopAllSessions()
+            #expect(manager.acceptRestoredScene(id) == nil)
+            #expect(!manager.windowIDs.contains(id))
+        }
+    }
+
+    @Test
+    func cancelledPresentationCannotBeRevivedByLateSceneCreation() async throws {
+        try await withFixture { fixture in
+            let manager = fixture.manager
+            let presentation = ProjectWindowPresentation(manager: manager)
+            manager.presentWindow = { _ in }
+            let id = try #require(manager.presentWelcomeWindow())
+            manager.windowClosed(id)
+            await manager.stopAllSessions()
+            let survivingIDs = manager.windowIDs
+
+            let scene = ProjectWindowScene(windows: manager, presentation: presentation, windowID: id)
+            _ = scene.body
+            #expect(manager.windowIDs == survivingIDs)
+            #expect(manager.existingSessions(for: id) == nil)
+            let window = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            presentation.attach(window, id: id, layout: .welcome)
+            #expect(!presentation.presentedWindowIDs.contains(id))
+        }
+    }
+
     private func withFixture(_ body: (WindowFixture) async throws -> Void) async throws {
         let fixture = try WindowFixture()
         do {
@@ -418,4 +538,24 @@ private final class ChromeTrackingWindow: NSWindow {
     override var titlebarAppearsTransparent: Bool { didSet { chromeMutationCount += 1 } }
     override var tabbingIdentifier: String { didSet { chromeMutationCount += 1 } }
     override var tabbingMode: NSWindow.TabbingMode { didSet { chromeMutationCount += 1 } }
+}
+
+
+@MainActor
+private final class MenuTestAccessChecker: RecentProjectAccessChecking {
+    func check(_ urls: [URL]) async -> [URL: RecentProjectAccess] { [:] }
+    func stop() {}
+}
+
+@MainActor
+private final class MenuTestPlatformUI: PlatformUI {
+    var failures: [String] = []
+    var chooserCalls = 0
+    func chooseDirectory(title: String, prompt: String) -> URL? { chooserCalls += 1; return nil }
+    func chooseFile(title: String, prompt: String) -> URL? { chooserCalls += 1; return nil }
+    func revealInFileBrowser(_ url: URL) {}
+    func open(_ url: URL) {}
+    func copyToClipboard(_ value: String) {}
+    func markdownImageFromClipboard() -> MarkdownImageSource? { nil }
+    func presentCommandFailure(_ message: String) { failures.append(message) }
 }

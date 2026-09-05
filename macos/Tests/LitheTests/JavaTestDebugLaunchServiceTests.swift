@@ -196,6 +196,9 @@ struct JavaTestDebugLaunchServiceTests {
 
 @MainActor
 private final class DebugActivationPlatformUI: PlatformUI {
+    func presentCommandFailure(_ message: String) {
+        Issue.record("Unexpected command failure: \(message)")
+    }
     private(set) var activationCount = 0
 
     func activateApplication() {

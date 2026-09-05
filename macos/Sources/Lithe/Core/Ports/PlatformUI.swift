@@ -11,6 +11,7 @@ protocol PlatformUI: AnyObject {
     func open(_ url: URL)
     func copyToClipboard(_ value: String)
     func markdownImageFromClipboard() -> MarkdownImageSource?
+    func presentCommandFailure(_ message: String)
 }
 
 extension PlatformUI {
@@ -24,6 +25,17 @@ protocol ShortcutDetector: AnyObject {
     func stop()
     func update(registrations: [KeyboardShortcutRegistration])
     func setSuspended(_ suspended: Bool)
+    func setCommandEligibility(
+        _ permits: @escaping @MainActor (String) -> Bool,
+        generation: @escaping @MainActor () -> Int
+    )
+}
+
+extension ShortcutDetector {
+    func setCommandEligibility(
+        _ permits: @escaping @MainActor (String) -> Bool,
+        generation: @escaping @MainActor () -> Int
+    ) {}
 }
 
 @MainActor

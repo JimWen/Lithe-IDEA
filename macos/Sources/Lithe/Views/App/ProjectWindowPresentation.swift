@@ -64,6 +64,12 @@ final class ProjectWindowPresentation: ObservableObject {
 
     private var windows: [UUID: WindowReference] = [:]
     private let manager: ProjectWindowManager
+    var onCommandWindowAttached: ((NSWindow, UUID) -> Void)?
+    var onCommandWindowClosed: ((UUID) -> Void)?
+
+    var presentedWindowIDs: Set<UUID> {
+        Set(windows.compactMap { $0.value.window == nil ? nil : $0.key })
+    }
 
     init(manager: ProjectWindowManager) {
         self.manager = manager
@@ -80,6 +86,12 @@ final class ProjectWindowPresentation: ObservableObject {
     }
 
     func attach(_ window: NSWindow, id: UUID, layout: LitheWindowLayout) {
+        guard manager.existingSessions(for: id) != nil else {
+            // A delayed scene can arrive after its bounded presentation request
+            // was cancelled. It must not resurrect an orphaned project window.
+            window.close()
+            return
+        }
         let isNew = windows[id]?.window !== window
         if isNew { windows[id] = WindowReference(window) }
         let identifier = layout == .workspace ? "lithe-project" : "lithe-\(id)"
@@ -94,6 +106,7 @@ final class ProjectWindowPresentation: ObservableObject {
             window.makeKeyAndOrderFront(nil)
         }
         if window.isKeyWindow { manager.activate(id) }
+        onCommandWindowAttached?(window, id)
         observeTabGroups()
         if isNew { objectWillChange.send() }
     }
@@ -108,6 +121,7 @@ final class ProjectWindowPresentation: ObservableObject {
         let remaining = closedWindow?.tabbedWindows?.first { $0 !== closedWindow }
         let wasActive = manager.activeWindowID == id
         windows[id] = nil
+        onCommandWindowClosed?(id)
         manager.windowClosed(id)
         if wasActive, let remaining {
             // Select after AppKit finishes removing the closed tab. A SwiftUI
@@ -168,24 +182,43 @@ final class ProjectWindowPresentation: ObservableObject {
 }
 
 struct ProjectWindowScene: View {
-    @Environment(\.openWindow) private var openWindow
-    @ObservedObject private var sessions: ProjectSessionManager
-    private let windows: ProjectWindowManager
-    private let presentation: ProjectWindowPresentation
-    private let windowID: UUID
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var windows: ProjectWindowManager
+    let presentation: ProjectWindowPresentation
+    let windowID: UUID
 
     init(windows: ProjectWindowManager, presentation: ProjectWindowPresentation, windowID: UUID) {
         self.windows = windows
         self.presentation = presentation
         self.windowID = windowID
-        sessions = windows.sessions(for: windowID)
+        windows.acceptRestoredScene(windowID)
     }
+
+    var body: some View {
+        if let sessions = windows.existingSessions(for: windowID) {
+            ProjectWindowContent(windows: windows, presentation: presentation,
+                                 windowID: windowID, sessions: sessions)
+        } else {
+            // Scene delivery can outlive a cancelled presentation request. Only
+            // opening/restoration paths may allocate a new session manager.
+            Color.clear.onAppear {
+                dismiss()
+            }
+        }
+    }
+}
+
+private struct ProjectWindowContent: View {
+    @Environment(\.openWindow) private var openWindow
+    let windows: ProjectWindowManager
+    let presentation: ProjectWindowPresentation
+    let windowID: UUID
+    @ObservedObject var sessions: ProjectSessionManager
 
     var body: some View {
         RootView(windowID: windowID, windowPresentation: presentation)
             .environmentObject(sessions)
             .environmentObject(sessions.activeModel)
-            .focusedSceneObject(sessions.activeModel)
             .onAppear {
                 windows.presentWindow = { id in
                     openWindow(id: LitheWindowID.workspace, value: id)

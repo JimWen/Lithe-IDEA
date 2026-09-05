@@ -97,9 +97,17 @@ instead of duplicated. Window closure retains its session manager until module
 and process cleanup completes, and application termination also awaits those
 closing windows.
 
-`LitheProjectCommands` observes the focused scene's `AppModel` so Save, navigation,
-and other project commands target the correct window without broadcasting editor
-changes through the application-wide window registry.
+`LitheProjectCommands` observes an immutable menu projection owned by
+`MenuPresentationCoordinator`. Background changes coalesce after mutation and
+publication pauses during native menu tracking. The app root retains FPS and
+memory monitor references without subscribing to their samples; only status-bar
+views observe those frequent changes, preventing Scene updates from dismissing
+native submenus. The macOS command environment
+separately validates the current key window, modal state, project generation,
+and action payload before shortcuts or menu actions execute. Recent-project
+availability runs on a bounded background worker. Window-opening and native restoration
+paths allocate session managers; process-local retired identities prevent a
+delayed scene from reviving a cancelled presentation request.
 
 Find in Files and the Find tool window share the search module's query/options
 and results. The popup owns selection and bounded source previews. Search
