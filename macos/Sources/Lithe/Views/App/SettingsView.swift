@@ -200,11 +200,15 @@ struct SettingsView: View {
             .foregroundStyle(LitheTheme.secondaryText)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if viewState.selection.languageProviderID != nil {
-            ProjectLanguageSettingsView(category: viewState.selection) {
-                closeSettings()
-                model.showRunConfigurationEditor()
-            }
+            ScrollView {
+                ProjectLanguageSettingsView(category: viewState.selection) {
+                    closeSettings()
+                    model.showRunConfigurationEditor()
+                }
                 .id(viewState.selection)
+                .frame(maxWidth: .infinity)
+            }
+            .litheScrollViewChrome(alwaysShowVertical: true, usesCompactScrollers: true)
         } else if viewState.selection == .lsp {
             LSPControlCenterView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

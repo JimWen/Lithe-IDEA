@@ -1422,3 +1422,7 @@
 "Loading language settings…" = "正在加载语言设置…";
 "This choice applies to this project's next Run, Debug and language-tool launch. Running sessions keep their current process." = "此设置在本项目下次启动运行、调试或语言工具时生效。已运行的会话保持不变。";
 "%lld matches in %lld files" = "%2$lld 个文件中有 %1$lld 处匹配";
+
+"Open…" = "打开…";
+
+"Save All" = "全部保存";

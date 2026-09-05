@@ -34,7 +34,9 @@ struct RunConfigurationEditorView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     saveScopeSection
                     configurationSummary
-                    projectToolchainSection
+                    if effectiveCapabilities.contains(.javaRuntime) {
+                        projectToolchainSection
+                    }
                     runtimeSection
                     argumentsSection
                     if effectiveCapabilities.contains(.environment) {

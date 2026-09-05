@@ -283,3 +283,7 @@
 "Loading language settings…" = "Loading language settings…";
 "This choice applies to this project's next Run, Debug and language-tool launch. Running sessions keep their current process." = "This choice applies to this project's next Run, Debug and language-tool launch. Running sessions keep their current process.";
 "%lld matches in %lld files" = "%lld matches in %lld files";
+
+"Open…" = "Open…";
+
+"Save All" = "Save All";
