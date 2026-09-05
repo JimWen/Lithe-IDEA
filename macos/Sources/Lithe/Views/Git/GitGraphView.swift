@@ -19,16 +19,19 @@ struct GitGraphView: View {
     let visibleHashes: Set<String>?
     let selectedHash: String?
     let showCommitDecorations: Bool
+    let viewportWidth: CGFloat
     let actions: GitGraphRowActions
 
-    private let rowHeight: CGFloat = 30
+    private let rowHeight: CGFloat = 24
 
     var body: some View {
-        LazyVStack(spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(visibleRows) { row in
+                let graphWidth = max(30, CGFloat(row.laneCount) * 13 + 16)
                 GitGraphRowView(
                     row: row,
-                    graphWidth: maximumGraphWidth,
+                    graphWidth: graphWidth,
+                    width: max(viewportWidth, graphWidth + 420),
                     rowHeight: rowHeight,
                     isSelected: selectedHash == row.commit.hash,
                     showCommitDecorations: showCommitDecorations,
@@ -46,14 +49,10 @@ struct GitGraphView: View {
                 .font(.system(size: 10.5))
                 .foregroundStyle(LitheTheme.tertiaryText)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, maximumGraphWidth + 6)
+                .padding(.leading, 12)
                 .frame(height: 30)
             }
         }
-    }
-
-    private var maximumGraphWidth: CGFloat {
-        max(30, CGFloat(max(layout.laneCount, 1)) * 13 + 16)
     }
 
     private var visibleRows: [GitGraphRow] {
@@ -65,6 +64,7 @@ struct GitGraphView: View {
 private struct GitGraphRowView: View, Equatable {
     let row: GitGraphRow
     let graphWidth: CGFloat
+    let width: CGFloat
     let rowHeight: CGFloat
     let isSelected: Bool
     let showCommitDecorations: Bool
@@ -75,6 +75,7 @@ private struct GitGraphRowView: View, Equatable {
     static func == (lhs: GitGraphRowView, rhs: GitGraphRowView) -> Bool {
         lhs.row == rhs.row
             && lhs.graphWidth == rhs.graphWidth
+            && lhs.width == rhs.width
             && lhs.rowHeight == rhs.rowHeight
             && lhs.isSelected == rhs.isSelected
             && lhs.showCommitDecorations == rhs.showCommitDecorations
@@ -92,35 +93,42 @@ private struct GitGraphRowView: View, Equatable {
                 HStack(spacing: 0) {
                     Text(row.commit.subject)
                         .font(.system(size: 12.5, weight: .regular))
-                        .foregroundStyle(LitheTheme.primaryText)
+                        .foregroundStyle(row.isMerge && !isSelected ? LitheTheme.secondaryText : LitheTheme.primaryText)
                         .lineLimit(1)
 
-                    if showCommitDecorations, !row.labels.isEmpty {
+                    if showCommitDecorations, let label = primaryLabel {
                         Spacer(minLength: 8)
 
-                        HStack(spacing: 6) {
-                            ForEach(row.labels) { label in
-                                GitGraphLabelView(label: label)
+                        HStack(spacing: 4) {
+                            GitGraphLabelView(label: label)
+                            if row.labels.count > 1 {
+                                Text("+\(row.labels.count - 1)")
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(LitheTheme.secondaryText)
+                                    .fixedSize()
                             }
                         }
+                        .frame(maxWidth: 180, alignment: .trailing)
+                        .clipped()
+                        .help(row.commit.decorations)
                         .padding(.trailing, 4)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Text(row.commit.authorName)
-                    .font(.system(size: 11.5))
+                    .font(.system(size: 12))
                     .foregroundStyle(LitheTheme.secondaryText)
                     .lineLimit(1)
                     .frame(width: 104, alignment: .leading)
 
                 Text(row.commit.date)
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(.system(size: 12))
                     .foregroundStyle(LitheTheme.secondaryText)
                     .frame(width: 118, alignment: .trailing)
             }
             .padding(.trailing, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: width, alignment: .leading)
             .frame(height: rowHeight)
             .background(backgroundColor)
             .contentShape(Rectangle())
@@ -145,13 +153,22 @@ private struct GitGraphRowView: View, Equatable {
     }
 
     private var backgroundColor: Color {
-        if isSelected { return LitheTheme.selection }
+        if isSelected { return LitheTheme.gitSelection }
         if isHovered { return LitheTheme.hoverBackground }
         return .clear
     }
+
+    /// Prefer a named branch over HEAD. Rendering every reference in the same
+    /// narrow cell truncates all names; the tooltip and details retain them all.
+    private var primaryLabel: GitGraphLabel? {
+        row.labels.first(where: { $0.kind == .branch })
+            ?? row.labels.first(where: { $0.kind == .remote })
+            ?? row.labels.first(where: { $0.kind == .tag })
+            ?? row.labels.first
+    }
 }
 
-private struct GitGraphLabelView: View {
+struct GitGraphLabelView: View {
     let label: GitGraphLabel
 
     var body: some View {
@@ -166,8 +183,6 @@ private struct GitGraphLabelView: View {
         .padding(.leading, 3)
         .padding(.trailing, 4)
         .frame(height: 17)
-        .background(LitheTheme.primaryText.opacity(0.055))
-        .clipShape(RoundedRectangle(cornerRadius: 3))
     }
 
     private var accentColor: Color {
@@ -197,13 +212,14 @@ private struct GitReferenceTagIcon: View {
             path.addLine(to: CGPoint(x: origin.x + 3 * scale, y: origin.y + 5 * scale))
             path.addLine(to: CGPoint(x: origin.x, y: origin.y + 2 * scale))
             path.closeSubpath()
-            path.addEllipse(in: CGRect(
+            context.stroke(path, with: .color(color), lineWidth: 1.1)
+            let hole = Path(ellipseIn: CGRect(
                 x: origin.x + scale,
                 y: origin.y + scale,
                 width: scale,
                 height: scale
             ))
-            context.fill(path, with: .color(color), style: FillStyle(eoFill: true))
+            context.fill(hole, with: .color(color))
         }
         .accessibilityHidden(true)
     }
@@ -215,7 +231,7 @@ private struct GitGraphCanvas: View {
     let height: CGFloat
 
     private let laneSpacing: CGFloat = 13
-    private let laneLineWidth: CGFloat = 1.6
+    private let laneLineWidth: CGFloat = 1.2
     private let leftPadding: CGFloat = 8
 
     var body: some View {
@@ -246,12 +262,11 @@ private struct GitGraphCanvas: View {
                     if targetLane == row.lane {
                         path.addLine(to: target)
                     } else {
-                        let controlY = centerY + (size.height - centerY) * 0.62
-                        path.addCurve(
-                            to: target,
-                            control1: CGPoint(x: start.x, y: controlY),
-                            control2: CGPoint(x: target.x, y: controlY)
-                        )
+                        // Keep each lane's boundary x unchanged. A short
+                        // diagonal communicates the merge without the broad
+                        // curves that made dense histories look tangled.
+                        path.addLine(to: CGPoint(x: target.x, y: size.height - 3))
+                        path.addLine(to: target)
                     }
                     context.stroke(
                         path,
@@ -271,7 +286,7 @@ private struct GitGraphCanvas: View {
                 }
             }
 
-            let nodeSize: CGFloat = row.isMerge ? 9.5 : 8.5
+            let nodeSize: CGFloat = 7
             let nodeRect = CGRect(
                 x: currentX - nodeSize / 2,
                 y: centerY - nodeSize / 2,
@@ -282,13 +297,6 @@ private struct GitGraphCanvas: View {
                 Path(ellipseIn: nodeRect),
                 with: .color(GitGraphPalette.color(for: nodeColorIndex))
             )
-            if row.isMerge {
-                context.stroke(
-                    Path(ellipseIn: nodeRect.insetBy(dx: 1, dy: 1)),
-                    with: .color(Color.white.opacity(0.72)),
-                    style: StrokeStyle(lineWidth: 1)
-                )
-            }
         }
         .frame(width: width, height: height)
         .accessibilityHidden(true)
@@ -314,13 +322,13 @@ private struct GitGraphCanvas: View {
 
 private enum GitGraphPalette {
     private static let colors: [Color] = [
-        Color(red: 0.29, green: 0.72, blue: 0.45),
-        Color(red: 0.35, green: 0.62, blue: 0.96),
-        Color(red: 0.82, green: 0.47, blue: 0.82),
-        Color(red: 0.96, green: 0.61, blue: 0.28),
-        Color(red: 0.36, green: 0.78, blue: 0.78),
-        Color(red: 0.93, green: 0.42, blue: 0.48),
-        Color(red: 0.70, green: 0.63, blue: 0.94)
+        Color(red: 0.61, green: 0.36, blue: 0.70),
+        Color(red: 0.37, green: 0.62, blue: 0.42),
+        Color(red: 0.37, green: 0.51, blue: 0.76),
+        Color(red: 0.76, green: 0.56, blue: 0.32),
+        Color(red: 0.34, green: 0.65, blue: 0.66),
+        Color(red: 0.76, green: 0.41, blue: 0.47),
+        Color(red: 0.54, green: 0.48, blue: 0.74)
     ]
 
     static func color(for index: Int) -> Color {

@@ -1531,7 +1531,11 @@ final class AppModel: ObservableObject, Identifiable {
             isDebugVisible = false
         }
         if isGitLogVisible && gitCommits.isEmpty {
-            await refreshGitHistory()
+            if selectedGitReference == nil {
+                await showAllGitReferences()
+            } else {
+                await refreshGitHistory()
+            }
         } else if !isGitLogVisible {
             gitFeatureIfActive?.cancelGitHistoryLoading()
         }

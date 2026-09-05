@@ -298,6 +298,22 @@ enum LitheTheme {
         })
     }
     static var toolHeader: Color { adaptive(\.toolHeader) }
+    /// Git's trees and history form one tool surface, separate from the
+    /// editor canvas. Keep selection readable on that surface in both modes.
+    static var gitToolBackground: Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? RGBA(0x2b2d30).nsColor
+                : RGBA(0xf7f8fa).nsColor
+        })
+    }
+    static var gitSelection: Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? RGBA(0x2f436f).nsColor
+                : RGBA(0xd4e2ff).nsColor
+        })
+    }
     static var toolHeaderInactive: Color { adaptive(\.toolHeaderInactive) }
     static var sidebar: Color { adaptive(\.sidebar) }
     static var editor: Color { adaptive(\.editor) }

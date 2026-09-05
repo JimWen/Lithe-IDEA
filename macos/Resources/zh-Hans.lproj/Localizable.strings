@@ -1427,3 +1427,15 @@
 "Open…" = "打开…";
 
 "Save All" = "全部保存";
+
+"Git views" = "Git 视图";
+
+"Search commit messages and hashes; use author:, branch: or path: filters" = "搜索提交信息和哈希，可使用 author:、branch: 或 path: 筛选";
+
+"Clear branch search" = "清空分支搜索";
+
+"Expand all file groups" = "展开所有文件分组";
+
+"Collapse all file groups" = "折叠所有文件分组";
+
+"Search Git log" = "搜索 Git 日志";

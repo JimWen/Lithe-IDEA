@@ -24,7 +24,8 @@ struct GitLogView: View {
     @State private var pendingBranchOperation: GitBranchOperationRequest?
     @State private var pendingTagDeletion: GitReference?
     @State private var comparisonSourceReference: GitReference?
-    @State private var showCommitDecorations = false
+    @State private var showCommitDecorations = true
+    @State private var referenceSearchQuery = ""
     @State private var selectedGitToolTab = GitToolTab.log
     @State private var gitConsoleAutoScrolls = true
     @State private var gitConsoleWrapsLines = false
@@ -50,14 +51,13 @@ struct GitLogView: View {
     private enum GitVisual {
         static let title = Font.system(size: 13.5, weight: .semibold)
         static let toolbar = Font.system(size: 12.5, weight: .regular)
-        static let section = Font.system(size: 13, weight: .medium)
+        static let section = Font.system(size: 13, weight: .regular)
         static let body = Font.system(size: 13, weight: .regular)
-        static let bodyMedium = Font.system(size: 13, weight: .medium)
+        static let bodyMedium = Font.system(size: 13, weight: .regular)
         static let meta = Font.system(size: 12, weight: .regular)
         static let monoMeta = Font.system(size: 12, weight: .regular, design: .monospaced)
-        static let rowHeight: CGFloat = 38
-        static let treeRowHeight: CGFloat = 28
-        static let toolbarHeight: CGFloat = 38
+        static let treeRowHeight: CGFloat = 24
+        static let toolbarHeight: CGFloat = 32
         static let commitFileLoadDelay = Duration.milliseconds(120)
         static let darkConsoleText = Color(red: 0.76, green: 0.77, blue: 0.79)
         static let darkConsoleMetadata = Color(red: 0.69, green: 0.70, blue: 0.72)
@@ -75,7 +75,7 @@ struct GitLogView: View {
             toolWindowHeader
             primaryContent
         }
-        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.sidebar)
+        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
         .task(id: model.gitCommitsVersion) {
             let commits = model.gitCommits
             let updatedLayout = await Task.detached(priority: .userInitiated) {
@@ -101,6 +101,7 @@ struct GitLogView: View {
             await model.applyGitLogFilter(gitLogQuery(now: Date()))
         }
         .onChange(of: model.gitRepositoryRoot) { _ in
+            referenceSearchQuery = ""
             selectedGitLogAuthor = nil
             selectedGitLogDatePreset = .anyTime
             gitLogPathFilter = ""
@@ -251,7 +252,6 @@ struct GitLogView: View {
 
     private var logTabContent: some View {
         Group {
-            primaryActionBar
             if let deletedBranch = model.recentlyDeletedBranch {
                 deletedReferenceBanner(
                     icon: "arrow.triangle.branch",
@@ -273,13 +273,17 @@ struct GitLogView: View {
     }
 
     private var logPanes: some View {
-        GeometryReader { geometry in
-            GitLogThreePaneLayout(
-                availableWidth: geometry.size.width,
-                referencePane: { referencePane },
-                commitPane: { commitPane },
-                detailPane: { detailPane }
-            )
+        HStack(spacing: 0) {
+            gitActionRail
+            Rectangle().fill(LitheTheme.divider).frame(width: 1)
+            GeometryReader { geometry in
+                GitLogThreePaneLayout(
+                    availableWidth: geometry.size.width,
+                    referencePane: { referencePane },
+                    commitPane: { commitPane },
+                    detailPane: { detailPane }
+                )
+            }
         }
     }
 
@@ -333,26 +337,37 @@ struct GitLogView: View {
                 .foregroundStyle(LitheTheme.primaryText)
                 .padding(.trailing, 4)
 
-            gitToolTabButton(
-                .log,
-                title: "Log: \(model.isShowingAllGitReferences ? "All References" : (model.selectedGitReference?.shortName ?? model.currentBranch))"
-            )
-            gitToolTabButton(
-                .worktrees,
-                title: "Worktrees"
-            )
+            gitToolTabButton(.log, title: "Log")
+            if selectedGitToolTab == .worktrees {
+                gitToolTabButton(.worktrees, title: "Worktrees")
+            }
             gitToolTabButton(.console, title: "Console")
 
-            if selectedGitToolTab == .log, !model.isShowingAllGitReferences {
-                Button {
+            Menu {
+                Button("Log") { selectedGitToolTab = .log }
+                Button("Worktrees") { selectedGitToolTab = .worktrees }
+                Button("Console") {
+                    selectedGitToolTab = .console
+                    Task { await model.loadGitConsoleIfNeeded() }
+                }
+                Divider()
+                Button("Show all references") {
                     selectedGitToolTab = .log
                     Task { await model.showAllGitReferences() }
-                } label: {
-                    Image(systemName: "plus")
                 }
-                .litheIconButton()
-                .help("Show all references")
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10))
+                    .frame(width: 24, height: 28)
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 24)
+            .accessibilityLabel("Git views")
+            .help("Git views")
+            .lithePointer()
+
+            Spacer(minLength: 12)
 
             Menu {
                 Button("Fetch All Remotes") {
@@ -367,11 +382,13 @@ struct GitLogView: View {
                     Task { await model.refreshGitHistory() }
                 }
                 Divider()
+                Toggle("Show commit decorations", isOn: $showCommitDecorations)
+                Divider()
                 Button("Show Changes") {
                     model.selectedSidebar = .changes
                 }
             } label: {
-                LitheIDEAIcon(resourcePath: "actions/more.svg", size: 15, fallbackSystemImage: "ellipsis")
+                LitheIDEAIcon(resourcePath: "actions/moreVertical.svg", size: 15, fallbackSystemImage: "ellipsis")
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
@@ -381,10 +398,8 @@ struct GitLogView: View {
             .menuIndicator(.hidden)
             .help("Git tool window actions")
 
-            Spacer(minLength: 12)
-
             Button {
-                model.isGitLogVisible = false
+                model.closeGitLog()
             } label: {
                 Image(systemName: "minus")
             }
@@ -394,7 +409,7 @@ struct GitLogView: View {
         .padding(.leading, 12)
         .padding(.trailing, 7)
         .frame(height: LitheTheme.Metrics.toolWindowHeaderHeight)
-        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.toolHeader)
+        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
         .overlay(alignment: .bottom) {
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
         }
@@ -500,7 +515,7 @@ struct GitLogView: View {
             }
             .padding(.top, 6)
             .frame(width: 28)
-            .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.editor)
+            .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
 
             Rectangle()
                 .fill(LitheTheme.divider)
@@ -548,7 +563,7 @@ struct GitLogView: View {
                 }
             }
         }
-        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.editor)
+        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
     }
 
     private func gitConsoleEntry(_ entry: GitConsoleEntry) -> some View {
@@ -625,66 +640,40 @@ struct GitLogView: View {
         return formatter
     }()
 
-    private var primaryActionBar: some View {
-        HStack(spacing: 7) {
-            Button {
-                Task { await model.fetchGit() }
-            } label: {
-                Label("Fetch", systemImage: "arrow.down.circle")
+    private var gitActionRail: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 2) {
+                gitToolbarButton(systemImage: "chevron.left", help: "Back to all references") {
+                    Task { await model.showAllGitReferences() }
+                }
+                Rectangle().fill(LitheTheme.divider).frame(width: 20, height: 1).padding(.vertical, 3)
+                gitToolbarButton(systemImage: "plus", help: "New Branch…") {
+                    guard let reference = checkoutReference ?? currentReference else { return }
+                    branchDialogRequest = GitBranchDialogRequest(kind: .create, reference: reference)
+                }
+                .disabled(currentReference == nil || model.isPerformingBranchOperation)
+                gitToolbarButton(systemImage: "arrow.down.left", help: "Checkout") {
+                    guard let reference = checkoutReference else { return }
+                    Task { await model.checkoutReference(reference) }
+                }
+                .disabled(checkoutReference == nil || model.isPerformingBranchOperation)
+                gitToolbarButton(systemImage: "arrow.down.to.line", help: "Fetch All Remotes") {
+                    Task { await model.fetchGit() }
+                }
+                .disabled(model.isPerformingBranchOperation)
+                gitToolbarButton(systemImage: "arrow.left.arrow.right", help: "Compare") {
+                    showPrimaryComparison()
+                }
+                .disabled(currentReference == nil || model.isLoadingBranchComparison)
+                Rectangle().fill(LitheTheme.divider).frame(width: 20, height: 1).padding(.vertical, 3)
+                gitToolbarButton(systemImage: "magnifyingglass", help: "Find in log") {
+                    gitLogSearchFocused = true
+                }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .lithePointer()
-            .disabled(model.isPerformingBranchOperation)
-
-            Button {
-                showPrimaryComparison()
-            } label: {
-                Label("Compare", systemImage: "arrow.left.arrow.right")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .lithePointer()
-            .disabled(currentReference == nil || model.isLoadingBranchComparison)
-
-            Divider()
-                .frame(height: 18)
-
-            Button {
-                guard let reference = checkoutReference else { return }
-                Task { await model.checkoutReference(reference) }
-            } label: {
-                Label("Checkout", systemImage: "arrow.right.circle")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .lithePointer()
-            .disabled(checkoutReference == nil || model.isPerformingBranchOperation)
-
-            Button {
-                guard let commit = model.selectedGitCommit else { return }
-                pendingCommitOperation = GitCommitOperationRequest(kind: .cherryPick, commit: commit)
-            } label: {
-                Label("Cherry-pick", systemImage: "arrow.triangle.branch")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .lithePointer()
-            .disabled(model.selectedGitCommit == nil || model.isPerformingBranchOperation)
-
-            Spacer(minLength: 8)
-
-            Text(primaryComparisonDescription)
-                .font(GitVisual.meta)
-                .foregroundStyle(LitheTheme.secondaryText)
-                .lineLimit(1)
+            .padding(.top, 2)
         }
-        .padding(.horizontal, 10)
-        .frame(height: GitVisual.toolbarHeight)
-        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.toolHeader)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(LitheTheme.divider).frame(height: 1)
-        }
+        .frame(width: 32)
+        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
     }
 
     /// IntelliJ-style "deleted ref [Restore]" notice. The restore record lives
@@ -732,23 +721,23 @@ struct GitLogView: View {
     private var referencePane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 4) {
-                Button {
-                    Task { await model.showAllGitReferences() }
-                } label: {
-                    Image(systemName: "chevron.left")
+                LitheIDEAIcon(resourcePath: "actions/search.svg", size: 14, fallbackSystemImage: "magnifyingglass")
+                TextField("Search branches", text: $referenceSearchQuery)
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel("Search branches")
+                    .font(GitVisual.toolbar)
+                    .onChange(of: referenceSearchQuery) { query in
+                        if !query.isEmpty {
+                            localExpanded = true
+                            remoteExpanded = true
+                            tagsExpanded = true
+                        }
+                    }
+                if !referenceSearchQuery.isEmpty {
+                    gitToolbarButton(systemImage: "xmark", help: "Clear branch search") {
+                        referenceSearchQuery = ""
+                    }
                 }
-                .litheIconButton()
-                .help("Back to all references")
-
-                Button {
-                    model.gitLogSearchQuery = ""
-                } label: {
-                    LitheSystemIcon(systemImage: "magnifyingglass")
-                }
-                .litheIconButton()
-                .help("Clear log search")
-
-                Spacer()
             }
             .padding(.horizontal, 6)
             .frame(height: GitVisual.toolbarHeight)
@@ -757,33 +746,29 @@ struct GitLogView: View {
 
             GeometryReader { geometry in
                 ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 0) {
                         if let current = currentReference {
                             referenceButton(current, title: "HEAD (Current Branch)", icon: "arrow.right")
-                                .padding(.bottom, 4)
                         }
 
                         referenceSection(
                             title: "Local",
-                            icon: "folder",
                             kind: .local,
                             expanded: $localExpanded
                         )
                         referenceSection(
                             title: "Remote",
-                            icon: "network",
                             kind: .remote,
                             expanded: $remoteExpanded
                         )
                         referenceSection(
                             title: "Tags",
-                            icon: "tag",
                             kind: .tag,
                             expanded: $tagsExpanded
                         )
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 9)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 4)
                     .frame(
                         minWidth: geometry.size.width,
                         minHeight: geometry.size.height,
@@ -793,16 +778,15 @@ struct GitLogView: View {
                 .litheScrollViewChrome(hideHorizontal: true)
             }
         }
-        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.sidebar)
+        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
     }
 
     private func referenceSection(
         title: String,
-        icon: String,
         kind: GitReferenceKind,
         expanded: Binding<Bool>
     ) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
                 expanded.wrappedValue.toggle()
             } label: {
@@ -810,7 +794,6 @@ struct GitLogView: View {
                     Image(systemName: expanded.wrappedValue ? "chevron.down" : "chevron.right")
                         .font(.system(size: 8, weight: .bold))
                         .frame(width: 10)
-                    LitheSystemIcon(systemImage: icon, size: 14)
                     Text(LocalizedStringKey(title))
                         .font(GitVisual.section)
                 }
@@ -823,7 +806,7 @@ struct GitLogView: View {
             .lithePointer()
 
             if expanded.wrappedValue {
-                LazyVStack(alignment: .leading, spacing: 1) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(referenceRows(for: kind)) { row in
                         GitReferenceRowView(
                             row: row,
@@ -837,15 +820,24 @@ struct GitLogView: View {
                         .id(row.id)
                     }
                 }
+                .padding(.leading, 16)
             }
         }
     }
 
     private func referenceRows(for kind: GitReferenceKind) -> [GitReferenceRow] {
+        let query = referenceSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            return GitReferenceRowsBuilder.rows(
+                from: model.gitReferences.filter { $0.kind == kind && $0.shortName.localizedCaseInsensitiveContains(query) },
+                kind: kind,
+                collapsedGroups: []
+            )
+        }
         switch kind {
-        case .local: localReferenceRows
-        case .remote: remoteReferenceRows
-        case .tag: tagReferenceRows
+        case .local: return localReferenceRows
+        case .remote: return remoteReferenceRows
+        case .tag: return tagReferenceRows
         }
     }
 
@@ -933,7 +925,7 @@ struct GitLogView: View {
                         || (model.selectedGitReference == nil && reference.isCurrent)
                 ),
                 cornerRadius: 4,
-                activeBackground: LitheTheme.subtleSelection
+                activeBackground: LitheTheme.gitSelection
             )
         }
         .buttonStyle(.plain)
@@ -1064,64 +1056,55 @@ struct GitLogView: View {
         }
     }
 
-    private var commitPane: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    LitheIDEAIcon(resourcePath: "actions/search.svg", size: 14, fallbackSystemImage: "magnifyingglass")
-                        .foregroundStyle(LitheTheme.secondaryText)
-                    TextField("Text, me, author:, branch:, path:", text: $model.gitLogSearchQuery)
-                        .textFieldStyle(.plain)
-                        .font(GitVisual.toolbar)
-                        .focused($gitLogSearchFocused)
-                    if !model.gitLogSearchQuery.isEmpty {
-                        Button {
-                            model.gitLogSearchQuery = ""
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 10, weight: .semibold))
-                        }
-                        .litheIconButton()
-                        .foregroundStyle(LitheTheme.secondaryText)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .frame(width: 236, height: 29, alignment: .leading)
-                .background(LitheTheme.inputBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 5)
-                        .stroke(LitheTheme.inputBorder, lineWidth: 1)
-                }
-
-                gitLogFilterBar
-
-                Spacer()
-
-                HStack(spacing: 2) {
-                    gitToolbarButton(systemImage: "arrow.left.arrow.right", help: "Compare current branch with working tree") {
-                        guard let currentReference else { return }
-                        Task { await model.showComparisonWithWorkingTree(for: currentReference) }
-                    }
-                    .disabled(currentReference == nil)
-                    gitToolbarIcon(systemImage: "clock", help: "Show commit details")
-                    gitToolbarButton(systemImage: "arrow.clockwise", help: "Refresh Git log") {
-                        Task { await model.refreshGitHistory() }
-                    }
-                    gitToolbarButton(
-                        systemImage: showCommitDecorations ? "eye" : "eye.slash",
-                        help: showCommitDecorations ? "Hide commit decorations" : "Show commit decorations"
-                    ) {
-                        showCommitDecorations.toggle()
-                    }
-                    gitToolbarButton(systemImage: "magnifyingglass", help: "Find in log") {
-                        gitLogSearchFocused = true
-                    }
+    private var commitToolbar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                LitheIDEAIcon(resourcePath: "actions/search.svg", size: 14, fallbackSystemImage: "magnifyingglass")
+                TextField("Text or hash", text: $model.gitLogSearchQuery)
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel("Search Git log")
+                    .font(GitVisual.toolbar)
+                    .focused($gitLogSearchFocused)
+                if !model.gitLogSearchQuery.isEmpty {
+                    gitLogFilterClearButton(help: "Clear log search") { model.gitLogSearchQuery = "" }
                 }
             }
-            .padding(.horizontal, 10)
+            .foregroundStyle(LitheTheme.secondaryText)
+            .padding(.horizontal, 6)
+            .frame(width: 190, height: 26)
+            .background(LitheTheme.inputBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .overlay { RoundedRectangle(cornerRadius: 4).stroke(LitheTheme.inputBorder, lineWidth: 1) }
+            .help("Search commit messages and hashes; use author:, branch: or path: filters")
+
+            gitLogFilterBar
+
+            HStack(spacing: 0) {
+                gitToolbarButton(systemImage: "arrow.clockwise", help: "Refresh Git log") {
+                    Task { await model.refreshGitHistory() }
+                }
+                gitToolbarButton(systemImage: "scissors", help: "Cherry-pick Commit…") {
+                    guard let commit = model.selectedGitCommit else { return }
+                    pendingCommitOperation = GitCommitOperationRequest(kind: .cherryPick, commit: commit)
+                }
+                .disabled(model.selectedGitCommit == nil || model.isPerformingBranchOperation)
+                gitToolbarButton(
+                    systemImage: showCommitDecorations ? "eye" : "eye.slash",
+                    help: showCommitDecorations ? "Hide commit decorations" : "Show commit decorations"
+                ) { showCommitDecorations.toggle() }
+            }
+        }
+        .padding(.horizontal, 4)
+        .frame(height: GitVisual.toolbarHeight)
+    }
+
+    private var commitPane: some View {
+        VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                commitToolbar
+            }
             .frame(height: GitVisual.toolbarHeight)
-            .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.toolHeader)
+            .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
 
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
 
@@ -1135,100 +1118,123 @@ struct GitLogView: View {
                 .foregroundStyle(LitheTheme.secondaryText)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            GitGraphView(
-                                layout: graphLayout,
-                                visibleHashes: visibleCommitHashes,
-                                selectedHash: model.selectedGitCommit?.hash,
-                                showCommitDecorations: showCommitDecorations,
-                                actions: graphRowActions
-                            )
+                GeometryReader { geometry in
+                    ScrollViewReader { proxy in
+                        ScrollView([.horizontal, .vertical]) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                GitGraphView(
+                                    layout: graphLayout,
+                                    visibleHashes: visibleCommitHashes,
+                                    selectedHash: model.selectedGitCommit?.hash,
+                                    showCommitDecorations: showCommitDecorations,
+                                    viewportWidth: geometry.size.width,
+                                    actions: graphRowActions
+                                )
 
-                            if model.canLoadMoreGitHistory {
-                                Button {
-                                    Task { await model.loadMoreGitHistory() }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        if model.isLoadingMoreGitHistory {
-                                            ProgressView().controlSize(.small)
+                                if model.canLoadMoreGitHistory {
+                                    Button {
+                                        Task { await model.loadMoreGitHistory() }
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            if model.isLoadingMoreGitHistory {
+                                                ProgressView().controlSize(.small)
+                                            }
+                                            Text(model.isLoadingMoreGitHistory ? "Loading commits…" : "Load more commits")
                                         }
-                                        Text(model.isLoadingMoreGitHistory ? "Loading commits…" : "Load more commits")
+                                        .font(.system(size: 11.5, weight: .medium))
+                                        .foregroundStyle(LitheTheme.accent)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 32)
+                                        .contentShape(Rectangle())
                                     }
-                                    .font(.system(size: 11.5, weight: .medium))
-                                    .foregroundStyle(LitheTheme.accent)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 32)
-                                    .contentShape(Rectangle())
+                                    .buttonStyle(.plain)
+                                    .lithePointer()
                                 }
-                                .buttonStyle(.plain)
-                                .lithePointer()
+                            }
+                            // A two-axis scroll view centers content shorter than
+                            // its viewport on older macOS releases. Keep search
+                            // results at the top even when only one row remains.
+                            .frame(
+                                minWidth: geometry.size.width,
+                                minHeight: geometry.size.height,
+                                alignment: .topLeading
+                            )
+                        }
+                        .litheScrollViewChrome(hideHorizontal: false)
+                        .gitLogTopLeadingScrollAnchor()
+                        .focusable()
+                        .focused($gitLogCommitListFocused)
+                        .gitLogFocusEffectHidden()
+                        .onMoveCommand { direction in
+                            switch direction {
+                            case .up:
+                                moveGitLogCommitSelection(by: -1)
+                            case .down:
+                                moveGitLogCommitSelection(by: 1)
+                            default:
+                                break
                             }
                         }
-                    }
-                    .litheScrollViewChrome(hideHorizontal: true)
-                    .focusable()
-                    .focused($gitLogCommitListFocused)
-                    .gitLogFocusEffectHidden()
-                    .onMoveCommand { direction in
-                        switch direction {
-                        case .up:
-                            moveGitLogCommitSelection(by: -1)
-                        case .down:
-                            moveGitLogCommitSelection(by: 1)
-                        default:
-                            break
+                        .onChange(of: graphLayout.rows.first?.id) { _ in
+                            guard let hash = model.selectedGitCommit?.hash ?? graphLayout.rows.first?.id else { return }
+                            proxy.scrollTo(hash, anchor: .topLeading)
                         }
-                    }
-                    .onChange(of: model.selectedGitCommit?.hash) { _ in
-                        guard let hash = model.selectedGitCommit?.hash else { return }
-                        proxy.scrollTo(hash)
+                        .onChange(of: visibleCommitHashes) { _ in
+                            guard let hash = filteredCommits.first?.hash else { return }
+                            proxy.scrollTo(hash, anchor: .topLeading)
+                        }
+                        .onChange(of: model.selectedGitCommit?.hash) { _ in
+                            guard let hash = model.selectedGitCommit?.hash else { return }
+                            proxy.scrollTo(hash, anchor: .topLeading)
+                        }
                     }
                 }
             }
         }
-        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.editor)
+        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
     }
 
     private var detailPane: some View {
         GeometryReader { geometry in
-            let minimumFilesPaneHeight: CGFloat = 90
-            let minimumCommitDetailHeight: CGFloat = 110
-            let maximumFilesPaneHeight = max(
-                minimumFilesPaneHeight,
-                geometry.size.height - SplitHandleView.thickness - minimumCommitDetailHeight
-            )
+            let contentHeight = max(0, geometry.size.height - SplitHandleView.thickness)
+            let minimumFilesPaneHeight = min(72, contentHeight * 0.55)
+            let minimumCommitDetailHeight = min(84, contentHeight * 0.45)
 
             LitheSplitPaneView(
                 axis: .vertical,
                 placement: .leading,
-                // Until the user drags, the files pane keeps tracking the
-                // container so the detail area stays at its designed height.
-                defaultSize: geometry.size.height - SplitHandleView.thickness - 156,
+                defaultSize: contentHeight * 0.58,
                 minimum: minimumFilesPaneHeight,
-                maximum: maximumFilesPaneHeight,
+                maximum: contentHeight - minimumCommitDetailHeight,
+                flexibleMinimum: minimumCommitDetailHeight,
                 sized: { commitFilesPane },
                 flexible: { commitDetail }
             )
         }
-        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.sidebar)
+        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
     }
 
     private var commitFilesPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 5) {
-                gitToolbarIcon(systemImage: "arrow.left.arrow.right", help: "Compare changes")
-                gitToolbarIcon(systemImage: "clock", help: "Show file history")
-                gitToolbarIcon(systemImage: "eye", help: "Toggle preview")
-                Spacer()
-                Text("\(model.selectedGitCommitFiles.count) files")
+                gitToolbarButton(systemImage: "arrow.left.arrow.right", help: "Show Diff") {
+                    guard let file = model.selectedGitCommitFile ?? model.selectedGitCommitFiles.first else { return }
+                    model.showGitCommitDiff(for: file)
+                }
+                .disabled(model.selectedGitCommitFiles.isEmpty)
+                Spacer(minLength: 4)
+                gitToolbarButton(systemImage: "arrow.up.and.down", help: "Expand all file groups") {
+                    collapsedFileGroups.removeAll()
+                }
+                gitToolbarButton(systemImage: "arrow.down.right.and.arrow.up.left", help: "Collapse all file groups") {
+                    collapsedFileGroups = [commitFileTree.id]
+                }
             }
             .font(GitVisual.meta)
             .foregroundStyle(LitheTheme.secondaryText)
             .padding(.horizontal, 10)
             .frame(height: GitVisual.toolbarHeight)
-            .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.toolHeader)
+            .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
 
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
 
@@ -1287,29 +1293,36 @@ struct GitLogView: View {
     private var commitDetail: some View {
         Group {
             if let commit = model.selectedGitCommit {
-                VStack(alignment: .leading, spacing: 9) {
-                    Text(commit.subject)
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(LitheTheme.primaryText)
-                        .lineLimit(2)
-                    Text("\(commit.shortHash)  \(commit.authorName) <\(commit.authorEmail)>")
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(commit.subject)
+                            .font(GitVisual.bodyMedium)
+                            .foregroundStyle(LitheTheme.primaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("\(commit.shortHash)  \(commit.authorName)")
+                                .foregroundStyle(LitheTheme.primaryText)
+                            Text(commit.authorEmail)
+                                .foregroundStyle(LitheTheme.accent)
+                            Text(commit.date)
+                                .foregroundStyle(LitheTheme.secondaryText)
+                        }
                         .font(GitVisual.meta)
-                        .foregroundStyle(LitheTheme.secondaryText)
-                        .lineLimit(1)
-                    Text(commit.date)
-                        .font(GitVisual.monoMeta)
-                        .foregroundStyle(LitheTheme.secondaryText)
-                    if !commit.decorations.isEmpty {
-                        Text(commit.decorations)
-                        .font(GitVisual.meta)
-                            .foregroundStyle(LitheTheme.accent)
-                            .lineLimit(2)
+                        if let row = graphLayout.rows.first(where: { $0.commit.hash == commit.hash }), !row.labels.isEmpty {
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 4) {
+                                    ForEach(row.labels) { GitGraphLabelView(label: $0) }
+                                }
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ForEach(row.labels) { GitGraphLabelView(label: $0) }
+                                }
+                            }
+                        }
                     }
-                    Spacer(minLength: 0)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .textSelection(.enabled)
                 }
-                .padding(11)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .textSelection(.enabled)
             } else {
                 Text("Commit details")
                     .font(LitheTheme.uiFont)
@@ -1317,7 +1330,7 @@ struct GitLogView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.editor)
+        .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
     }
 
     private var filteredCommits: [GitCommit] {
@@ -1352,14 +1365,6 @@ struct GitLogView: View {
               reference.kind == .local,
               !reference.isCurrent else { return nil }
         return reference
-    }
-
-    private var primaryComparisonDescription: String {
-        guard let currentReference else { return "No current branch" }
-        if let target = model.selectedGitReference, target.id != currentReference.id {
-            return "\(currentReference.shortName) → \(target.shortName)"
-        }
-        return "\(currentReference.shortName) ↔ Working Tree"
     }
 
     private func showPrimaryComparison() {
@@ -1455,7 +1460,7 @@ struct GitLogView: View {
                 } label: {
                     gitLogFilterLabel(
                         title: "Branch",
-                        selection: model.selectedGitReference?.shortName
+                        selection: model.isShowingAllGitReferences ? nil : (model.selectedGitReference?.shortName ?? model.currentBranch)
                     )
                 }
                 .buttonStyle(.plain)
@@ -1479,7 +1484,7 @@ struct GitLogView: View {
                     )
                 }
 
-                if model.selectedGitReference != nil || model.isShowingAllGitReferences {
+                if !model.isShowingAllGitReferences {
                     gitLogFilterClearButton(help: "Clear branch filter") {
                         Task { await model.showAllGitReferences() }
                     }
@@ -1534,7 +1539,9 @@ struct GitLogView: View {
                         }
                     }
                 } label: {
-                    gitLogFilterLabel(title: "Date", selection: selectedGitLogDatePreset.filterTitle)
+                    Text(LocalizedStringKey(selectedGitLogDatePreset.filterTitle ?? "Date"))
+                        .font(GitVisual.toolbar)
+                        .foregroundStyle(LitheTheme.secondaryText)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -1793,15 +1800,7 @@ struct GitLogView: View {
         if status.hasPrefix("A") { return LitheTheme.success }
         if status.hasPrefix("D") { return .red.opacity(0.85) }
         if status.hasPrefix("R") { return LitheTheme.accent }
-        return LitheTheme.warning
-    }
-
-    private func gitToolbarIcon(systemImage: String, help: String) -> some View {
-        LitheSystemIcon(systemImage: systemImage, size: 15)
-            .foregroundStyle(LitheTheme.secondaryText)
-            .frame(width: 24, height: 24)
-            .contentShape(Rectangle())
-            .help(LocalizedStringKey(help))
+        return LitheTheme.accent
     }
 
     private func gitToolbarButton(
@@ -1813,6 +1812,7 @@ struct GitLogView: View {
             LitheSystemIcon(systemImage: systemImage, size: 15)
         }
         .litheIconButton()
+        .accessibilityLabel(LocalizedStringKey(help))
         .help(LocalizedStringKey(help))
     }
 
@@ -1825,15 +1825,11 @@ struct GitLogView: View {
             model.showGitCommitDiff(for: file)
         } label: {
             HStack(spacing: 7) {
-                Text(file.status)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(fileStatusColor(file.status))
-                    .frame(width: 18)
                 LitheIcon(kind: LitheIcons.kind(forFilePath: file.path), size: 14)
                     .frame(width: 14, height: 14)
                 Text((file.path as NSString).lastPathComponent)
                     .font(GitVisual.body)
-                    .foregroundStyle(LitheTheme.primaryText)
+                    .foregroundStyle(fileStatusColor(file.status))
                     .lineLimit(1)
                 Spacer(minLength: 8)
             }
@@ -1843,7 +1839,7 @@ struct GitLogView: View {
             .litheRowHover(
                 isActive: model.selectedGitCommitFile?.id == file.id,
                 cornerRadius: 4,
-                activeBackground: LitheTheme.subtleSelection
+                activeBackground: LitheTheme.gitSelection
             )
             .contentShape(Rectangle())
         }
@@ -1870,6 +1866,15 @@ enum GitLogCommitSelection {
 }
 
 private extension View {
+    @ViewBuilder
+    func gitLogTopLeadingScrollAnchor() -> some View {
+        if #available(macOS 14.0, *) {
+            defaultScrollAnchor(.topLeading)
+        } else {
+            self
+        }
+    }
+
     @ViewBuilder
     func gitLogFocusEffectHidden() -> some View {
         if #available(macOS 14.0, *) {
@@ -2733,14 +2738,14 @@ private struct GitReferenceRowView: View, Equatable {
                     .font(.system(size: 12))
                     .foregroundStyle(LitheTheme.secondaryText)
                 Text(row.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(LitheTheme.primaryText)
                     .lineLimit(1)
                 Spacer(minLength: 8)
             }
             .padding(.leading, CGFloat(row.depth * 16))
             .padding(.trailing, 8)
-            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
             .contentShape(Rectangle())
             .litheRowHover(cornerRadius: 4)
         }
@@ -2754,7 +2759,7 @@ private struct GitReferenceRowView: View, Equatable {
         } label: {
             HStack(spacing: 7) {
                 LitheSystemIcon(systemImage: referenceIcon(reference), size: 14)
-                    .foregroundStyle(reference.kind == .tag ? LitheTheme.warning : LitheTheme.secondaryText)
+                    .foregroundStyle(reference.isCurrent ? LitheTheme.warning : LitheTheme.secondaryText)
                     .frame(width: 16)
                 Text(row.name)
                     .font(.system(size: 13))
@@ -2769,13 +2774,13 @@ private struct GitReferenceRowView: View, Equatable {
             }
             .padding(.leading, CGFloat(row.depth * 16))
             .padding(.trailing, 8)
-            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .contentShape(Rectangle())
             .litheRowHover(
                 isActive: isSelected,
                 cornerRadius: 4,
-                activeBackground: LitheTheme.subtleSelection
+                activeBackground: LitheTheme.gitSelection
             )
         }
         .buttonStyle(.plain)
@@ -2878,8 +2883,8 @@ private struct GitReferenceRowView: View, Equatable {
 
     private func referenceIcon(_ reference: GitReference) -> String {
         switch reference.kind {
-        case .local: "point.3.connected.trianglepath.dotted"
-        case .remote: "cloud"
+        case .local: "tag"
+        case .remote: "tag"
         case .tag: "tag"
         }
     }
@@ -2911,27 +2916,33 @@ private struct GitLogThreePaneLayout<ReferencePane: View, CommitPane: View, Deta
         self.detailPane = detailPane()
     }
 
+    // On narrow windows, share the available width instead of letting the
+    // three fixed minima force the workbench beyond its window bounds.
+    private var referencePaneMinimum: CGFloat { min(GitLogThreePaneMetrics.minimumReferencePaneWidth, availableWidth * 0.22) }
+    private var commitPaneMinimum: CGFloat { min(GitLogThreePaneMetrics.minimumCommitPaneWidth, availableWidth * 0.42) }
+    private var detailPaneMinimum: CGFloat { min(GitLogThreePaneMetrics.minimumDetailPaneWidth, availableWidth * 0.30) }
+
     private var referencePaneMaximum: CGFloat {
         max(
-            GitLogThreePaneMetrics.minimumReferencePaneWidth,
+            referencePaneMinimum,
             min(
                 availableWidth * 0.35,
                 availableWidth
                     - (SplitHandleView.thickness * 2)
-                    - GitLogThreePaneMetrics.minimumCommitPaneWidth
-                    - GitLogThreePaneMetrics.minimumDetailPaneWidth
+                    - commitPaneMinimum
+                    - detailPaneMinimum
             )
         )
     }
 
     private var detailPaneMaximum: CGFloat {
         max(
-            GitLogThreePaneMetrics.minimumDetailPaneWidth,
+            detailPaneMinimum,
             min(
                 availableWidth * 0.5,
                 availableWidth
                     - (SplitHandleView.thickness * 2)
-                    - GitLogThreePaneMetrics.minimumCommitPaneWidth
+                    - commitPaneMinimum
                     - referencePaneMaximum
             )
         )
@@ -2942,17 +2953,18 @@ private struct GitLogThreePaneLayout<ReferencePane: View, CommitPane: View, Deta
             axis: .horizontal,
             placement: .leading,
             defaultSize: 220,
-            minimum: GitLogThreePaneMetrics.minimumReferencePaneWidth,
+            minimum: referencePaneMinimum,
             maximum: referencePaneMaximum,
-            flexibleMinimum: GitLogThreePaneMetrics.minimumCommitPaneWidth,
+            flexibleMinimum: commitPaneMinimum,
             sized: { referencePane },
             flexible: {
                 LitheSplitPaneView(
                     axis: .horizontal,
                     placement: .trailing,
                     defaultSize: 350,
-                    minimum: GitLogThreePaneMetrics.minimumDetailPaneWidth,
+                    minimum: detailPaneMinimum,
                     maximum: detailPaneMaximum,
+                    flexibleMinimum: commitPaneMinimum,
                     sized: { detailPane },
                     flexible: { commitPane }
                 )
