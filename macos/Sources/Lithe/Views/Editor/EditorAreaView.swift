@@ -43,6 +43,7 @@ private enum MarkdownViewMode: String, CaseIterable, Identifiable, Equatable {
 struct EditorAreaView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var settings: AppSettings
+    @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var hoveredTabID: UUID?
     @State private var tabDragState = EditorTabDragState.idle
@@ -149,6 +150,16 @@ struct EditorAreaView: View {
         }
     }
 
+    private var tabSelectionColor: Color {
+        controlActiveState == .inactive ? LitheTheme.secondaryText.opacity(0.6) : LitheTheme.tabUnderline
+    }
+
+    private var selectedTab: EditorTabItem? {
+        if let session = model.activeEditorTerminalSession { return .terminal(session.id) }
+        if let media = model.activeMediaDocument { return .media(media.id) }
+        return model.activeDocumentID.map(EditorTabItem.document)
+    }
+
     private var editorTabs: some View {
         HStack(alignment: .top, spacing: 0) {
             editorTabLayout
@@ -159,8 +170,12 @@ struct EditorAreaView: View {
                splitDocumentID == nil {
                 markdownModePicker
             }
+            EditorOpenTabsMenu(selectedTab: selectedTab)
         }
         .frame(minHeight: LitheTheme.Metrics.tabHeight, alignment: .top)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(LitheTheme.divider).frame(height: 1)
+        }
         .contentShape(Rectangle())
         .background(
             isTerminalTabBarDropTargeted
@@ -202,9 +217,23 @@ struct EditorAreaView: View {
         Group {
             switch settings.editorTabLayoutMode {
             case .singleLine:
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 0) {
-                        editorTabItems
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 0) {
+                            editorTabItems
+                        }
+                    }
+                    .onChange(of: selectedTab) { tab in
+                        if let tab, tabDragState.draggedItem == nil { proxy.scrollTo(tab) }
+                    }
+                    .onChange(of: model.editorTabItems) { _ in
+                        // Opening a file can publish its selection before its tab exists.
+                        if let selectedTab, tabDragState.draggedItem == nil {
+                            proxy.scrollTo(selectedTab)
+                        }
+                    }
+                    .onAppear {
+                        if let selectedTab { proxy.scrollTo(selectedTab) }
                     }
                 }
                 .frame(height: LitheTheme.Metrics.tabHeight)
@@ -248,14 +277,17 @@ struct EditorAreaView: View {
             case .document(let documentID):
                 if let index = documentIndices[documentID] {
                     editorTab(model.openDocuments[index], at: index)
+                        .id(item)
                 }
             case .terminal(let sessionID):
                 if let session = sessionsByID[sessionID] {
                     editorTerminalTab(session)
+                        .id(item)
                 }
             case .media(let mediaID):
                 if let media = model.openMediaDocuments.first(where: { $0.id == mediaID }) {
                     editorMediaTab(media)
+                        .id(item)
                 }
             }
         }
@@ -395,7 +427,7 @@ struct EditorAreaView: View {
                     .foregroundStyle(isActive ? LitheTheme.primaryText : LitheTheme.secondaryText)
                     .lineLimit(1)
             }
-            .padding(.leading, 11)
+            .padding(.leading, 12)
             .frame(height: LitheTheme.Metrics.tabHeight)
             .contentShape(Rectangle())
             .onTapGesture { model.selectMediaDocument(media) }
@@ -420,7 +452,7 @@ struct EditorAreaView: View {
             .foregroundStyle(LitheTheme.secondaryText)
             .opacity(isActive || hoveredTabID == media.id ? 1 : 0)
             .allowsHitTesting(isActive || hoveredTabID == media.id)
-            .padding(.trailing, 4)
+            .padding(.trailing, 8)
         }
         .onHover { isHovering in
             hoveredTabID = isHovering ? media.id : nil
@@ -433,7 +465,7 @@ struct EditorAreaView: View {
                     : LitheTheme.accent.opacity(0.13))
         )
         .overlay(alignment: .bottom) {
-            if isActive { Rectangle().fill(LitheTheme.accent).frame(height: 2) }
+            if isActive { Rectangle().fill(tabSelectionColor).frame(height: LitheTheme.Metrics.tabUnderlineHeight) }
         }
         .overlay(alignment: .leading) {
             if dropSide == .some(.before) {
@@ -470,7 +502,7 @@ struct EditorAreaView: View {
                 )
             }
             .foregroundStyle(isActive ? LitheTheme.primaryText : LitheTheme.secondaryText)
-            .padding(.leading, 11)
+            .padding(.leading, 12)
             .frame(height: LitheTheme.Metrics.tabHeight)
             .contentShape(Rectangle())
             .onTapGesture {
@@ -512,7 +544,7 @@ struct EditorAreaView: View {
             .foregroundStyle(LitheTheme.secondaryText)
             .opacity(isActive || hoveredTabID == session.id ? 1 : 0)
             .allowsHitTesting(isActive || hoveredTabID == session.id)
-            .padding(.trailing, 4)
+            .padding(.trailing, 8)
         }
         .background(
             isActive
@@ -523,7 +555,7 @@ struct EditorAreaView: View {
         )
         .overlay(alignment: .bottom) {
             if isActive {
-                Rectangle().fill(LitheTheme.accent).frame(height: 2)
+                Rectangle().fill(tabSelectionColor).frame(height: LitheTheme.Metrics.tabUnderlineHeight)
             }
         }
         .overlay(alignment: .leading) {
@@ -625,7 +657,7 @@ struct EditorAreaView: View {
             .foregroundStyle(LitheTheme.secondaryText)
             .opacity(isActive || hoveredTabID == document.id ? 1 : 0)
             .allowsHitTesting(isActive || hoveredTabID == document.id)
-            .padding(.trailing, 4)
+            .padding(.trailing, 8)
         }
         .background(
             isActive
@@ -636,7 +668,7 @@ struct EditorAreaView: View {
         )
         .overlay(alignment: .bottom) {
             if isActive {
-                Rectangle().fill(LitheTheme.accent).frame(height: 2)
+                Rectangle().fill(tabSelectionColor).frame(height: LitheTheme.Metrics.tabUnderlineHeight)
             }
         }
         .overlay(alignment: .leading) {
@@ -659,12 +691,12 @@ struct EditorAreaView: View {
         isActive: Bool
     ) -> some View {
         let label = HStack(spacing: 7) {
-            editorDocumentIcon(document, size: 13)
+            editorDocumentIcon(document, size: LitheTheme.Metrics.tabIconSize)
             editorTabTitle(document)
             EditorTabDirtyIndicator(document: document)
         }
         .foregroundStyle(isActive ? LitheTheme.primaryText : LitheTheme.secondaryText)
-        .padding(.leading, 11)
+        .padding(.leading, 12)
         .frame(height: LitheTheme.Metrics.tabHeight)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -705,13 +737,13 @@ struct EditorAreaView: View {
     private func editorTabTitle(_ document: EditorDocument) -> some View {
         if settings.editorTabLayoutMode == .multipleRows {
             Text(document.displayName)
-                .font(.system(size: 12.5))
+                .font(.system(size: LitheTheme.Metrics.tabFontSize))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: 240, alignment: .leading)
         } else {
             Text(document.displayName)
-                .font(.system(size: 12.5))
+                .font(.system(size: LitheTheme.Metrics.tabFontSize))
                 .lineLimit(1)
         }
     }
@@ -726,11 +758,11 @@ struct EditorAreaView: View {
 
     private func editorTabDragPreview(_ document: EditorDocument) -> some View {
         HStack(spacing: 7) {
-            editorDocumentIcon(document, size: 13)
+            editorDocumentIcon(document, size: LitheTheme.Metrics.tabIconSize)
                 .foregroundStyle(LitheTheme.accent)
 
             Text(document.displayName)
-                .font(.system(size: 12.5, weight: .medium))
+                .font(.system(size: LitheTheme.Metrics.tabFontSize, weight: .medium))
                 .foregroundStyle(LitheTheme.primaryText)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -742,7 +774,7 @@ struct EditorAreaView: View {
                     .frame(width: 6, height: 6)
             }
         }
-        .padding(.leading, 11)
+        .padding(.leading, 12)
         .padding(.trailing, 9)
         .fixedSize(horizontal: true, vertical: false)
         .frame(height: LitheTheme.Metrics.tabHeight, alignment: .leading)
@@ -1061,7 +1093,7 @@ struct EditorAreaView: View {
         VStack(spacing: 0) {
             if showsHeader, let document {
                 HStack(spacing: 7) {
-                    editorDocumentIcon(document, size: 13)
+                    editorDocumentIcon(document, size: LitheTheme.Metrics.tabIconSize)
                     Text(document.displayName)
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(LitheTheme.primaryText)

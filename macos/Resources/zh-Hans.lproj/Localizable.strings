@@ -1382,3 +1382,5 @@
 "Next Project Tab" = "下一个项目标签";
 
 "New projects open as tabs by default. Drag a project tab out to create a separate window, or use Window → Merge All Project Windows to combine them again." = "新项目默认自动合并为标签。拖出项目标签可变成独立窗口，也可通过“窗口 → 合并所有项目窗口”重新合并。";
+
+"Open Tabs" = "已打开的标签";

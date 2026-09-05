@@ -413,6 +413,9 @@ enum LitheTheme {
         static let treeIconSize: CGFloat = 16
         static let treeFontSize: CGFloat = 13.5
         static let tabHeight: CGFloat = 40
+        static let tabFontSize: CGFloat = 13
+        static let tabIconSize: CGFloat = 16
+        static let tabUnderlineHeight: CGFloat = 3
         static let projectTabFontSize: CGFloat = 12
         static let projectTabHeight: CGFloat = 30
         static let toolbarHeight: CGFloat = 40
