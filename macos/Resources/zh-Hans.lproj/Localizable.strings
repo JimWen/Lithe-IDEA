@@ -1522,3 +1522,34 @@
 "Terminal display settings could not be read. Default fonts are in use; edit the settings or restore defaults." = "无法读取终端显示设置。正在使用默认字体；请修改设置或恢复默认值。";
 "Terminal font settings were not applied because a font is unavailable. Choose installed fonts and retry." = "字体不可用，终端字体设置未应用。请选择已安装的字体后重试。";
 "Terminal font settings could not be applied. Choose installed fonts and retry." = "无法应用终端字体设置。请选择已安装的字体后重试。";
+
+// Terminal interaction settings
+"Scrollback lines" = "历史行数";
+"Terminal history lines" = "终端历史行数";
+"Reducing history removes older lines and clears the selection. Zero keeps no history." = "减少历史行数会删除较旧内容并清除选区。设为 0 不保留历史记录。";
+"Cursor" = "光标";
+"Cursor shape" = "光标形状";
+"Terminal cursor shape" = "终端光标形状";
+"Blink cursor" = "光标闪烁";
+"Terminal applications can override the cursor style while running." = "运行中的终端程序可以更改光标样式。";
+"Input and scrolling" = "输入与滚动";
+"Use Option as Meta" = "将 Option 用作 Meta";
+"Scroll sensitivity" = "滚动灵敏度";
+"Terminal scroll sensitivity" = "终端滚动灵敏度";
+"Selection and links" = "选择与链接";
+"Copy on selection" = "选择即复制";
+"Keep selection after manual copy" = "手动复制后保留选区";
+"Copy on selection keeps the selection. Applications that capture the mouse handle their own clicks." = "选择即复制会保留选区。捕获鼠标的终端程序自行处理点击。";
+"Detect links" = "识别链接";
+"Terminal link detection" = "终端链接识别";
+"Open links with" = "打开链接方式";
+"Terminal link modifier" = "终端链接修饰键";
+"Drag or double-click to select link text. Command-click opens immediately." = "拖动或普通双击可选择链接文字。Command + 点击会立即打开链接。";
+"Block" = "方块";
+"Underline" = "下划线";
+"Bar" = "竖线";
+"Explicit hyperlinks only" = "仅显式超链接";
+"Command-click" = "Command + 点击";
+"Click" = "点击";
+"Terminal history must be between 0 and 100000 lines." = "终端历史行数必须在 0 到 100000 之间。";
+"Terminal scroll sensitivity must be between 0.05 and 10." = "终端滚动灵敏度必须在 0.05 到 10 之间。";

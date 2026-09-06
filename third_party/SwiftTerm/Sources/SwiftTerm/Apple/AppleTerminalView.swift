@@ -37,6 +37,12 @@ typealias TTBezierPath = NSBezierPath
 public typealias TTImage = NSImage
 #endif
 
+/// A nonempty selection in absolute buffer coordinates. Inactive selections are nil.
+public struct TerminalSelectionRange: Equatable {
+    public let start: Position
+    public let end: Position
+}
+
 /// Controls how links are discovered during pointer/hover tracking in terminal views.
 public enum LinkReporting {
     /// Disable link tracking.
@@ -878,6 +884,7 @@ extension TerminalView {
 
     func shouldUnderlineLink(row: Int, column: Int, width: Int, cell: CharData) -> Bool
     {
+        guard linkLookupMode != nil else { return false }
         switch linkHighlightMode {
         case .always:
             return cell.hasPayload
@@ -907,7 +914,7 @@ extension TerminalView {
     // "k=v:k2=v2;URL"
     func urlAndParamsFrom(payload: String) -> (String, [String:String])?
     {
-        let split = payload.split(separator: ";", maxSplits: Int.max, omittingEmptySubsequences: false)
+        let split = payload.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
         if split.count > 1 {
             let pairs = split[0].split(separator: ":")
             var params: [String:String] = [:]
@@ -977,9 +984,19 @@ extension TerminalView {
         }
     }
 
+    /// One discovery policy for rendering, preview, hover, and activation.
+    var linkLookupMode: Terminal.LinkLookupMode? {
+        switch linkReporting {
+        case .none: return nil
+        case .explicit: return .explicitOnly
+        case .implicit: return .explicitAndImplicit
+        }
+    }
+
     func linkForClick(at position: Position, hasCommandModifier: Bool) -> (link: String, params: [String:String])?
     {
-        guard let match = terminal.linkMatch(at: .buffer(position), mode: .explicitAndImplicit) else {
+        guard let mode = linkLookupMode,
+              let match = terminal.linkMatch(at: .buffer(position), mode: mode) else {
             return nil
         }
         guard linkVisibleForClick(match: match, hasCommandModifier: hasCommandModifier) else {
@@ -2576,6 +2593,13 @@ extension TerminalView {
     }
     
     
+    /// Actual endpoints, rather than a notification count or selected text, let
+    /// embedders distinguish repeated notifications from a new mouse selection.
+    public var selectionRange: TerminalSelectionRange? {
+        guard selection.active, selection.hasSelectionRange else { return nil }
+        return TerminalSelectionRange(start: selection.start, end: selection.end)
+    }
+
     /// Returns the contents of the selection, if active, or nil otherwise
     public func getSelection () -> String?
     {

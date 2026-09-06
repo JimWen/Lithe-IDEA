@@ -370,3 +370,36 @@
 "Terminal display settings could not be read. Default fonts are in use; edit the settings or restore defaults." = "Terminal display settings could not be read. Default fonts are in use; edit the settings or restore defaults.";
 "Terminal font settings were not applied because a font is unavailable. Choose installed fonts and retry." = "Terminal font settings were not applied because a font is unavailable. Choose installed fonts and retry.";
 "Terminal font settings could not be applied. Choose installed fonts and retry." = "Terminal font settings could not be applied. Choose installed fonts and retry.";
+
+// Terminal interaction settings
+"History" = "History";
+"Scrollback lines" = "Scrollback lines";
+"Terminal history lines" = "Terminal history lines";
+"Reducing history removes older lines and clears the selection. Zero keeps no history." = "Reducing history removes older lines and clears the selection. Zero keeps no history.";
+"Cursor" = "Cursor";
+"Cursor shape" = "Cursor shape";
+"Terminal cursor shape" = "Terminal cursor shape";
+"Blink cursor" = "Blink cursor";
+"Terminal applications can override the cursor style while running." = "Terminal applications can override the cursor style while running.";
+"Input and scrolling" = "Input and scrolling";
+"Use Option as Meta" = "Use Option as Meta";
+"Scroll sensitivity" = "Scroll sensitivity";
+"Terminal scroll sensitivity" = "Terminal scroll sensitivity";
+"Selection and links" = "Selection and links";
+"Copy on selection" = "Copy on selection";
+"Keep selection after manual copy" = "Keep selection after manual copy";
+"Copy on selection keeps the selection. Applications that capture the mouse handle their own clicks." = "Copy on selection keeps the selection. Applications that capture the mouse handle their own clicks.";
+"Detect links" = "Detect links";
+"Terminal link detection" = "Terminal link detection";
+"Open links with" = "Open links with";
+"Terminal link modifier" = "Terminal link modifier";
+"Drag or double-click to select link text. Command-click opens immediately." = "Drag or double-click to select link text. Command-click opens immediately.";
+"Block" = "Block";
+"Underline" = "Underline";
+"Bar" = "Bar";
+"Automatic" = "Automatic";
+"Explicit hyperlinks only" = "Explicit hyperlinks only";
+"Command-click" = "Command-click";
+"Click" = "Click";
+"Terminal history must be between 0 and 100000 lines." = "Terminal history must be between 0 and 100000 lines.";
+"Terminal scroll sensitivity must be between 0.05 and 10." = "Terminal scroll sensitivity must be between 0.05 and 10.";

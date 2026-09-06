@@ -8,18 +8,37 @@ import LitheTerminalModule
 final class LitheTerminalView: SwiftTerm.TerminalView {
     private var showsWorkbenchBackground = false
     private weak var metalActivationFailedWindow: NSWindow?
+    var copyOnSelect = false {
+        didSet { if !copyOnSelect { selectionGesture = nil } }
+    }
+    var keepSelectionOnCopy = true
+    private struct SelectionGesture {
+        let range: TerminalSelectionRange?
+        let buffer: Buffer
+        let trimmedLines: Int
+    }
+    private var selectionGesture: SelectionGesture?
+    private let linkActivation: MacTerminalLinkActivation
+    private var mouseUpModifiers: NSEvent.ModifierFlags?
 
-    override init(frame frameRect: NSRect) {
+    override convenience init(frame frameRect: NSRect) {
+        self.init(frame: frameRect, linkActivation: MacTerminalLinkActivation())
+    }
+
+    init(frame frameRect: NSRect, linkActivation: MacTerminalLinkActivation) {
+        self.linkActivation = linkActivation
         super.init(frame: frameRect)
         configureRendererPolicy()
     }
 
     required init?(coder: NSCoder) {
+        linkActivation = MacTerminalLinkActivation()
         super.init(coder: coder)
         configureRendererPolicy()
     }
 
     override func viewDidMoveToWindow() {
+        cancelMouseInteraction()
         super.viewDidMoveToWindow()
         guard let currentWindow = window,
               !isUsingMetalRenderer,
@@ -36,6 +55,72 @@ final class LitheTerminalView: SwiftTerm.TerminalView {
                 "Lithe terminal Metal renderer could not be enabled; using Core Graphics: %@",
                 String(describing: error)
             )
+        }
+    }
+
+    func cancelMouseInteraction() {
+        selectionGesture = nil
+        linkActivation.cancel()
+        cancelMouseGesture()
+    }
+
+    func activateLink(_ action: @escaping @MainActor @Sendable () -> Void) {
+        selectionGesture = nil
+        if let mouseUpModifiers, !mouseUpModifiers.contains(.command) {
+            linkActivation.submit(action)
+        } else {
+            action()
+        }
+    }
+
+    override func bufferActivated(source: Terminal) {
+        cancelMouseInteraction()
+        super.bufferActivated(source: source)
+    }
+
+    private func reportsMouse(_ event: NSEvent) -> Bool {
+        let bypass = event.modifierFlags.contains(.shift) && !terminal.mouseShiftCapture
+        return allowMouseReporting && terminal.mouseMode != .off && !bypass
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // Metal's drawing subview forwards clicks without transferring the
+        // keyboard responder from an editor that previously had focus.
+        if let window, window.firstResponder !== self {
+            window.makeFirstResponder(self)
+        }
+        cancelMouseInteraction()
+        if copyOnSelect && !reportsMouse(event) {
+            selectionGesture = SelectionGesture(range: selectionRange, buffer: terminal.buffer,
+                                                trimmedLines: terminal.buffer.totalLinesTrimmed)
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        linkActivation.cancel()
+        super.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        mouseUpModifiers = event.modifierFlags
+        defer { selectionGesture = nil; mouseUpModifiers = nil }
+        super.mouseUp(with: event)
+        // Link handling, buffer changes, and settings changes may synchronously
+        // cancel this gesture while the native mouseUp is running.
+        guard copyOnSelect, !reportsMouse(event), let gesture = selectionGesture,
+              gesture.buffer === terminal.buffer,
+              gesture.trimmedLines == terminal.buffer.totalLinesTrimmed,
+              let range = selectionRange, range != gesture.range,
+              let text = getSelection(), !text.isEmpty else { return }
+        super.copy(self)
+    }
+
+    override func copy(_ sender: Any) {
+        super.copy(sender)
+        if !keepSelectionOnCopy {
+            cancelMouseInteraction()
+            selectNone()
         }
     }
 
@@ -149,7 +234,21 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     private let stoppedChildProcessReaper = MacStoppedChildProcessReaper()
     private var processSession: MacTerminalProcessSession?
     private var connection: MacTerminalProcessConnection?
-    private var appliedDisplayConfiguration: TerminalDisplayConfiguration?
+    private struct Typography: Equatable {
+        let name: String?
+        let size: Double
+        let fallbacks: [String]
+        let spacing: Double
+
+        init(_ configuration: TerminalDisplayConfiguration) {
+            name = configuration.fontName
+            size = configuration.fontSize
+            fallbacks = configuration.fallbackFontNames
+            spacing = configuration.lineSpacing
+        }
+    }
+    private var appliedTypography: Typography?
+    private var preferredCursor: CursorStyle?
 
     var isRunning: Bool {
         connection?.process.running ?? false
@@ -167,8 +266,12 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
 
     var nativeView: AnyObject { view }
 
-    override init() {
-        view = LitheTerminalView(frame: .zero)
+    override convenience init() {
+        self.init(linkActivation: MacTerminalLinkActivation())
+    }
+
+    init(linkActivation: MacTerminalLinkActivation) {
+        view = LitheTerminalView(frame: .zero, linkActivation: linkActivation)
         super.init()
 
         view.terminalDelegate = self
@@ -205,8 +308,59 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     }
 
     func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) -> [String] {
-        if let error = configuration.validationMessage { return [error] }
-        guard appliedDisplayConfiguration != configuration else { return [] }
+        var diagnostics = applyTypography(configuration)
+        if let error = configuration.scrollbackValidationMessage {
+            diagnostics.append(error)
+        } else if view.terminal.options.scrollback != configuration.scrollback {
+            if configuration.scrollback < view.terminal.options.scrollback {
+                view.cancelMouseInteraction()
+                view.selectNone()
+            }
+            view.changeScrollback(configuration.scrollback == 0 ? nil : configuration.scrollback)
+        }
+        if let error = configuration.scrollSensitivityValidationMessage {
+            diagnostics.append(error)
+        } else {
+            view.scrollSensitivity = CGFloat(configuration.scrollSensitivity)
+        }
+        let cursor = cursorStyle(configuration)
+        if preferredCursor != cursor {
+            preferredCursor = cursor
+            view.terminal.setCursorStyle(cursor)
+        }
+        view.optionAsMetaKey = configuration.optionAsMeta
+        view.copyOnSelect = configuration.copyOnSelect
+        view.keepSelectionOnCopy = configuration.keepSelectionOnCopy
+        let reporting: LinkReporting
+        switch configuration.linkDetection {
+        case .automatic: reporting = .implicit
+        case .explicit: reporting = .explicit
+        case .disabled: reporting = .none
+        }
+        let highlighting: LinkHighlightMode = configuration.linkModifier == .command ? .hoverWithModifier : .hover
+        if reporting != view.linkReporting || highlighting != view.linkHighlightMode {
+            view.cancelMouseInteraction()
+            view.linkReporting = reporting
+            view.linkHighlightMode = highlighting
+        }
+        return diagnostics
+    }
+
+    private func cursorStyle(_ configuration: TerminalDisplayConfiguration) -> CursorStyle {
+        switch (configuration.cursorShape, configuration.cursorBlink) {
+        case (.block, true): .blinkBlock
+        case (.block, false): .steadyBlock
+        case (.underline, true): .blinkUnderline
+        case (.underline, false): .steadyUnderline
+        case (.bar, true): .blinkBar
+        case (.bar, false): .steadyBar
+        }
+    }
+
+    private func applyTypography(_ configuration: TerminalDisplayConfiguration) -> [String] {
+        if let error = configuration.typographyValidationMessage { return [error] }
+        let typography = Typography(configuration)
+        guard appliedTypography != typography else { return [] }
         let size = CGFloat(configuration.fontSize)
         let base: NSFont
         if let name = configuration.fontName {
@@ -229,10 +383,11 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         guard let font = NSFont(descriptor: descriptor, size: size) else {
             return ["Terminal font settings could not be applied. Choose installed fonts and retry."]
         }
+        view.cancelMouseInteraction()
         view.updateTypography(font: font, lineSpacing: CGFloat(configuration.lineSpacing))
         // Failed resolution never advances this cache, so Retry can apply an
         // unchanged request after the font becomes available.
-        appliedDisplayConfiguration = configuration
+        appliedTypography = typography
         return []
     }
 
@@ -297,11 +452,13 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         stop()
         selectedShellPath = executablePath
 
+        view.cancelMouseInteraction()
         view.terminal.resetToInitialState()
         var options = view.terminal.options
         options.termName = environment["TERM"] ?? "xterm-256color"
         view.terminal.options = options
         view.terminal.setup(isReset: false)
+        if let preferredCursor { view.terminal.setCursorStyle(preferredCursor) }
 
         let environmentArray = environment.keys.sorted().map { key in
             "\(key)=\(environment[key] ?? "")"
@@ -351,10 +508,12 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     }
 
     func clear() {
+        view.cancelMouseInteraction()
         view.terminal.resetToInitialState()
     }
 
     func stop() {
+        view.cancelMouseInteraction()
         guard let connection else { return }
         let processID = connection.process.shellPid
         let ownedSession = processSession
@@ -389,7 +548,7 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     }
 
     func requestOpenLink(source: SwiftTerm.TerminalView, link: String, params: [String: String]) {
-        onLink?(link, params)
+        view.activateLink { [weak self] in self?.onLink?(link, params) }
     }
 
     func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {

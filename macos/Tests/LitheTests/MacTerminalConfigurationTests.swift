@@ -16,6 +16,50 @@ private func configurationTestPIDInfo(
 @MainActor
 struct MacTerminalConfigurationTests {
     @Test
+    func cursorDefaultsReturnOnRestartAndOptionMetaReachesRealPTY() async throws {
+        try await withTerminalFixture { root, transport, session, captureChild in
+            let ready = TestGate()
+            let metaReceived = TestGate()
+            defer { ready.open(); metaReceived.open() }
+            var output = ""
+            session.onOutput = { text in
+                output += text
+                if output.contains("LITHE_CURSOR_READY") { ready.open() }
+                if output.contains("LITHE_META_OK") || output.contains("LITHE_META_BAD") { metaReceived.open() }
+            }
+            var display = TerminalDisplayConfiguration()
+            display.cursorShape = .underline; display.cursorBlink = false
+            session.applyDisplayConfiguration(display)
+            var launch = TerminalShellConfiguration()
+            launch.shell = .bash; launch.loginShell = false
+            launch.arguments = ["--noprofile", "--norc", "-c", #"stty -echo -icanon min 1 time 0; printf '\033[6 qLITHE_CURSOR_READY'; IFS= read -r -n 2 key; if [[ "$key" == $'\ex' ]]; then printf 'LITHE_META_OK'; else printf 'LITHE_META_BAD'; fi; IFS= read -r -n 1 done"#]
+            session.start(configuration: launch, context: .init(projectURL: root))
+            try captureChild()
+            #expect(transport.view.getTerminal().options.cursorStyle == .steadyUnderline)
+            try #require(await ready.waitUntilOpen())
+            let firstPID = try #require(transport.processID)
+            #expect(transport.view.getTerminal().options.cursorStyle == .steadyBar)
+            display.copyOnSelect = true; display.scrollSensitivity = 1.5
+            session.applyDisplayConfiguration(display)
+            #expect(transport.view.getTerminal().options.cursorStyle == .steadyBar)
+            let optionX = try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.option], timestamp: 0,
+                windowNumber: 0, context: nil, characters: "≈", charactersIgnoringModifiers: "x",
+                isARepeat: false, keyCode: 7
+            ))
+            transport.view.keyDown(with: optionX)
+            try #require(await metaReceived.waitUntilOpen())
+            #expect(output.contains("LITHE_META_OK"))
+            session.restart()
+            try captureChild()
+            #expect(transport.processID != firstPID)
+            // Inspect synchronously before the new process can publish output
+            // and override the user's default through another DECSCUSR.
+            #expect(transport.view.getTerminal().options.cursorStyle == .steadyUnderline)
+        }
+    }
+
+    @Test
     func typographyKeepsRealPTYAndApplicationArrowInput() async throws {
         try await withTerminalFixture { root, transport, session, captureChild in
             transport.view.setFrameSize(CGSize(width: 800, height: 480))
@@ -178,7 +222,7 @@ struct MacTerminalConfigurationTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let terminal = MacTerminalTransport()
         let session = TerminalSession(transport: terminal)
-        var child: MacTerminalProcessIdentity?
+        var children: [MacTerminalProcessIdentity] = []
         // Freeze ownership immediately after start, before the first await can
         // deliver exit/reap callbacks. Never adopt an identity during cleanup.
         let captureChild: @MainActor () throws -> Void = {
@@ -191,23 +235,24 @@ struct MacTerminalConfigurationTests {
             let bytes = configurationTestPIDInfo(pid, PROC_PIDTBSDINFO, 1, &info, size)
             try #require(bytes == size)
             try #require(info.pbi_ppid == UInt32(getpid()))
-            child = MacTerminalProcessIdentity(pid: pid, startSeconds: info.pbi_start_tvsec,
-                                               startMicroseconds: info.pbi_start_tvusec)
+            let identity = MacTerminalProcessIdentity(pid: pid, startSeconds: info.pbi_start_tvsec,
+                                                     startMicroseconds: info.pbi_start_tvusec)
+            if !children.contains(where: { $0 == identity }) { children.append(identity) }
         }
         do { try await operation(root, terminal, session, captureChild) }
-        catch { await cleanUp(child, session: session); throw error }
-        await cleanUp(child, session: session)
+        catch { await cleanUp(children, session: session); throw error }
+        await cleanUp(children, session: session)
     }
 
-    private func cleanUp(_ identity: MacTerminalProcessIdentity?, session: TerminalSession) async {
+    private func cleanUp(_ identities: [MacTerminalProcessIdentity], session: TerminalSession) async {
         session.stop()
         // Independent fallback uses the captured child identity and an exit
-        // event, so assertion failures cannot strand a PTY or block a thread.
-        if let identity { identity.signal(SIGKILL, in: identity.pid) }
-        if let pid = identity?.pid {
+        // event, including pre-restart children if production stop regresses.
+        for identity in identities { identity.signal(SIGKILL, in: identity.pid) }
+        for identity in identities {
             let reaped = TestGate()
             let reaper = MacStoppedChildProcessReaper()
-            reaper.reapWhenExited(pid) { reaped.open() }
+            reaper.reapWhenExited(identity.pid) { reaped.open() }
             #expect(await reaped.waitUntilOpen())
         }
         #expect(await MacTerminalProcessSession.waitForPendingStops())

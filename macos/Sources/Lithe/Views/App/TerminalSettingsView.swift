@@ -19,6 +19,7 @@ struct TerminalSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             TerminalTypographySettingsView(settings: settings, diagnostics: displayDiagnostics, retry: retryDisplay)
+            TerminalInteractionSettingsView(settings: settings)
             Text("Launch settings apply to new terminals. Restart keeps the original session configuration.")
                 .font(LitheTheme.smallFont).foregroundStyle(LitheTheme.secondaryText)
             if let error = settings.terminalConfigurationLoadError ?? settings.terminalConfiguration.validationMessage {

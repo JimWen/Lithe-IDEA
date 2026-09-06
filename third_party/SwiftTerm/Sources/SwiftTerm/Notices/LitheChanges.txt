@@ -2,15 +2,27 @@ SwiftTerm 1.15.0
 Upstream: https://github.com/migueldeicaza/SwiftTerm
 Revision: dd2fb8ac5b861e7bf617c872895e338f38165648
 
-Lithe compiles this fixed-version library with a typography patch:
+Lithe compiles this fixed-version library with local typography and interaction corrections:
 - Font and line-spacing changes use native geometry updates without DECSTR.
 - macOS can update font and line spacing together with one grid resize.
 - Typography changes invalidate renderer caches, including cascade-only changes.
 - macOS defers complete typography changes during synchronized output. Metal
   pauses drawing; Core Graphics preserves onscreen backing contents through the
   native redraw policy. The original policy is restored when the frame commits.
+- macOS exposes a read-only selection range snapshot for native copy policies.
+- Link discovery, highlighting, preview and activation honor the same policy.
+- Mouse tracking follows the visible terminal area across initial layout and resizing.
+Reuse window-scoped mouse-move delivery on every supported macOS version so
+nonfocused hosted terminals receive hover while the application is active.
+Ignore moves outside the visible area or inside hidden terminal views.
+- macOS can cancel complete selection gestures, including auto-scroll timers.
+- Mouse reporting ownership persists through release; drag and multi-click
+  releases do not activate links.
 - The package manifest contains only the library and its runtime resources.
 
 The accompanying LICENSE contains the full upstream copyright and MIT terms.
 Source provenance and the reversible patch are in third_party/SwiftTerm in
 Lithe's source distribution. No upstream terminal parser or PTY code is changed.
+
+Observe link modifier changes through the shared window monitor without
+forwarding keyboard input to nonfocused terminal sessions.

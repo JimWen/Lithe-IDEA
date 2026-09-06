@@ -162,7 +162,7 @@ struct SettingsView: View {
         case .keymap:
             ["Keymap", "Keyboard shortcuts", "Shortcuts", "Actions"]
         case .terminal:
-            ["Terminal", "Shell", "Default shell", "Terminal font", "Font family", "Font size", "Line height", "Fallback fonts", "Arguments", "Working directory", "Environment variables"]
+            ["Terminal", "Shell", "Default shell", "Terminal font", "Font family", "Font size", "Line height", "Fallback fonts", "History", "Cursor", "Input and scrolling", "Selection and links", "Copy on selection", "Detect links", "Arguments", "Working directory", "Environment variables"]
         case .lsp:
             ["LSP", "Language server", "Language Support"]
         case .go:

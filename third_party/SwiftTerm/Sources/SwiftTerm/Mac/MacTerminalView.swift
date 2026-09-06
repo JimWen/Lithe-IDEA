@@ -59,8 +59,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         UInt16(kVK_UpArrow)
     ]
 
-    // Per-window state for the macOS 26 mouse-moved fallback. `acceptsMouseMovedEvents`
-    // is an NSWindow-wide setting and a single `.mouseMoved` local monitor is enough
+    // Per-window state for hosted terminal mouse-move delivery. `acceptsMouseMovedEvents`
+    // is an NSWindow-wide setting and a single pointer/modifier local monitor is enough
     // to service every terminal view in the window, so this state is shared per window
     // rather than per view (multiple terminal views can share a window, e.g. a
     // split-pane host). It is a reference type so the monitor and the weak view set
@@ -101,9 +101,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             // over. It captures only the window identifier (a value), never the window or
             // the state, so nothing is retained. Note: local monitors do not fire while
             // the application is inactive, so background mouse-move reporting that the old
-            // `.activeAlways` tracking area provided is not available on macOS 26.
-            state.monitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { event in
-                TerminalView.dispatchWindowMouseMoved(event, windowIdentifier: identifier)
+            // `.activeAlways` tracking area provided is not available through this path.
+            state.monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .flagsChanged]) { event in
+                TerminalView.dispatchWindowPointerEvent(event, windowIdentifier: identifier)
                 // Never consume the event: sibling/overlay `.mouseMoved` tracking areas and
                 // AppKit's normal first-responder delivery must still see it.
                 return event
@@ -135,15 +135,15 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
-    // Called on the main thread from the per-window monitor. Delivers the move to every
-    // terminal view in the window; each view decides whether the pointer is over it.
-    private static func dispatchWindowMouseMoved(_ event: NSEvent, windowIdentifier: ObjectIdentifier) {
+    // Called on the main thread from the per-window monitor. Each terminal
+    // checks pointer visibility; modifier release can also clear an old preview.
+    private static func dispatchWindowPointerEvent(_ event: NSEvent, windowIdentifier: ObjectIdentifier) {
         mouseMovedFallbackLock.lock()
         let views = mouseMovedFallbackWindowStates[windowIdentifier]?.views.allObjects ?? []
         mouseMovedFallbackLock.unlock()
 
         for view in views {
-            view.handleWindowMouseMoved(event)
+            view.handleWindowPointerEvent(event)
         }
     }
 
@@ -579,8 +579,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 #endif
 
     open override func viewDidMoveToWindow() {
+        cancelMouseGesture()
         super.viewDidMoveToWindow()
-        startWindowMouseMovedFallback()
+        updateLinkHighlightTracking()
 #if canImport(MetalKit)
         guard useMetalRenderer, let currentWindow = window else { return }
         if currentWindow !== metalBoundWindow {
@@ -602,6 +603,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     var becomeMainObserver, resignMainObserver: NSObjectProtocol?
     
     deinit {
+        selectionAutoScrollTimer?.invalidate()
         stopWindowMouseMovedFallback()
         if let becomeMainObserver {
             NotificationCenter.default.removeObserver (becomeMainObserver)
@@ -870,6 +872,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     open func bufferActivated(source: Terminal) {
+        cancelMouseGesture()
         updateScroller ()
     }
     
@@ -918,16 +921,22 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     /// Controls how link tracking resolves hovered links:
     /// `.explicit` = OSC 8 only, `.implicit` = explicit + implicit fallback, `.none` = off.
-    public var linkReporting: LinkReporting = .implicit
+    public var linkReporting: LinkReporting = .implicit {
+        didSet { if oldValue != linkReporting { linkPolicyChanged() } }
+    }
 
     /// Controls link highlighting and link activation behavior.
     public var linkHighlightMode: LinkHighlightMode = .hoverWithModifier {
-        didSet {
-            linkHighlightRange = nil
-            updateLinkHighlightTracking()
-            terminal.updateFullScreen()
-            queuePendingDisplay()
-        }
+        didSet { if oldValue != linkHighlightMode { linkPolicyChanged() } }
+    }
+
+    private func linkPolicyChanged() {
+        linkHighlightRange = nil
+        lastReportedLink = nil
+        removePreviewUrl()
+        updateLinkHighlightTracking()
+        terminal.updateFullScreen()
+        queuePendingDisplay()
     }
 
     var linkHighlightRange: [Terminal.LinkMatch.RowRange]?
@@ -1067,9 +1076,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // Tracking object, maintained by `startTracking` and `deregisterTrackingInterest`
     var tracking: NSTrackingArea? = nil
 
-    // macOS 26 can synthesize left-mouse-down events while a tracking area asks
-    // for `.mouseMoved`.  Keep using the area for enter/exit notifications, and
-    // receive movement through a shared per-window monitor instead (see
+    // Hosted terminals need movement even when an editor owns keyboard focus.
+    // Receive moves through a shared per-window monitor, keeping tracking areas
+    // for enter/exit only. This also avoids macOS 26 synthesizing mouse-down
+    // events for areas requesting `.mouseMoved` (see
     // `MouseMovedFallbackWindowState`).  We remember the window we registered
     // with so we can unregister; the identifier is stored separately as a value
     // so cleanup still works if the window has already been deallocated.
@@ -1085,20 +1095,16 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     func startTracking ()
     {
         if tracking == nil {
-            var options: NSTrackingArea.Options = [.activeAlways, .mouseEnteredAndExited]
-            if #available(macOS 26, *) {
-                // See the Tahoe WindowServer workaround above.
-            } else {
-                options.insert(.mouseMoved)
-            }
-            tracking = NSTrackingArea (rect: frame, options: options, owner: self, userInfo: [:])
+            // Settings can enable hover before layout. Let AppKit track the
+            // local visible area as the terminal is attached, resized or clipped.
+            let options: NSTrackingArea.Options = [.activeAlways, .mouseEnteredAndExited, .inVisibleRect]
+            tracking = NSTrackingArea (rect: .zero, options: options, owner: self, userInfo: [:])
             addTrackingArea(tracking!)
         }
         startWindowMouseMovedFallback()
     }
 
     private func startWindowMouseMovedFallback() {
-        guard #available(macOS 26, *) else { return }
         guard tracking != nil, let window else {
             stopWindowMouseMovedFallback()
             return
@@ -1112,7 +1118,6 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
 
     private func stopWindowMouseMovedFallback() {
-        guard #available(macOS 26, *) else { return }
 
         if let identifier = mouseMovedFallbackWindowIdentifier {
             TerminalView.endWindowMouseMovedFallback(view: self, identifier: identifier, window: mouseMovedFallbackWindow)
@@ -1121,43 +1126,31 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         mouseMovedFallbackWindowIdentifier = nil
     }
 
-    // Invoked by the shared per-window monitor for every terminal view in the window.
-    fileprivate func handleWindowMouseMoved(_ event: NSEvent) {
-        guard shouldHandleWindowMouseMoved(event) else { return }
-        // The first responder already receives `mouseMoved` through AppKit's normal
-        // dispatch (because `acceptsMouseMovedEvents` is on), so only synthesize
-        // delivery for a hovered view that is *not* the first responder; otherwise we
-        // would report the same move twice.
-        if window?.firstResponder === self { return }
-        mouseMoved(with: event)
+    // Only synthesize nonfocused delivery. AppKit dispatches to the first
+    // responder normally, so mouse packets and Kitty key events remain unique.
+    fileprivate func handleWindowPointerEvent(_ event: NSEvent) {
+        guard tracking != nil, shouldTrackMouse(),
+              let window, event.window === window,
+              window.firstResponder !== self else { return }
+        if event.type == .flagsChanged {
+            // Update display state only: a background terminal must not receive
+            // Kitty keyboard input intended for the editor's first responder.
+            updateLinkModifier(event.modifierFlags, at: currentWindowMousePoint())
+        } else {
+            mouseMoved(with: event)
+        }
     }
 
-    private func shouldHandleWindowMouseMoved(_ event: NSEvent) -> Bool {
-        guard tracking != nil,
-              shouldTrackMouse(),
-              let window,
-              event.window === window else {
-            return false
-        }
-        let point = convert(event.locationInWindow, from: nil)
-        return bounds.contains(point)
+    private func isMouseEventOverVisibleArea(_ event: NSEvent) -> Bool {
+        guard event.window === window, !isHiddenOrHasHiddenAncestor else { return false }
+        return visibleRect.contains(convert(event.locationInWindow, from: nil))
     }
     
     func shouldTrackMouse () -> Bool
     {
-        if terminal.mouseMode == .anyEvent {
-            return true
-        }
-        if commandActive {
-            return true
-        }
-        if linkHighlightMode == .hover {
-            return true
-        }
-        if linkHighlightMode == .hoverWithModifier && commandActive {
-            return true
-        }
-        return false
+        // Keep modifier observation registered while links are enabled, even
+        // before Command is pressed in a different first responder.
+        terminal.mouseMode == .anyEvent || linkLookupMode != nil
     }
 
     // Can be invoked by both the keyboard handler monitoring the command key, and the
@@ -1205,30 +1198,39 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // If true, the Command key has been pressed
     var commandActive = false
     
-    // We monitor the flags changed to enable URL previews on mouse-hover like iTerm
-    // when the Command key is pressed.
-    
-    public override func flagsChanged(with event: NSEvent) {
-        if event.modifierFlags.contains(.command){
-            commandActive = true
-            startTracking()
+    private func currentWindowMousePoint() -> CGPoint? {
+        guard let window else { return nil }
+        return convert(window.mouseLocationOutsideOfEventStream, from: nil)
+    }
 
-            if let hit = currentMouseHit() {
-                if let payload = payloadString(at: hit) {
-                    previewUrl(payload: payload)
+    private func updateLinkModifier(_ flags: NSEvent.ModifierFlags, at point: CGPoint?) {
+        let active = flags.contains(.command)
+        if active != commandActive {
+            if active {
+                commandActive = true
+                updateLinkHighlightTracking()
+                if linkHighlightMode == .alwaysWithModifier {
+                    terminal.updateFullScreen()
+                    queuePendingDisplay()
                 }
-                reportLink(at: hit)
-                updateHoverLink(at: hit)
-            } else if let payload = getPayload(for: event) as? String {
-                previewUrl (payload: payload)
+            } else {
+                // Clear before filtering the pointer, including when the view
+                // has since been hidden or clipped. Plain hover is recomputed below.
+                turnOffUrlPreview()
             }
-            if linkHighlightMode == .alwaysWithModifier {
-                terminal.updateFullScreen()
-                queuePendingDisplay()
-            }
-        } else {
-            turnOffUrlPreview ()
         }
+        guard let point, !isHiddenOrHasHiddenAncestor, visibleRect.contains(point) else { return }
+        let hit = calculateMouseHit(at: point).grid
+        if active || linkHighlightMode == .hover {
+            updateLinkPreview(at: hit)
+            reportLink(at: hit)
+        }
+        updateHoverLink(at: hit, commandOverride: active)
+    }
+
+    public override func flagsChanged(with event: NSEvent) {
+        // Key-event coordinates are not a reliable pointer position.
+        updateLinkModifier(event.modifierFlags, at: currentWindowMousePoint())
         if terminal.keyboardEnhancementFlags.contains(.reportAllKeys),
            !kittyIsComposing,
            let modifierKey = kittyModifierKey(from: event.keyCode),
@@ -1253,6 +1255,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     public override func mouseExited(with event: NSEvent) {
+        removePreviewUrl()
+        lastReportedLink = nil
         turnOffUrlPreview()
         if linkHighlightMode == .hover || linkHighlightMode == .hoverWithModifier {
             let oldRange = linkHighlightRange
@@ -2465,13 +2469,22 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         selectionAutoScrollTimer = nil
     }
 
+    /// Stop a mouse gesture when the embedding surface is hidden, reset, or
+    /// reconfigured. No pending auto-scroll callback may extend a stale range.
+    public func cancelMouseGesture() {
+        stopSelectionAutoScrollTimer()
+        autoScrollDelta = 0
+        lastSelectionDragPoint = nil
+        didSelectionDrag = false
+        mouseGestureActive = false
+        mouseGestureReports = false
+    }
+
     // Callback from the selection auto-scroll timer: advance the viewport while
     // the pointer is held past an edge, and grow the selection to match.
     private func scrollingTimerElapsed (source: Timer)
     {
-        if autoScrollDelta == 0 {
-            return
-        }
+        guard source === selectionAutoScrollTimer, autoScrollDelta != 0 else { return }
         if autoScrollDelta < 0 {
             scrollUp(lines: autoScrollDelta * -1)
         } else {
@@ -2490,8 +2503,11 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
 
     open override func mouseDown(with event: NSEvent) {
-        if allowMouseReporting && !shiftBypassesMouseReporting(for: event) && terminal.mouseMode.sendButtonPress() {
-            sharedMouseEvent(with: event)
+        cancelMouseGesture()
+        mouseGestureActive = true
+        mouseGestureReports = allowMouseReporting && !shiftBypassesMouseReporting(for: event) && terminal.mouseMode != .off
+        if mouseGestureReports {
+            if terminal.mouseMode.sendButtonPress() { sharedMouseEvent(with: event) }
             return
         }
         
@@ -2527,35 +2543,38 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     var didSelectionDrag: Bool = false
+    private var mouseGestureActive = false
+    private var mouseGestureReports = false
     
     open override func mouseUp(with event: NSEvent) {
+        guard mouseGestureActive else { return }
+        defer { cancelMouseGesture() }
         stopSelectionAutoScrollTimer()
         autoScrollDelta = 0
         lastSelectionDragPoint = nil
+        // A reporting application owns the whole gesture, including release.
+        // X10 has no release packet but must not accidentally activate a link.
+        if mouseGestureReports {
+            if terminal.mouseMode.sendButtonRelease() { sharedMouseEvent(with: event) }
+            return
+        }
+        guard !(allowMouseReporting && !shiftBypassesMouseReporting(for: event) && terminal.mouseMode != .off),
+              !didSelectionDrag, event.clickCount == 1,
+              !event.modifierFlags.contains(.shift) else { return }
         let hit = calculateMouseHit(with: event).grid
         updateHoverLink(at: hit, commandOverride: commandActive || event.modifierFlags.contains(.command))
         if let result = linkForClick(at: hit, hasCommandModifier: event.modifierFlags.contains(.command)) {
             terminalDelegate?.requestOpenLink(source: self, link: result.link, params: result.params)
-            return
         }
-        if allowMouseReporting && !shiftBypassesMouseReporting(for: event) && terminal.mouseMode.sendButtonRelease() {
-            sharedMouseEvent(with: event)
-            return
-        }
-        
-        #if DEBUG
-        // let hit = calculateMouseHit(with: event)
-        //print ("Up at col=\(hit.col) row=\(hit.row) count=\(event.clickCount) selection.active=\(selection.active) didSelectionDrag=\(didSelectionDrag) ")
-        #endif
-        
-        didSelectionDrag = false
     }
-    
+
     open override func mouseDragged(with event: NSEvent) {
+        guard mouseGestureActive else { return }
+        didSelectionDrag = true
         let displayBuffer = terminal.displayBuffer
         let mouseHit = calculateMouseHit(with: event)
         let hit = mouseHit.grid
-        if allowMouseReporting && !shiftBypassesMouseReporting(for: event) {
+        if mouseGestureReports {
             if terminal.mouseMode.sendButtonTracking() {
                 let flags = encodeMouseEvent(with: event)
                 let screenRow = max (0, min (displayBuffer.rows - 1, hit.row - displayBuffer.yDisp))
@@ -2563,9 +2582,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
                 return
             }
-            if terminal.mouseMode != .off {
-                return
-            }
+            return
         }
                 
         if selection.active {
@@ -2640,13 +2657,21 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    private func updateLinkPreview(at position: Position) {
+        guard let mode = linkLookupMode,
+              let link = terminal.link(at: .buffer(position), mode: mode) else {
+            removePreviewUrl()
+            return
+        }
+        previewUrl(payload: ";" + link)
+    }
+
     func reportLink(at position: Position)
     {
-        guard linkReporting != .none else {
+        guard let mode = linkLookupMode else {
             lastReportedLink = nil
             return
         }
-        let mode: Terminal.LinkLookupMode = linkReporting == .explicit ? .explicitOnly : .explicitAndImplicit
         let link = terminal.link(at: .buffer(position), mode: mode)
         if link != lastReportedLink {
             lastReportedLink = link
@@ -2656,7 +2681,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     func updateHoverLink(at position: Position, commandOverride: Bool? = nil)
     {
         let hoverModes: [LinkHighlightMode] = [.hover, .hoverWithModifier]
-        guard hoverModes.contains(linkHighlightMode) else {
+        guard let mode = linkLookupMode, hoverModes.contains(linkHighlightMode) else {
             if linkHighlightRange != nil {
                 let oldRange = linkHighlightRange
                 linkHighlightRange = nil
@@ -2675,7 +2700,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             }
             return
         }
-        let match = terminal.linkMatch(at: .buffer(position), mode: .explicitAndImplicit)
+        let match = terminal.linkMatch(at: .buffer(position), mode: mode)
         let newRange = match?.rowRanges
         if newRange != linkHighlightRange {
             let oldRange = linkHighlightRange
@@ -2695,21 +2720,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     public override func mouseMoved(with event: NSEvent) {
-        if #available(macOS 26, *) {
-            // On macOS 26 movement arrives via `acceptsMouseMovedEvents`, which delivers
-            // to the first responder regardless of the pointer's location. Ignore moves
-            // outside our bounds so we do not report cells the pointer is not over.
-            let point = convert(event.locationInWindow, from: nil)
-            if !bounds.contains(point) { return }
-        }
+        // AppKit also delivers window moves to the first responder when the
+        // pointer is elsewhere. Both delivery paths must respect clipping and
+        // hidden ancestors before reporting terminal cells or previewing links.
+        guard isMouseEventOverVisibleArea(event) else { return }
         let hit = calculateMouseHit(with: event)
-        if commandActive {
-            if let payload = getPayload(for: event) as? String {
-                previewUrl (payload: payload)
-            }
-            reportLink(at: hit.grid)
-        }
-        updateHoverLink(at: hit.grid)
+        updateLinkModifier(event.modifierFlags, at: convert(event.locationInWindow, from: nil))
         
         if terminal.mouseMode.sendMotionEvent() {
             let flags = encodeMouseEvent(with: event, overwriteRelease: true)
