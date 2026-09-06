@@ -95,6 +95,14 @@ assert_classification() {
     fi
 }
 
+modify_language_support_source() {
+    mkdir -p macos/Sources/LitheLanguageExtensionSupport
+    printf '%s\n' 'struct LanguageProjectToolResource {}' > macos/Sources/LitheLanguageExtensionSupport/LanguageProjectToolResource.swift
+}
+modify_language_support_test() {
+    mkdir -p macos/Tests/LitheLanguageExtensionSupportTests
+    printf '%s\n' 'struct LanguageProjectToolResourceTests {}' > macos/Tests/LitheLanguageExtensionSupportTests/LanguageProjectToolResourceTests.swift
+}
 modify_readme() { printf '%s\n' '# Updated' > README.md; }
 modify_rust_comment() { printf '%s\n' '//! Updated test module.' 'pub fn value() -> u8 { 1 }' > rust/lithe-core/src/lib.rs; }
 modify_rust_code() { printf '%s\n' '//! Test module.' 'pub fn value() -> u8 { 2 }' > rust/lithe-core/src/lib.rs; }
@@ -169,6 +177,12 @@ assert_classification swift-test \
 assert_classification plugin-manifest \
     "$(classification false true false false false false false false)" \
     modify_plugin_manifest
+assert_classification language-support-source \
+    "$(classification true true false false false true false false)" \
+    modify_language_support_source
+assert_classification language-support-test \
+    "$(classification true true false false false false false false)" \
+    modify_language_support_test
 assert_classification plugin-source \
     "$(classification false true false false false false false false)" \
     modify_plugin_source

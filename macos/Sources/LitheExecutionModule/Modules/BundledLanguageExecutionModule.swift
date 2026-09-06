@@ -1,6 +1,7 @@
 import Foundation
 import LitheCoreContracts
 import LitheModuleAPI
+import LitheLanguageExtensionSupport
 
 @MainActor
 public final class BundledLanguageExecutionModule: LitheModule {
@@ -8,13 +9,18 @@ public final class BundledLanguageExecutionModule: LitheModule {
     private let languageID: String
     private let executionHost: (any LanguageExecutionHostProviding)?
     private var capability: BundledLanguageExecutionCapability?
+    private let projectToolHost: (any LanguageProjectToolHostProviding)?
+    private var projectToolResource: LanguageProjectToolResource?
+    private var projectTools: LanguageProjectToolsCapability?
 
     public init(
         languageID: String,
-        executionHost: (any LanguageExecutionHostProviding)?
+        executionHost: (any LanguageExecutionHostProviding)?,
+        projectToolHost: (any LanguageProjectToolHostProviding)? = nil
     ) {
         self.languageID = languageID
         self.executionHost = executionHost
+        self.projectToolHost = projectToolHost
         manifest = BundledLanguagePluginCatalog.manifests
             .flatMap(\.modules)
             .first { $0.manifest.id == .languageExecutionExtension(languageID) }!
@@ -24,6 +30,13 @@ public final class BundledLanguageExecutionModule: LitheModule {
     public func activate(context: ModuleContext) async throws {
         guard let executionHost else {
             throw LanguageExtensionHostError.missingExecutionHost(languageID: languageID)
+        }
+        if languageID == "rust" {
+            guard let projectToolHost else { throw LanguageProjectToolHostError.missingHost(languageID: languageID) }
+            await releaseProjectTools()
+            let resource = try LanguageProjectToolResource.register(host: projectToolHost, context: context)
+            projectToolResource = resource
+            projectTools = resource.makeCapability(languageID: languageID)
         }
         let resource = BundledLanguageExecutionResource(
             executionHost: executionHost,
@@ -39,16 +52,26 @@ public final class BundledLanguageExecutionModule: LitheModule {
     }
 
     public func prepareForSleep() async throws {}
-    public func sleep() async { capability = nil }
-    public func shutdown() async { capability = nil }
+    public func sleep() async { capability = nil; await releaseProjectTools() }
+    public func shutdown() async { capability = nil; await releaseProjectTools() }
+
+    private func releaseProjectTools() async {
+        projectToolResource?.retire()
+        projectTools = nil
+        if let resource = projectToolResource {
+            await resource.stopModuleResource()
+            if projectToolResource === resource, !resource.isModuleResourceActive { projectToolResource = nil }
+        }
+    }
 
     public func exportedCapabilities() -> [ModuleCapabilityID: AnyObject] {
-        capability.map {
-            [
-                .languageExecutionExtension(languageID): $0,
-                .languageTestingExtension(languageID): $0
-            ]
-        } ?? [:]
+        var result: [ModuleCapabilityID: AnyObject] = [:]
+        if let capability {
+            result[.languageExecutionExtension(languageID)] = capability
+            result[.languageTestingExtension(languageID)] = capability
+        }
+        if let projectTools { result[.languageProjectTools(languageID)] = projectTools }
+        return result
     }
 }
 

@@ -20,7 +20,7 @@ struct GoSupportModuleTests {
             GoLanguageServerModule()
         })
         try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest) {
-            GoExecutionModule(executionHost: executionHost)
+            GoExecutionModule(executionHost: executionHost, projectToolHost: GoProjectToolTestHost())
         })
         try runtime.validateGraph()
         try await runtime.setEnabled(true, for: .languageServerExtension("go"))
@@ -81,7 +81,7 @@ struct GoSupportModuleTests {
             GoTestWorkspaceModule(manifest: workspace)
         })
         try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest) {
-            GoExecutionModule(executionHost: GoStuckExecutionHost())
+            GoExecutionModule(executionHost: GoStuckExecutionHost(), projectToolHost: GoProjectToolTestHost())
         })
         try await runtime.setEnabled(true, for: .languageExecutionExtension("go"))
 
@@ -114,7 +114,7 @@ struct GoSupportModuleTests {
             GoTestWorkspaceModule(manifest: workspace)
         })
         try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest) {
-            GoExecutionModule(executionHost: GoTestExecutionHost())
+            GoExecutionModule(executionHost: GoTestExecutionHost(), projectToolHost: GoProjectToolTestHost())
         })
         try await runtime.setEnabled(true, for: .languageExecutionExtension("go"))
 

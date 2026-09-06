@@ -112,6 +112,8 @@ final class MacServiceContainer {
         let pluginHostServices = MacPluginHostServiceRegistry()
         let languageExecutionHost = MacLanguageExecutionHost(processRegistry: processRegistry)
         pluginHostServices.register(languageExecutionHost, for: .languageExecution)
+        let languageProjectToolHost = MacLanguageProjectToolHost(registry: processRegistry)
+        pluginHostServices.register(languageProjectToolHost, for: .languageProjectTools)
         let databaseSidecarURL = MacDatabaseSidecarLocator(fileStorage: fileStorage).executableURL()
         let moduleStore = providedModuleStore ?? MacModuleConfigurationStore(store: store)
         let moduleRuntime = ModuleRuntime(
@@ -463,12 +465,14 @@ final class MacServiceContainer {
                 if specification.supportsExecution {
                     let executionModule = BundledLanguageExecutionModule(
                         languageID: specification.id,
-                        executionHost: languageExecutionHost
+                        executionHost: languageExecutionHost,
+                        projectToolHost: specification.id == "rust" ? languageProjectToolHost : nil
                     )
                     try moduleRegistry.register(ModuleFactory(manifest: executionModule.manifest) {
                         BundledLanguageExecutionModule(
                             languageID: specification.id,
-                            executionHost: languageExecutionHost
+                            executionHost: languageExecutionHost,
+                            projectToolHost: specification.id == "rust" ? languageProjectToolHost : nil
                         )
                     })
                 }

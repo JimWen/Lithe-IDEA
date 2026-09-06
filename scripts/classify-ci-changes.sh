@@ -180,11 +180,15 @@ while IFS=$'\t' read -r status first_path _; do
             swift_database=true
             macos_release=true
             ;;
-        macos/sources/lithelanguageintelligencemodule/*)
+        macos/sources/lithelanguageintelligencemodule/*|macos/sources/lithelanguageextensionsupport/*)
             # Go support is an official plugin and depends on this runtime.
             swift=true
             plugins=true
             macos_release=true
+            ;;
+        macos/tests/lithelanguageextensionsupporttests/*|macos/tests/lithetests/projecttoolmodulelifecycletests.swift)
+            swift=true
+            plugins=true
             ;;
         macos/tests/lithetests/lithecorelogictests.swift)
             # This legacy mixed suite still contains the database integration

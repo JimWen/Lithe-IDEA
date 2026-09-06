@@ -1,6 +1,7 @@
 import Foundation
 @testable import Lithe
 import LitheModuleAPI
+import LitheApplicationKernel
 import Testing
 
 struct PluginPackageStoreTests {
@@ -270,6 +271,37 @@ struct PluginPackageStoreTests {
 
     @MainActor
     @Test
+    func incompatiblePackageIsRejectedBeforePrincipalClassLoading() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lithe-plugin-version-\(UUID().uuidString)", isDirectory: true)
+        defer { do { try FileManager.default.removeItem(at: root) } catch { Issue.record(error) } }
+        let host = BuiltInPluginCatalog.hostVersion
+        let required = PluginVersion(major: host.major, minor: host.minor, patch: host.patch + 1)
+        let store = MacPluginPackageStore(
+            rootURL: root.appendingPathComponent("installed", isDirectory: true),
+            hostVersion: required, verifier: TestPluginSignatureVerifier()
+        )
+        _ = try store.installPackage(from: makePackage(
+            root: root, name: "requires-newer-host", version: required, minimumHost: required
+        ))
+        let codeLoader = CountingPluginPrincipalClassLoader()
+        let result = MacPluginStartupLoader(
+            packageStore: store, nativeLoader: MacNativePluginLoader(codeLoader: codeLoader), hostVersion: host
+        ).load(policy: MacPluginLoadPolicy(
+            configurationStore: PluginStartupConfigurationStore(enabled: true), recoveryStore: nil, launchMode: .normal
+        ))
+        #expect(result.activeNativeManifests.isEmpty)
+        #expect(result.factoriesByPlugin.isEmpty)
+        #expect(codeLoader.loadCount == 0)
+        #expect(result.issues.contains {
+            $0.pluginID == PluginID("dev.example.plugin") && $0.message == PluginCatalogError.incompatibleHost(
+                plugin: PluginID("dev.example.plugin"), hostVersion: host
+            ).localizedDescription
+        })
+    }
+
+    @MainActor
+    @Test
     func disabledLanguagePluginRetainsStaticOwnershipWithoutLoadingCode() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lithe-plugin-store-\(UUID().uuidString)", isDirectory: true)
@@ -387,6 +419,7 @@ struct PluginPackageStoreTests {
         version: PluginVersion,
         pluginID: PluginID = PluginID("dev.example.plugin"),
         required: Bool = false,
+        minimumHost: PluginVersion = PluginVersion(major: 0, minor: 3, patch: 0),
         languageSupport: LanguageSupportDeclaration? = nil
     ) throws -> URL {
         let packageURL = root.appendingPathComponent("sources/\(name)", isDirectory: true)
@@ -400,7 +433,7 @@ struct PluginPackageStoreTests {
             displayName: "Example Plugin",
             version: version,
             hostCompatibility: PluginHostCompatibility(
-                minimum: PluginVersion(major: 0, minor: 3, patch: 0),
+                minimum: minimumHost,
                 maximumExclusive: PluginVersion(major: 0, minor: 4, patch: 0)
             ),
             vendor: PluginVendor(

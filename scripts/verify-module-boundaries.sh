@@ -8,6 +8,19 @@ module_ids=(workspace git search localHistory languageIntelligence execution deb
 module_types=(WorkspaceFoundation Database Git Search History LanguageIntelligence Execution Debug Terminal AIAssistance)
 module_targets=(LitheWorkspaceModule LitheDatabaseModule LitheGitModule LitheSearchModule LitheLocalHistoryModule LitheLanguageIntelligenceModule LitheExecutionModule LitheDebugModule LitheTerminalModule LitheAIAssistanceModule)
 
+# This is a support library shared by execution modules and native plugins,
+# not another runtime module with an ID or a composition-root registration.
+support_target=macos/Sources/LitheLanguageExtensionSupport
+[[ -d "$support_target" ]] || { print -u2 "Missing language extension support library"; exit 1; }
+if rg -n '^import ' "$support_target" | rg -v ':import (Foundation|LitheCoreContracts|LitheModuleAPI)$'; then
+    print -u2 "Language extension support may depend only on its contracts and module API"
+    exit 1
+fi
+if rg -n '(Process|Pipe|FileHandle|FileManager)\(|: LitheModule\b' "$support_target"; then
+    print -u2 "Language extension support must not own native I/O or declare a runtime module"
+    exit 1
+fi
+
 for id in "${module_ids[@]}"; do
     if ! rg -q "static let ${id} = ModuleID" macos/Sources/LitheModuleAPI/Lifecycle/ModuleTypes.swift; then
         print -u2 "Missing built-in module ID: ${id}"

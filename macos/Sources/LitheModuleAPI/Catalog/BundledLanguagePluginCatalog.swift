@@ -169,10 +169,10 @@ public enum BundledLanguagePluginCatalog {
             activationPolicy: .onDemand,
             sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
             dependencies: [.module(.workspace)],
-            providedCapabilities: [
+            providedCapabilities: Set<ModuleCapabilityID>([
                 .languageExecutionExtension(specification.id),
                 .languageTestingExtension(specification.id)
-            ]
+            ]).union(specification.id == "rust" ? [.languageProjectTools(specification.id)] : [])
         )
     }
 }

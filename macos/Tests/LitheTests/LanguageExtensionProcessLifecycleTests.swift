@@ -23,7 +23,7 @@ struct LanguageExtensionProcessLifecycleTests {
             ProcessLifecycleWorkspaceModule(manifest: workspace)
         })
         try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest) {
-            GoExecutionModule(executionHost: executionHost)
+            GoExecutionModule(executionHost: executionHost, projectToolHost: MacLanguageProjectToolHost(registry: processRegistry))
         })
         try await runtime.setEnabled(true, for: .languageExecutionExtension("go"))
 

@@ -16,6 +16,7 @@ Lithe-IDEA/
 ├── macos/Sources/Lithe*Module/   # independently owned built-in modules
 ├── macos/Sources/LitheModuleAPI/ # module lifecycle, catalog, and plugin contracts
 ├── macos/Sources/LitheCoreContracts/ # platform-neutral feature contracts
+├── macos/Sources/LitheLanguageExtensionSupport/ # shared language module resource ownership
 ├── macos/Sources/LitheRustCore/  # Swift Package C bridge declarations
 ├── macos/Resources/        # macOS metadata, icons, localization, and assets
 ├── Plugins/
@@ -80,6 +81,13 @@ macos/Sources/Lithe<Feature>Module/
 ├── Runtime/      # process, protocol, and session implementations
 └── Providers/    # provider implementations
 ```
+
+`LitheLanguageExtensionSupport` is a library shared by official language plugins
+and bundled execution modules. It owns versioned capture-session gates, module
+resources and activity leases using only Core Contracts and Module API. It has
+no runtime module ID, manifest, native I/O or language-specific command policy.
+The application and official-plugin verifier link its symbols for native plugin
+`dynamic_lookup` resolution.
 
 Official language-support plugins additionally use `Capabilities/`, `Plugin/`,
 and `Support/` for exported language abilities, the native plugin entrypoint,

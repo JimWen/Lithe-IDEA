@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "LitheModuleAPI", targets: ["LitheModuleAPI"]),
         .library(name: "LitheApplicationKernel", targets: ["LitheApplicationKernel"]),
         .library(name: "LitheCoreContracts", targets: ["LitheCoreContracts"]),
+        .library(name: "LitheLanguageExtensionSupport", targets: ["LitheLanguageExtensionSupport"]),
         .library(name: "LitheGitModule", targets: ["LitheGitModule"]),
         .library(name: "LitheSearchModule", targets: ["LitheSearchModule"]),
         .library(name: "LitheLocalHistoryModule", targets: ["LitheLocalHistoryModule"]),
@@ -56,6 +57,12 @@ let package = Package(
             ]
         ),
         .target(
+            name: "LitheLanguageExtensionSupport",
+            dependencies: ["LitheModuleAPI", "LitheCoreContracts"],
+            path: "macos/Sources/LitheLanguageExtensionSupport",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
             name: "LitheGitModule",
             dependencies: ["LitheModuleAPI", "LitheCoreContracts"],
             path: "macos/Sources/LitheGitModule",
@@ -78,11 +85,11 @@ let package = Package(
         .target(name: "LitheTerminalModule", dependencies: ["LitheModuleAPI", "LitheCoreContracts"], path: "macos/Sources/LitheTerminalModule", swiftSettings: [.swiftLanguageMode(.v6)]),
         .target(name: "LitheDatabaseModule", dependencies: ["LitheModuleAPI", "LitheCoreContracts"], path: "macos/Sources/LitheDatabaseModule", swiftSettings: [.swiftLanguageMode(.v6)]),
         .target(name: "LitheAIAssistanceModule", dependencies: ["LitheModuleAPI", "LitheCoreContracts"], path: "macos/Sources/LitheAIAssistanceModule", swiftSettings: [.swiftLanguageMode(.v6)]),
-        .target(name: "LitheExecutionModule", dependencies: ["LitheModuleAPI", "LitheCoreContracts"], path: "macos/Sources/LitheExecutionModule", swiftSettings: [.swiftLanguageMode(.v6)]),
+        .target(name: "LitheExecutionModule", dependencies: ["LitheModuleAPI", "LitheCoreContracts", "LitheLanguageExtensionSupport"], path: "macos/Sources/LitheExecutionModule", swiftSettings: [.swiftLanguageMode(.v6)]),
         .target(name: "LitheDebugModule", dependencies: ["LitheModuleAPI", "LitheCoreContracts"], path: "macos/Sources/LitheDebugModule", swiftSettings: [.swiftLanguageMode(.v6)]),
         .target(name: "LitheLanguageIntelligenceModule", dependencies: ["LitheModuleAPI", "LitheCoreContracts"], path: "macos/Sources/LitheLanguageIntelligenceModule", swiftSettings: [.swiftLanguageMode(.v6)]),
         .target(name: "LitheWorkspaceModule", dependencies: ["LitheModuleAPI", "LitheCoreContracts"], path: "macos/Sources/LitheWorkspaceModule", swiftSettings: [.swiftLanguageMode(.v6)]),
-        .target(name: "LitheGoSupportModule", dependencies: ["LitheModuleAPI", "LitheCoreContracts"], path: "Plugins/mac/Official/GoSupport/Sources/LitheGoSupportModule", swiftSettings: [.swiftLanguageMode(.v6)]),
+        .target(name: "LitheGoSupportModule", dependencies: ["LitheModuleAPI", "LitheCoreContracts", "LitheLanguageExtensionSupport"], path: "Plugins/mac/Official/GoSupport/Sources/LitheGoSupportModule", swiftSettings: [.swiftLanguageMode(.v6)]),
         .target(
             name: "LitheRustCore",
             path: "macos/Sources/LitheRustCore",
@@ -124,7 +131,7 @@ let package = Package(
         ),
         .testTarget(
             name: "LitheTests",
-            dependencies: ["Lithe", "LitheModuleAPI", "LitheApplicationKernel", "LitheCoreContracts", "LitheGitModule", "LitheDatabaseModule", "LitheAIAssistanceModule", "LitheLanguageIntelligenceModule", "LitheGoSupportModule", .product(name: "Testing", package: "swift-testing")],
+            dependencies: ["Lithe", "LitheModuleAPI", "LitheApplicationKernel", "LitheCoreContracts", "LitheLanguageExtensionSupport", "LitheGitModule", "LitheDatabaseModule", "LitheAIAssistanceModule", "LitheLanguageIntelligenceModule", "LitheGoSupportModule", .product(name: "Testing", package: "swift-testing")],
             path: "macos/Tests/LitheTests",
             resources: [
                 .copy("Fixtures")
@@ -132,6 +139,12 @@ let package = Package(
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]
+        ),
+        .testTarget(
+            name: "LitheLanguageExtensionSupportTests",
+            dependencies: ["LitheLanguageExtensionSupport", "LitheCoreContracts", "LitheModuleAPI", "LitheApplicationKernel", .product(name: "Testing", package: "swift-testing")],
+            path: "macos/Tests/LitheLanguageExtensionSupportTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "LitheApplicationKernelTests",
@@ -191,7 +204,7 @@ let package = Package(
         ),
         .testTarget(
             name: "LitheExecutionModuleTests",
-            dependencies: ["LitheExecutionModule", "LitheApplicationKernel", "LitheCoreContracts", .product(name: "Testing", package: "swift-testing")],
+            dependencies: ["LitheExecutionModule", "LitheApplicationKernel", "LitheCoreContracts", "LitheLanguageExtensionSupport", .product(name: "Testing", package: "swift-testing")],
             path: "macos/Tests/LitheExecutionModuleTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
@@ -205,6 +218,7 @@ let package = Package(
             name: "LitheGoSupportModuleTests",
             dependencies: [
                 "LitheGoSupportModule",
+                "LitheLanguageExtensionSupport",
                 "LitheApplicationKernel",
                 "LitheLanguageIntelligenceModule",
                 .product(name: "Testing", package: "swift-testing")
@@ -226,7 +240,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "LitheOfficialPluginVerifier",
-            dependencies: ["LitheModuleAPI", "LitheApplicationKernel", "LitheCoreContracts"],
+            dependencies: ["LitheModuleAPI", "LitheApplicationKernel", "LitheCoreContracts", "LitheLanguageExtensionSupport"],
             path: "macos/Tests/LitheOfficialPluginVerifier",
             swiftSettings: [.swiftLanguageMode(.v6)]
         )

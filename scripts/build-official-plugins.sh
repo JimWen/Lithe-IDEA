@@ -31,7 +31,9 @@ esac
 
 BUILD_DIR="$ROOT_DIR/.build/$TRIPLE/$CONFIGURATION"
 MODULE_DIR="$BUILD_DIR/Modules"
-if [[ ! -f "$MODULE_DIR/LitheModuleAPI.swiftmodule" || ! -f "$MODULE_DIR/LitheCoreContracts.swiftmodule" ]]; then
+if [[ ! -f "$MODULE_DIR/LitheModuleAPI.swiftmodule" \
+    || ! -f "$MODULE_DIR/LitheCoreContracts.swiftmodule" \
+    || ! -f "$MODULE_DIR/LitheLanguageExtensionSupport.swiftmodule" ]]; then
     print -u2 -- "Build Lithe for $TRIPLE ($CONFIGURATION) before packaging official plugins"
     exit 1
 fi

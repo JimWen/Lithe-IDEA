@@ -143,7 +143,7 @@ public enum BuiltInModuleCatalog {
 }
 
 public enum BuiltInPluginCatalog {
-    public static let hostVersion = PluginVersion(major: 0, minor: 3, patch: 0)
+    public static let hostVersion = PluginVersion(major: 0, minor: 3, patch: 1)
     public static let vendor = PluginVendor(
         id: "dev.lithe",
         displayName: "Lithe",
@@ -196,6 +196,47 @@ public enum BuiltInPluginCatalog {
 public enum OfficialPluginCatalog {
     private static let goLanguageID = "go"
 
+    // Installed 0.3.0 bundles resolve moduleManifest(for:) against the host with
+    // dynamic_lookup. Preserve these declarations even when the current package
+    // gains capabilities: the loader compares factories with the installed JSON.
+    private static let goExecutionManifestV1 = ModuleManifest(
+        id: .languageExecutionExtension(goLanguageID),
+        displayName: "Go Execution",
+        scope: .workspace,
+        defaultState: .disabled,
+        activationPolicy: .onDemand,
+        sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
+        dependencies: [.module(.workspace)],
+        providedCapabilities: [
+            .languageExecutionExtension(goLanguageID),
+            .languageTestingExtension(goLanguageID)
+        ]
+    )
+
+    private static let goLanguageServerManifestV1 = ModuleManifest(
+        id: .languageServerExtension(goLanguageID),
+        displayName: "Go Language Server",
+        scope: .workspace,
+        defaultState: .disabled,
+        activationPolicy: .onDemand,
+        sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
+        dependencies: [.module(.workspace)],
+        providedCapabilities: [.languageServerExtension(goLanguageID)]
+    )
+
+    private static let goExecutionManifestV2 = ModuleManifest(
+        id: goExecutionManifestV1.id,
+        displayName: goExecutionManifestV1.displayName,
+        scope: goExecutionManifestV1.scope,
+        defaultState: goExecutionManifestV1.defaultState,
+        activationPolicy: goExecutionManifestV1.activationPolicy,
+        sleepPolicy: goExecutionManifestV1.sleepPolicy,
+        dependencies: goExecutionManifestV1.dependencies,
+        providedCapabilities: goExecutionManifestV1.providedCapabilities.union([
+            .languageProjectTools(goLanguageID)
+        ])
+    )
+
     public static let manifests: [PluginManifest] = [
         PluginManifest(
             id: PluginID("dev.lithe.plugin.go-support"),
@@ -213,29 +254,8 @@ public enum OfficialPluginCatalog {
                 bundlePath: "GoSupport.bundle"
             ),
             modules: [
-                PluginModuleDeclaration(manifest: ModuleManifest(
-                    id: .languageExecutionExtension(goLanguageID),
-                    displayName: "Go Execution",
-                    scope: .workspace,
-                    defaultState: .disabled,
-                    activationPolicy: .onDemand,
-                    sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
-                    dependencies: [.module(.workspace)],
-                    providedCapabilities: [
-                        .languageExecutionExtension(goLanguageID),
-                        .languageTestingExtension(goLanguageID)
-                    ]
-                )),
-                PluginModuleDeclaration(manifest: ModuleManifest(
-                    id: .languageServerExtension(goLanguageID),
-                    displayName: "Go Language Server",
-                    scope: .workspace,
-                    defaultState: .disabled,
-                    activationPolicy: .onDemand,
-                    sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
-                    dependencies: [.module(.workspace)],
-                    providedCapabilities: [.languageServerExtension(goLanguageID)]
-                ))
+                PluginModuleDeclaration(manifest: goExecutionManifestV2),
+                PluginModuleDeclaration(manifest: goLanguageServerManifestV1)
             ],
             languageSupports: [LanguageSupportDeclaration(
                 id: goLanguageID,
@@ -253,7 +273,21 @@ public enum OfficialPluginCatalog {
         manifests.first { plugin in plugin.modules.contains { $0.manifest.id == id } }
     }
 
+    /// Frozen v1 declarations used by already distributed native bundles.
     public static func moduleManifest(for id: ModuleID) -> ModuleManifest? {
-        manifest(forModule: id)?.modules.first { $0.manifest.id == id }?.manifest
+        switch id {
+        case goExecutionManifestV1.id: goExecutionManifestV1
+        case goLanguageServerManifestV1.id: goLanguageServerManifestV1
+        default: nil
+        }
+    }
+
+    /// Frozen v2 declarations for native bundles built against host 0.3.1.
+    public static func moduleManifestV2(for id: ModuleID) -> ModuleManifest? {
+        switch id {
+        case goExecutionManifestV2.id: goExecutionManifestV2
+        case goLanguageServerManifestV1.id: goLanguageServerManifestV1
+        default: nil
+        }
     }
 }
