@@ -1,6 +1,6 @@
 # Terminal 显示设置与字体更新
 
-状态：B4a5a 依赖前置修正已实现并验收，提交 `68d51977`，见 [本批验收](goland-parity-iteration10-acceptance.md)；B4a5b1 字体设置已实现并验收，提交 `4f74218a`，见 [字体设置验收](goland-parity-iteration11-acceptance.md)；B4a5b2 其余显示/输入配置待实施。B4a4 启动配置已验收；Project 保持不变。全部显示批次验收后才标记 B4a5 完成。
+状态：B4a5a 依赖前置修正已实现并验收，提交 `68d51977`，见 [本批验收](goland-parity-iteration10-acceptance.md)；B4a5b1 字体设置已实现并验收，提交 `4f74218a`，见 [字体设置验收](goland-parity-iteration11-acceptance.md)；B4a5b2 历史/输入/复制/链接及非焦点悬浮已实现并验收，提交 `266c0c52`，见 [输入与交互验收](goland-parity-iteration12-acceptance.md)。B4a5 显示批完成，B4a4 启动配置已验收；Project 保持不变，venv 另见 [后续方案](goland-parity-terminal-venv.md)。
 
 ## 字体更新的前置修正
 
@@ -37,7 +37,7 @@
 
 UI 沿用现有 TerminalSettingsView 分组、原生控件和双语资源。产品配置实施前补齐实际字段边界及单一订阅所有者的代码审查，不加入只有 UI 的占位选项。
 
-### 产品批细化契约（b1 已验收，b2 待实现）
+### 产品批细化契约（b1、b2 已验收）
 
 产品批继续分为 B4a5b1（字体/字号/有序回退/行高、目录、持久化与现有会话热更新）和 B4a5b2（历史、光标、输入、复制、链接）。`terminal_review` 独立核对接线并放行 b1；b2 的 selection/link 缺口单独补齐，整体目标不缩减。字体组采取原子应用：其中任一字体缺失时整组保留原 font/size/spacing，新会话保留默认值，并明确显示未应用诊断；其他显示/输入组不被它阻塞。requested 与最后成功配置分开，失败不能写入成功缓存。目录以 PostScript ID 持久化，原生字体解析核对实际 ID，拒绝 CoreText 静默替代；显示名仅用于 UI。
 
@@ -60,7 +60,9 @@ B4a5b2 经 `terminal_review` 独立复核后修订：`selectionChanged` 可重�
 
 原生 adapter 为 typography 与其他显示/输入组分别校验、diff 和保存成功值；不能沿用 b1 整个配置的早返回和缓存，否则缺失字体会阻塞合法其他字段，或改链接会重新设置字体并清选择。持久化保留 b1 缺字段时的默认值兼容。减少历史容量前清除选区并中止选择手势，避免原绝对行指向裁剪后的错误内容；增加容量无需清选。光标默认仅在其字段变化或新进程 reset/setup 后应用，其他设置与 Retry 不覆盖 TUI 的 DECSCUSR。
 
-当前 SwiftTerm `linkForClick` 与 `updateHoverLink` 固定使用 `explicitAndImplicit`，仅写 `linkReporting = .none` 不能关闭链接。b2 需追加 click/hover/report/preview 共用 lookup mode 的窄补丁：none 不解析，explicit 仅 OSC8，implicit 允许自动识别；覆盖 flagsChanged/mouseMoved 中的直接 preview 路径。策略变化立即清理旧 hover、URL preview、lastReportedLink，不能因此关闭 TUI 鼠标追踪。链接激活只允许未拖动的单击，排除双/三击及 Shift 扩选，mouseDown 重置、mouseUp defer 清理手势状态；鼠标报告优先交给 TUI，Shift capture 仍按原生规则。两种可选修饰键为 Command/无，不将内部 `always` 模式直接暴露。链接回调先标记本次手势已处理，再交给外部打开，避免同一手势自动复制。上述 selection/link 修正尚未进入 typography 补丁，实施后仍需更新可逆补丁/来源校验和真实 GUI 验收。
+固定上游版本的 `linkForClick` 与 `updateHoverLink` 原先固定使用 `explicitAndImplicit`，仅写 `linkReporting = .none` 不能关闭链接。b2 已追加 click/hover/report/preview 共用 lookup mode 的窄补丁：none 不解析，explicit 仅 OSC8，implicit 允许自动识别；覆盖 flagsChanged/mouseMoved 中的直接 preview 路径。策略变化立即清理旧 hover、URL preview、lastReportedLink，不能因此关闭 TUI 鼠标追踪。链接激活只允许未拖动的单击，排除双/三击及 Shift 扩选，mouseDown 重置、mouseUp defer 清理手势状态；鼠标报告优先交给 TUI，Shift capture 仍按原生规则。两种可选修饰键为 Command/无，不将内部 `always` 模式直接暴露。链接回调先标记本次手势已处理，再交给外部打开，避免同一手势自动复制。上述 selection/link 修正已进入可逆补丁并通过来源校验、原生测试和 ARM64 真实 GUI 验收。无修饰键单击由第一方延迟到系统双击间隔结束，第二次按下、拖选和生命周期取消会撤销打开；TUI 在按下时拥有的手势不会因中途关闭报告而误开链接。
+
+b2 同时修复 Metal 绘制子视图转发点击时未交接键盘焦点的问题。原生终端先接管第一响应者，再开始手势。窗口悬浮复用既有按窗口共享监控，所有 macOS 版本一致；tracking area 使用 `inVisibleRect` 的 enter/exit，监控补齐非焦点终端的 move 和链接 modifier 显示。可见范围/隐藏祖先/同窗口过滤一致，前台正常投递与后台补发不重复。后台 modifier 不进入 Kitty 输入。监控仅在应用活跃期间投递；最后一个 view 注销恢复宿主原设置，不持有窗口或终端。
 
 ## 审查与验收
 
@@ -68,4 +70,4 @@ B4a5b2 经 `terminal_review` 独立复核后修订：`selectionChanged` 可重�
 
 每批运行 stable-tests 静态门禁、相关 Swift timing harness、完整 macOS 测试、service boundaries、ARM64 完整构建、资源/签名核对与 `git diff --check`。前置依赖批至少执行一次 Metal 实际启用及字体变化后持续绘制的 smoke，排除静默 fallback；完整字体与 Settings 验收仍在产品批。极小/隐藏 surface 保持正常缩放契约，Lithe 已通过 terminalWindowSize 读取实际 clamp 后网格发送 PTY，不拓宽上游 resize 补丁。
 
-GUI 用自有 QA 项目操作，不改用户 Project；保存截图和实际协议/进程证据。关闭测试 app、清理全部自有进程后分批 commit。字体回退、显示设置和 venv 未验收项继续保留在总计划中。
+GUI 用自有 QA 项目操作，不改用户 Project；保存截图和实际协议/进程证据。关闭测试 app、清理全部自有进程后分批 commit。字体回退和显示设置已验收；venv 与其他未完成批次继续保留在总计划中。

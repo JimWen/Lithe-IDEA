@@ -1,6 +1,6 @@
 # GoLand 工作台与可扩展语言能力实施方案
 
-状态：B1 菜单、工具窗口命令和基础 View 已实现并验收，跳过重复实现。用户 2026-09-06 明确 Project 当前够用，B2 的 Project 部分暂停。B3a 搜索正确性与 B4a0–B4a3 终端设置/重启修复已验收，见 [输入与终端验收](goland-parity-iteration7-acceptance.md)。B3b1a Unicode 搜索崩溃与 Rust 增量链接也已通过独立审查、完整测试和 ARM64 实际验收，见 [Unicode 与链接验收](goland-parity-iteration8-acceptance.md)。B4a4 Terminal 启动配置亦已完成，见 [Terminal 设置验收](goland-parity-iteration9-acceptance.md)。B4a5a 字体/同步绘制前置修正也已验收，见 [Terminal 字体验收](goland-parity-iteration10-acceptance.md)；字体设置 B4a5b1 也已完成，见 [字体设置验收](goland-parity-iteration11-acceptance.md)，其余显示/输入 B4a5b2 仍待实施。其余批次仍待实施。现状审计与独立方案复核见 [审查记录](goland-parity-plan-review.md)。基线提交 `c09f2cc4`，目标分支 `dev/aiide`。
+状态：B1 菜单、工具窗口命令和基础 View 已实现并验收，跳过重复实现。用户 2026-09-06 明确 Project 当前够用，B2 的 Project 部分暂停。B3a 搜索正确性与 B4a0–B4a3 终端设置/重启修复已验收，见 [输入与终端验收](goland-parity-iteration7-acceptance.md)。B3b1a Unicode 搜索崩溃与 Rust 增量链接也已通过独立审查、完整测试和 ARM64 实际验收，见 [Unicode 与链接验收](goland-parity-iteration8-acceptance.md)。B4a4 Terminal 启动配置亦已完成，见 [Terminal 设置验收](goland-parity-iteration9-acceptance.md)。B4a5a 字体/同步绘制前置修正也已验收，见 [Terminal 字体验收](goland-parity-iteration10-acceptance.md)；字体设置 B4a5b1 也已完成，见 [字体设置验收](goland-parity-iteration11-acceptance.md)，历史/输入/复制/链接及非焦点悬浮 B4a5b2 也已验收，提交 `266c0c52`，见 [Terminal 交互验收](goland-parity-iteration12-acceptance.md)。venv 的后续预研见 [方案](goland-parity-terminal-venv.md)。其余批次仍待实施。现状审计与独立方案复核见 [审查记录](goland-parity-plan-review.md)。基线提交 `c09f2cc4`，目标分支 `dev/aiide`。
 
 ## 1. 目标与完成规则
 
@@ -195,7 +195,7 @@ Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/
 | B1 | 方案复核通过 | B1a/B1b/B1c 完成，跳过 | 976 项测试、边界、ARM64 包通过 | 最近项稳定并可选；工具窗、改键及提示、主题、标签、设置入口通过 | 通过 | `8b8f21be`、`cb892c85` |
 | B2 | 设计基线复核通过，逐批细化 | Project 按用户要求暂停；其他待实施 | — | — | — | — |
 | B3 | B3a、B3b1a 通过；其余逐批细化 | B3a、Unicode matcher/候选修复完成；scope/事务与 B3c/B3d 待实施 | Rust 331、Swift 985、原生链接 7 项及 ARM64 包通过 | 输入/键盘和 Find 预览已验收；新包 Unicode 查找与替换预览通过 | B3a、B3b1a 通过 | B3a `010d4d57`；B3b1a `b0dac7e2`，构建依赖 `00a9f9c1` |
-| B4 | B4a0–B4a5b1 通过；b2 修订方案通过 | 启动配置、字体/回退/字号/行高热更新完成；其余显示输入、venv 及其他设置待实施 | 1012 项完整测试、边界、来源核验、ARM64 包通过 | 字体输入提交、原生下拉、回退字形、已有/新 PTY、隐藏恢复与清理通过；前批同步绘制验收保留 | B4a0–B4a5b1 通过 | 启动设置 `db44d036`；字体前置 `68d51977`；字体设置 `4f74218a` |
+| B4 | B4a0–B4a5b2 通过 | 启动配置、字体与全部显示/输入项完成；venv 预研、其他设置待实施 | 1024 项完整测试、边界、来源核验、ARM64 包通过 | 字体、历史、复制、链接、焦点/悬浮、真实 PTY、窗口缩放/隐藏恢复与清理通过 | B4a0–B4a5b2 通过 | 启动 `db44d036`；字体前置 `68d51977`；字体 `4f74218a`；输入交互 `266c0c52` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
 | B6 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
 | B7 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
