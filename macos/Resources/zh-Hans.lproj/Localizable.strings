@@ -1553,3 +1553,25 @@
 "Click" = "点击";
 "Terminal history must be between 0 and 100000 lines." = "终端历史行数必须在 0 到 100000 之间。";
 "Terminal scroll sensitivity must be between 0.05 and 10." = "终端滚动灵敏度必须在 0.05 到 10 之间。";
+
+/* Terminal virtual environments */
+"Python virtual environments" = "Python 虚拟环境";
+"Automatically activate virtual environments" = "自动激活虚拟环境";
+"Virtual environment directory" = "虚拟环境目录";
+"Remove virtual environment directory" = "移除虚拟环境目录";
+"Add virtual environment directory" = "添加虚拟环境目录";
+"Directories are checked in order, relative to the terminal working directory. Existing shell environments are preserved." = "按顺序检查相对于终端工作目录的环境目录，保留 shell 已有的环境。";
+"Available for interactive zsh and bash. Use deactivate to leave the environment. Restart keeps the original selection." = "支持交互式 zsh 和 bash。使用 deactivate 退出环境，重启保留原环境选择。";
+"Detecting virtual environment…" = "正在检测虚拟环境…";
+"Activating virtual environment…" = "正在激活虚拟环境…";
+"Virtual environment" = "虚拟环境";
+"Virtual environment activation was not confirmed. Check your shell configuration." = "未确认虚拟环境激活，请检查 shell 配置。";
+"Automatic activation skipped: using your shell environment." = "已保留 shell 自有环境，跳过自动激活。";
+"Automatic activation is unavailable for this shell or its arguments." = "当前 shell 或参数不支持自动激活。";
+"The selected virtual environment is unavailable. Restart to retry it." = "所选虚拟环境不可用，可重启终端重试。";
+"Virtual environment detection was unavailable. Open a new terminal to retry." = "虚拟环境检测不可用，可新建终端重试。";
+"Terminal integration resources are unavailable." = "终端集成资源不可用。";
+"Automatic activation skipped to preserve your shell configuration." = "已保留 shell 自有配置，跳过自动激活。";
+"Automatic activation requires an environment path without a colon." = "自动激活要求环境路径不含冒号。";
+"Use up to 16 unique relative virtual environment directories (512 bytes each), without empty, . or .. path segments." = "最多配置 16 个不重复的虚拟环境相对目录，每项不超过 512 字节，路径段不能是空、. 或 ..。";
+"Startup virtual environment" = "启动时虚拟环境";

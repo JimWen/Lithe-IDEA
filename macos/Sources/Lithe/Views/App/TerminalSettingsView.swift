@@ -84,6 +84,7 @@ struct TerminalSettingsView: View {
                 Text("Values are literal. Unset removes an inherited variable; an empty value keeps it defined.")
                     .font(LitheTheme.smallFont).foregroundStyle(LitheTheme.secondaryText)
             }
+            TerminalVirtualEnvironmentSettingsView(settings: settings)
         }
         .font(.system(size: 13)).foregroundStyle(LitheTheme.primaryText)
         .onChange(of: settings.terminalConfiguration.arguments.count) { count in

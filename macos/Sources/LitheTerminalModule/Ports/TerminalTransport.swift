@@ -48,6 +48,7 @@ public protocol TerminalTransport: AnyObject {
     var onTitle: ((String) -> Void)? { get set }
     var onDirectoryUpdate: ((String?) -> Void)? { get set }
     var onLink: ((String, [String: String]) -> Void)? { get set }
+    var onVirtualEnvironmentState: ((TerminalVirtualEnvironmentState) -> Void)? { get set }
 
     /// Returns display diagnostics without interrupting the running process.
     func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) -> [String]
@@ -57,9 +58,23 @@ public protocol TerminalTransport: AnyObject {
     func resolveExecutablePath(_ executablePath: String, workingDirectory: String, environment: [String: String]) throws -> String
     func start(workingDirectory: String, shellPath: String, environment: [String: String]) throws
     func startProcess(_ launch: TerminalProcessLaunch, environment: [String: String]) throws -> Int32
+    /// Native discovery may complete asynchronously. stop() cancels preparation;
+    /// completion returns the frozen selection even if process creation fails.
+    func startShell(_ launch: TerminalShellLaunch,
+                    completion: @escaping @MainActor (TerminalShellLaunch, Result<Int32, any Error>) -> Void)
     func send(_ input: Data) throws
     func interrupt() throws
     func focus()
     func clear()
     func stop()
+}
+
+public extension TerminalTransport {
+    func startShell(_ launch: TerminalShellLaunch,
+                    completion: @escaping @MainActor (TerminalShellLaunch, Result<Int32, any Error>) -> Void) {
+        let resolved: TerminalShellLaunch
+        if case .discover = launch.virtualEnvironment { resolved = launch.selectingVirtualEnvironment(.unknown) }
+        else { resolved = launch }
+        completion(resolved, Result { try startProcess(launch.process, environment: launch.environment) })
+    }
 }

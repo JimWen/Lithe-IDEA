@@ -403,3 +403,25 @@
 "Click" = "Click";
 "Terminal history must be between 0 and 100000 lines." = "Terminal history must be between 0 and 100000 lines.";
 "Terminal scroll sensitivity must be between 0.05 and 10." = "Terminal scroll sensitivity must be between 0.05 and 10.";
+
+/* Terminal virtual environments */
+"Python virtual environments" = "Python virtual environments";
+"Automatically activate virtual environments" = "Automatically activate virtual environments";
+"Virtual environment directory" = "Virtual environment directory";
+"Remove virtual environment directory" = "Remove virtual environment directory";
+"Add virtual environment directory" = "Add virtual environment directory";
+"Directories are checked in order, relative to the terminal working directory. Existing shell environments are preserved." = "Directories are checked in order, relative to the terminal working directory. Existing shell environments are preserved.";
+"Available for interactive zsh and bash. Use deactivate to leave the environment. Restart keeps the original selection." = "Available for interactive zsh and bash. Use deactivate to leave the environment. Restart keeps the original selection.";
+"Detecting virtual environment…" = "Detecting virtual environment…";
+"Activating virtual environment…" = "Activating virtual environment…";
+"Virtual environment" = "Virtual environment";
+"Virtual environment activation was not confirmed. Check your shell configuration." = "Virtual environment activation was not confirmed. Check your shell configuration.";
+"Automatic activation skipped: using your shell environment." = "Automatic activation skipped: using your shell environment.";
+"Automatic activation is unavailable for this shell or its arguments." = "Automatic activation is unavailable for this shell or its arguments.";
+"The selected virtual environment is unavailable. Restart to retry it." = "The selected virtual environment is unavailable. Restart to retry it.";
+"Virtual environment detection was unavailable. Open a new terminal to retry." = "Virtual environment detection was unavailable. Open a new terminal to retry.";
+"Terminal integration resources are unavailable." = "Terminal integration resources are unavailable.";
+"Automatic activation skipped to preserve your shell configuration." = "Automatic activation skipped to preserve your shell configuration.";
+"Automatic activation requires an environment path without a colon." = "Automatic activation requires an environment path without a colon.";
+"Use up to 16 unique relative virtual environment directories (512 bytes each), without empty, . or .. path segments." = "Use up to 16 unique relative virtual environment directories (512 bytes each), without empty, . or .. path segments.";
+"Startup virtual environment" = "Startup virtual environment";

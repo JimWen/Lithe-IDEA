@@ -4942,6 +4942,7 @@ private final class TestTerminalTransport: TerminalTransport {
     var onOutput: ((Data) -> Void)?
     var onTitle: ((String) -> Void)?
     var onDirectoryUpdate: ((String?) -> Void)?
+    var onVirtualEnvironmentState: ((TerminalVirtualEnvironmentState) -> Void)?
     var onLink: ((String, [String: String]) -> Void)?
     var startRequests: [String] = []
     var stopCount = 0

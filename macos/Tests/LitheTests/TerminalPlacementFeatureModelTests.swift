@@ -169,6 +169,7 @@ private final class PlacementTestTerminalTransport: TerminalTransport {
     var onOutput: ((Data) -> Void)?
     var onTitle: ((String) -> Void)?
     var onDirectoryUpdate: ((String?) -> Void)?
+    var onVirtualEnvironmentState: ((TerminalVirtualEnvironmentState) -> Void)?
     var onLink: ((String, [String: String]) -> Void)?
     var startCount = 0
     var stopCount = 0

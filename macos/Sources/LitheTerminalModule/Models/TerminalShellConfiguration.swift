@@ -13,6 +13,8 @@ public struct TerminalShellConfiguration: Codable, Equatable, Sendable {
     public static let maximumArguments = 128
     public static let maximumEnvironmentVariables = 128
     public static let maximumTextBytes = 256 * 1_024
+    public static let maximumVirtualEnvironmentDirectories = 16
+    public static let maximumVirtualEnvironmentPathBytes = 512
 
     public var shell: TerminalShellSelection = .system
     public var customProgram = ""
@@ -21,11 +23,14 @@ public struct TerminalShellConfiguration: Codable, Equatable, Sendable {
     public var workingDirectory: TerminalWorkingDirectory = .currentProject
     public var customDirectory = ""
     public var environment: [TerminalEnvironmentChange] = []
+    public var detectVirtualEnvironment = true
+    public var virtualEnvironmentDirectories = [".env", "env", ".venv", "venv"]
 
     public init() {}
 
     private enum CodingKeys: CodingKey {
         case shell, customProgram, arguments, loginShell, workingDirectory, customDirectory, environment
+        case detectVirtualEnvironment, virtualEnvironmentDirectories
     }
 
     public init(from decoder: any Decoder) throws {
@@ -37,6 +42,9 @@ public struct TerminalShellConfiguration: Codable, Equatable, Sendable {
         workingDirectory = try values.decodeIfPresent(TerminalWorkingDirectory.self, forKey: .workingDirectory) ?? .currentProject
         customDirectory = try values.decodeIfPresent(String.self, forKey: .customDirectory) ?? ""
         environment = try values.decodeIfPresent([TerminalEnvironmentChange].self, forKey: .environment) ?? []
+        detectVirtualEnvironment = try values.decodeIfPresent(Bool.self, forKey: .detectVirtualEnvironment) ?? true
+        virtualEnvironmentDirectories = try values.decodeIfPresent([String].self, forKey: .virtualEnvironmentDirectories)
+            ?? [".env", "env", ".venv", "venv"]
     }
 
     public var specifiedShellPath: String? {
@@ -50,6 +58,11 @@ public struct TerminalShellConfiguration: Codable, Equatable, Sendable {
 
     /// Validation never includes argument or environment contents in its errors.
     public func validate() throws {
+        guard virtualEnvironmentDirectories.count <= Self.maximumVirtualEnvironmentDirectories,
+              Set(virtualEnvironmentDirectories).count == virtualEnvironmentDirectories.count,
+              virtualEnvironmentDirectories.allSatisfy(Self.isVirtualEnvironmentDirectory) else {
+            throw TerminalConfigurationError.invalidVirtualEnvironmentDirectories
+        }
         if shell == .custom && customProgram.isEmpty { throw TerminalConfigurationError.missingProgram }
         if workingDirectory == .custom && customDirectory.isEmpty { throw TerminalConfigurationError.missingDirectory }
         guard arguments.count <= Self.maximumArguments,
@@ -112,8 +125,20 @@ public struct TerminalShellConfiguration: Codable, Equatable, Sendable {
         for change in environment { values[change.name] = change.value }
         return TerminalShellLaunch(
             process: TerminalProcessLaunch(title: nil, executablePath: program, arguments: argv, workingDirectory: directory.standardizedFileURL.path),
-            environment: values
+            environment: values,
+            virtualEnvironment: !detectVirtualEnvironment ? .disabled
+                : environment.contains(where: { $0.name == "VIRTUAL_ENV" || $0.name == "PYTHONHOME" })
+                    || !(inheritedEnvironment["VIRTUAL_ENV"] ?? "").isEmpty ? .preserveExisting
+                : .discover(virtualEnvironmentDirectories)
         )
+    }
+
+    private static func isVirtualEnvironmentDirectory(_ path: String) -> Bool {
+        guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !path.hasPrefix("/"), !path.hasPrefix("~"), !path.utf8.contains(0),
+              path.utf8.count <= maximumVirtualEnvironmentPathBytes else { return false }
+        return path.split(separator: "/", omittingEmptySubsequences: false)
+            .allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
 
     private static func resolveDirectory(_ path: String, relativeTo root: URL, home: URL) -> URL {
@@ -147,16 +172,24 @@ public struct TerminalLaunchContext: Equatable, Sendable {
 public struct TerminalShellLaunch: Equatable, Sendable {
     public let process: TerminalProcessLaunch
     public let environment: [String: String]
+    public let virtualEnvironment: TerminalVirtualEnvironmentPlan
 
-    public init(process: TerminalProcessLaunch, environment: [String: String]) {
+    public init(process: TerminalProcessLaunch, environment: [String: String],
+                virtualEnvironment: TerminalVirtualEnvironmentPlan = .disabled) {
         self.process = process
         self.environment = environment
+        self.virtualEnvironment = virtualEnvironment
+    }
+
+    public func selectingVirtualEnvironment(_ plan: TerminalVirtualEnvironmentPlan) -> Self {
+        .init(process: process, environment: environment, virtualEnvironment: plan)
     }
 }
 
 public enum TerminalConfigurationError: LocalizedError, Sendable {
     case missingProgram, missingDirectory, invalidEnvironmentName, duplicateEnvironmentName
     case nullCharacter, tooManyEntries, tooMuchText
+    case invalidVirtualEnvironmentDirectories
 
     public var errorDescription: String? {
         switch self {
@@ -167,6 +200,7 @@ public enum TerminalConfigurationError: LocalizedError, Sendable {
         case .nullCharacter: "Terminal settings cannot contain a NUL character."
         case .tooManyEntries: "Terminal settings allow at most 128 arguments and 128 environment variables."
         case .tooMuchText: "Terminal settings exceed the 256 KiB text limit."
+        case .invalidVirtualEnvironmentDirectories: "Use up to 16 unique relative virtual environment directories (512 bytes each), without empty, . or .. path segments."
         }
     }
 }

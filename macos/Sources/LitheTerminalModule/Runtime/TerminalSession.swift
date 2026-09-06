@@ -15,6 +15,7 @@ public final class TerminalSession: ObservableObject, Identifiable {
     @Published public private(set) var endedAt: Date?
     @Published public private(set) var lastError: String?
     @Published public private(set) var displayDiagnostics: [String] = []
+    @Published public private(set) var virtualEnvironmentState: TerminalVirtualEnvironmentState = .inactive
     public var onLink: ((String, [String: String]) -> Void)?
     /// Receives decoded child-process output without taking ownership of the
     /// terminal surface.
@@ -24,6 +25,7 @@ public final class TerminalSession: ObservableObject, Identifiable {
     private var selectedShellPath: String?
     private var shellRequest: (configuration: TerminalShellConfiguration, context: TerminalLaunchContext)?
     private var shellLaunch: TerminalShellLaunch?
+    private var launchGeneration = UUID()
 
     public init(transport: any TerminalTransport) {
         self.transport = transport
@@ -47,6 +49,7 @@ public final class TerminalSession: ObservableObject, Identifiable {
         }
         transport.onDirectoryUpdate = { [weak self] in self?.updateCurrentDirectory($0) }
         transport.onLink = { [weak self] link, params in self?.onLink?(link, params) }
+        transport.onVirtualEnvironmentState = { [weak self] in self?.virtualEnvironmentState = $0 }
     }
 
     public var nativeView: AnyObject { transport.nativeView }
@@ -98,14 +101,21 @@ public final class TerminalSession: ObservableObject, Identifiable {
         selectedShellPath = launch.process.executablePath
         shellName = URL(fileURLWithPath: launch.process.executablePath).lastPathComponent
         processTitle = nil; lastExitCode = nil; lastError = nil; startedAt = Date(); endedAt = nil
-        do {
-            _ = try transport.startProcess(launch.process, environment: launch.environment)
-            isRunning = transport.isRunning; isReady = isRunning
-        } catch { recordLaunchFailure(error) }
+        let generation = launchGeneration
+        transport.startShell(launch) { [weak self] resolved, result in
+            guard let self, self.launchGeneration == generation else { return }
+            self.shellLaunch = resolved
+            switch result {
+            case .success:
+                self.isRunning = self.transport.isRunning; self.isReady = self.isRunning
+            case .failure(let error): self.recordLaunchFailure(error)
+            }
+        }
     }
 
     private func recordLaunchFailure(_ error: any Error) {
         isRunning = false; isReady = false; lastExitCode = nil; startedAt = nil; endedAt = Date()
+        virtualEnvironmentState = .inactive
         lastError = error.localizedDescription
     }
 
@@ -158,7 +168,7 @@ public final class TerminalSession: ObservableObject, Identifiable {
                     process: TerminalProcessLaunch(
                         title: nil, executablePath: executable, arguments: previous.process.arguments,
                         workingDirectory: previous.process.workingDirectory
-                    ), environment: previous.environment
+                    ), environment: previous.environment, virtualEnvironment: previous.virtualEnvironment
                 )
                 shellLaunch = launch
                 startShell(launch)
@@ -179,7 +189,9 @@ public final class TerminalSession: ObservableObject, Identifiable {
     public func clear() { transport.clear() }
     public func focus() { transport.focus() }
     public func stop() {
+        launchGeneration = UUID()
         transport.stop(); isRunning = false; isReady = false
+        virtualEnvironmentState = .inactive
         if startedAt != nil { endedAt = Date() }
     }
 

@@ -229,11 +229,27 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     var onTitle: ((String) -> Void)?
     var onDirectoryUpdate: ((String?) -> Void)?
     var onLink: ((String, [String: String]) -> Void)?
+    var onVirtualEnvironmentState: ((TerminalVirtualEnvironmentState) -> Void)?
 
     private var selectedShellPath: String?
     private let stoppedChildProcessReaper = MacStoppedChildProcessReaper()
     private var processSession: MacTerminalProcessSession?
     private var connection: MacTerminalProcessConnection?
+    private var preparationID: UUID?
+    private var cancelPreparation: (() -> Void)?
+    private var activation: VirtualEnvironmentActivation?
+    private var cancelActivationTimeout: (() -> Void)?
+    private let virtualEnvironmentProbe: MacTerminalVirtualEnvironmentProbe
+    private let inheritedEnvironment: () -> [String: String]
+    private let scheduleActivationTimeout: (@escaping @MainActor @Sendable () -> Void) -> () -> Void
+    private struct VirtualEnvironmentActivation {
+        let nonce: String
+        let path: String
+        var processID: Int32?
+        var ready = false
+        var earlyPayload: String?
+        var activated = false
+    }
     private struct Typography: Equatable {
         let name: String?
         let size: Double
@@ -270,7 +286,17 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         self.init(linkActivation: MacTerminalLinkActivation())
     }
 
-    init(linkActivation: MacTerminalLinkActivation) {
+    init(linkActivation: MacTerminalLinkActivation,
+         virtualEnvironmentProbe: MacTerminalVirtualEnvironmentProbe? = nil,
+         inheritedEnvironment: @escaping () -> [String: String] = { ProcessInfo.processInfo.environment },
+         scheduleActivationTimeout: ((@escaping @MainActor @Sendable () -> Void) -> () -> Void)? = nil) {
+        self.virtualEnvironmentProbe = virtualEnvironmentProbe ?? .shared
+        self.inheritedEnvironment = inheritedEnvironment
+        self.scheduleActivationTimeout = scheduleActivationTimeout ?? { action in
+            let item = DispatchWorkItem { MainActor.assumeIsolated { action() } }
+            DispatchQueue.main.asyncAfter(deadline: .now() + MacTerminalShellIntegration.acknowledgmentTimeout, execute: item)
+            return { item.cancel() }
+        }
         view = LitheTerminalView(frame: .zero, linkActivation: linkActivation)
         super.init()
 
@@ -286,6 +312,11 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         options.scrollback = 2_000
         view.terminal.options = options
         view.terminal.setup(isReset: false)
+        view.terminal.registerOscHandler(code: MacTerminalShellIntegration.oscCode) { [weak self] payload in
+            guard payload.count <= MacTerminalShellIntegration.maximumPayloadBytes,
+                  let value = String(bytes: payload, encoding: .ascii) else { return }
+            self?.receiveVirtualEnvironmentAcknowledgment(value)
+        }
     }
 
     private static func preferredTerminalFont(size: CGFloat = 13) -> NSFont {
@@ -392,11 +423,11 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     }
 
     func defaultShellPath() -> String {
-        ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        inheritedEnvironment()["SHELL"] ?? "/bin/zsh"
     }
 
     func defaultEnvironment() -> [String: String] {
-        ProcessInfo.processInfo.environment
+        inheritedEnvironment()
     }
 
     func prepareShellLaunch(
@@ -419,8 +450,113 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
                 title: nil, executablePath: executable, arguments: plan.process.arguments,
                 workingDirectory: plan.process.workingDirectory
             ),
-            environment: plan.environment
+            environment: plan.environment, virtualEnvironment: plan.virtualEnvironment
         )
+    }
+
+    func startShell(_ launch: TerminalShellLaunch,
+                    completion: @escaping @MainActor (TerminalShellLaunch, Result<Int32, any Error>) -> Void) {
+        stop()
+        let id = UUID()
+        preparationID = id
+        func finish(_ resolved: TerminalShellLaunch, path: String? = nil,
+                    state: TerminalVirtualEnvironmentState = .inactive) {
+            guard preparationID == id else { return }
+            preparationID = nil; cancelPreparation = nil
+            var process = resolved.process, environment = resolved.environment
+            var pending: VirtualEnvironmentActivation?
+            var state = state
+            if let path {
+                let nonce = UUID().uuidString
+                if let integrated = MacTerminalShellIntegration.prepare(resolved, path: path, nonce: nonce,
+                                                                        resources: MacTerminalShellIntegration.directory) {
+                    process = integrated.process; environment = integrated.environment
+                    pending = .init(nonce: nonce, path: path)
+                    state = .activating(path)
+                } else { state = .skipped(.integrationUnavailable) }
+            }
+            let result = Result {
+                try launchProcess(process, environment: environment,
+                                  displayShellPath: resolved.process.executablePath, activation: pending)
+            }
+            let source = connection
+            if case .failure = result { onVirtualEnvironmentState?(.inactive) }
+            // Publish the frozen decision before an ACK can advance the UI.
+            completion(resolved, result)
+            guard let source, connection === source else { return }
+            onVirtualEnvironmentState?(state)
+            guard connection === source else { return }
+            if activation != nil {
+                activation?.ready = true
+                cancelActivationTimeout = scheduleActivationTimeout { [weak self, weak source] in
+                    guard let self, let source, self.connection === source,
+                          let activation = self.activation, !activation.activated else { return }
+                    self.cancelActivationTimeout = nil
+                    self.onVirtualEnvironmentState?(.unconfirmed(activation.path))
+                }
+                if let early = activation?.earlyPayload { receiveVirtualEnvironmentAcknowledgment(early) }
+            }
+        }
+        switch launch.virtualEnvironment {
+        case .disabled, .notFound: finish(launch); return
+        case .preserveExisting: finish(launch, state: .skipped(.existingEnvironment)); return
+        case .unknown: finish(launch, state: .skipped(.discoveryUnavailable)); return
+        case .discover, .selected: break
+        }
+        guard MacTerminalShellIntegration.shell(for: launch.process) != nil else {
+            let frozen: TerminalShellLaunch
+            if case .discover = launch.virtualEnvironment { frozen = launch.selectingVirtualEnvironment(.unknown) }
+            else { frozen = launch }
+            finish(frozen, state: .skipped(.unsupportedShell)); return
+        }
+        let paths: [String]
+        if case .selected(let path) = launch.virtualEnvironment { paths = [path] }
+        else if case .discover(let candidates) = launch.virtualEnvironment {
+            paths = candidates.map { URL(fileURLWithPath: launch.process.workingDirectory).appendingPathComponent($0).path }
+        } else { paths = [] }
+        onVirtualEnvironmentState?(.detecting)
+        guard preparationID == id else { return }
+        let cancel = virtualEnvironmentProbe.check(paths) { [weak self] result in
+            guard let self, self.preparationID == id else { return }
+            let selected: Bool
+            if case .selected = launch.virtualEnvironment { selected = true } else { selected = false }
+            switch result {
+            case .found(let path): finish(launch.selectingVirtualEnvironment(.selected(path)), path: path)
+            case .missing:
+                finish(selected ? launch : launch.selectingVirtualEnvironment(.notFound),
+                       state: selected ? .skipped(.unavailable) : .inactive)
+            case .unknown, .unsupportedPath:
+                finish(selected ? launch : launch.selectingVirtualEnvironment(.unknown),
+                       state: .skipped(result == .unsupportedPath ? .unsupportedPath : .discoveryUnavailable))
+            }
+        }
+        if preparationID == id { cancelPreparation = cancel } else { cancel() }
+    }
+
+    private func receiveVirtualEnvironmentAcknowledgment(_ value: String) {
+        guard var current = activation else { return }
+        let fields = value.split(separator: ";", omittingEmptySubsequences: false)
+        guard fields.count == 4, fields[0] == "1", fields[1] == current.nonce,
+              let pid = Int32(fields[2]), pid == processID else { return }
+        guard current.ready else {
+            current.earlyPayload = value; activation = current; return
+        }
+        guard isRunning, pid == current.processID else { return }
+        let state: TerminalVirtualEnvironmentState
+        switch fields[3] {
+        case "activated" where !current.activated:
+            current.activated = true; state = .activated(current.path)
+        case "deactivated" where current.activated:
+            state = .deactivated
+        case "existing" where !current.activated: state = .skipped(.existingEnvironment)
+        case "missing" where !current.activated: state = .skipped(.unavailable)
+        case "configuration" where !current.activated: state = .skipped(.shellConfiguration)
+        default: return
+        }
+        cancelActivationTimeout?(); cancelActivationTimeout = nil
+        current.earlyPayload = nil
+        activation = state == .activated(current.path) ? current : nil
+        onVirtualEnvironmentState?(state)
     }
 
     func start(
@@ -443,6 +579,12 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         _ launch: TerminalProcessLaunch,
         environment: [String: String]
     ) throws -> Int32 {
+        try launchProcess(launch, environment: environment)
+    }
+
+    private func launchProcess(_ launch: TerminalProcessLaunch, environment: [String: String],
+                               displayShellPath: String? = nil,
+                               activation: VirtualEnvironmentActivation? = nil) throws -> Int32 {
         let executablePath = try resolveExecutablePath(
             launch.executablePath,
             workingDirectory: launch.workingDirectory,
@@ -450,7 +592,8 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         )
         try validateWorkingDirectory(launch.workingDirectory)
         stop()
-        selectedShellPath = executablePath
+        selectedShellPath = displayShellPath ?? executablePath
+        self.activation = activation
 
         view.cancelMouseInteraction()
         view.terminal.resetToInitialState()
@@ -475,6 +618,10 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         }
         connection.onTermination = { [weak self] source, exitCode in
             guard let self, self.connection === source else { return }
+            self.activation = nil
+            self.cancelActivationTimeout?(); self.cancelActivationTimeout = nil
+            self.onVirtualEnvironmentState?(.inactive)
+            guard self.connection === source else { return }
             self.onTermination?(exitCode)
         }
         connection.process.startProcess(
@@ -489,6 +636,7 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
             throw terminalError("Unable to start \(executablePath)")
         }
         processSession = MacTerminalProcessSession(processID: processID)
+        self.activation?.processID = processID
         return processID
     }
 
@@ -513,6 +661,11 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     }
 
     func stop() {
+        preparationID = nil
+        let cancel = cancelPreparation; cancelPreparation = nil
+        cancel?()
+        activation = nil
+        cancelActivationTimeout?(); cancelActivationTimeout = nil
         view.cancelMouseInteraction()
         guard let connection else { return }
         let processID = connection.process.shellPid

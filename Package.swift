@@ -111,6 +111,7 @@ let package = Package(
             resources: [
                 .copy("Resources/MarkdownPreview"),
                 .copy("Resources/SyntaxHighlighting"),
+                .copy("Resources/TerminalShellIntegration"),
                 .copy("Resources/WorkbenchBackgrounds")
             ],
             swiftSettings: [

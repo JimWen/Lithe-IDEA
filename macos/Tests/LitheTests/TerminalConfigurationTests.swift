@@ -178,6 +178,7 @@ final class ConfigurationTestTransport: TerminalTransport {
     var onOutput: ((Data) -> Void)?
     var onTitle: ((String) -> Void)?
     var onDirectoryUpdate: ((String?) -> Void)?
+    var onVirtualEnvironmentState: ((TerminalVirtualEnvironmentState) -> Void)?
     var onLink: ((String, [String: String]) -> Void)?
     var inheritedEnvironment = ["INHERITED": "original"]
     var launches: [TerminalShellLaunch] = []
@@ -186,6 +187,7 @@ final class ConfigurationTestTransport: TerminalTransport {
     var displayConfigurations: [TerminalDisplayConfiguration] = []
     var displayDiagnostics: [String] = []
     var lifecycleEvents: [String] = []
+    var shellStartHandler: ((TerminalShellLaunch, @escaping @MainActor (TerminalShellLaunch, Result<Int32, any Error>) -> Void) -> Void)?
 
     func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) -> [String] {
         displayConfigurations.append(configuration)
@@ -204,6 +206,14 @@ final class ConfigurationTestTransport: TerminalTransport {
     }
     func start(workingDirectory: String, shellPath: String, environment: [String: String]) throws {
         _ = try startProcess(.init(title: nil, executablePath: shellPath, arguments: ["-l"], workingDirectory: workingDirectory), environment: environment)
+    }
+    func startShell(_ launch: TerminalShellLaunch,
+                    completion: @escaping @MainActor (TerminalShellLaunch, Result<Int32, any Error>) -> Void) {
+        if let shellStartHandler { shellStartHandler(launch, completion); return }
+        let frozen: TerminalShellLaunch
+        if case .discover = launch.virtualEnvironment { frozen = launch.selectingVirtualEnvironment(.notFound) }
+        else { frozen = launch }
+        completion(frozen, Result { try startProcess(launch.process, environment: launch.environment) })
     }
     func startProcess(_ launch: TerminalProcessLaunch, environment: [String: String]) throws -> Int32 {
         lifecycleEvents.append("start")

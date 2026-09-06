@@ -9,6 +9,7 @@ struct TerminalSurfaceView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            virtualEnvironmentStatus
             if let error = session.lastError {
                 VStack(alignment: .leading, spacing: 8) {
                     Label {
@@ -65,6 +66,34 @@ struct TerminalSurfaceView: View {
         .task(id: session.id) {
             requestInputFocus()
         }
+    }
+
+    @ViewBuilder private var virtualEnvironmentStatus: some View {
+        switch session.virtualEnvironmentState {
+        case .inactive, .deactivated: EmptyView()
+        case .detecting: status("Detecting virtual environment…")
+        case .activating(let path): status("Activating virtual environment…", path: path)
+        case .activated(let path): status("Startup virtual environment", path: path)
+        case .unconfirmed(let path): status("Virtual environment activation was not confirmed. Check your shell configuration.", path: path, warning: true)
+        case .skipped(let reason): status(reason.message, warning: reason != .existingEnvironment)
+        }
+    }
+
+    private func status(_ message: String, path: String? = nil, warning: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: warning ? "exclamationmark.triangle" : "terminal")
+            Text(LocalizedStringKey(message)).lineLimit(2)
+            if let path {
+                Text(URL(fileURLWithPath: path).lastPathComponent).lineLimit(1).truncationMode(.middle).help(path)
+            }
+            Spacer(minLength: 0)
+            if warning {
+                Button("Terminal Settings") { model.showSettings(category: .terminal) }
+                    .buttonStyle(.plain).foregroundStyle(LitheTheme.accent)
+            }
+        }.font(LitheTheme.smallFont)
+            .foregroundStyle(warning ? LitheTheme.warning : LitheTheme.secondaryText)
+            .padding(.horizontal, 10).padding(.vertical, 4)
     }
 
     private func requestInputFocus() {
