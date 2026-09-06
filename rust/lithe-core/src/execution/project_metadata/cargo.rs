@@ -200,11 +200,13 @@ pub(super) fn normalize(
             manifest,
             default_run: package.default_run,
             targets,
-            features: package
-                .features
-                .into_iter()
-                .map(|(name, values)| (name, sorted(values)))
-                .collect(),
+            features: FeatureDeclarations(
+                package
+                    .features
+                    .into_iter()
+                    .map(|(name, values)| (name, sorted(values)))
+                    .collect(),
+            ),
             dependencies,
             incomplete: false,
             diagnostics: vec![],

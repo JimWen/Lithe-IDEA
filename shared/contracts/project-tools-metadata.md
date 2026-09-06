@@ -48,12 +48,24 @@ Absolute paths never appear in identities. Raw native tool error information
 may appear only in diagnostics `details`.
 
 Members contain `id`, `name`, nullable `version`/`languageVersion`, `directory`,
-`manifest`, nullable `defaultRun`, `targets`, `features`, `dependencies`,
+`manifest`, nullable `defaultRun`, `targets`, `features`, `featureEntries`, `dependencies`,
 `incomplete`, and `diagnostics`. Cargo dependencies are declarations containing
 name/rename/versionReq/kind/optional/defaultFeatures/features/target/location;
 they do not claim a resolved dependency graph. Go package imports are retained
 on their targets; this command does not infer per-module dependency graphs from
 the Go module stream. Non-main Go modules are validated but not workspace members.
+
+`featureEntries` is an additive version 1 field containing `{name, enables}`
+items, ordered by the feature name's original UTF-8 bytes. It carries the same
+declarations as the unchanged `features` object; `enables` retains the existing
+sorted, deduplicated activation expressions without Unicode normalization.
+Go returns `{}` and `[]`, respectively. Hosts whose dictionary keys compare
+canonically equivalent Unicode as equal must consume the array to preserve
+distinct names such as `é` and `e\u0301`. The current Swift consumer requires
+this field and fails explicitly on an older Core response instead of falling
+back to a lossy dictionary. Core and that consumer ship together; old consumers
+may continue reading `features`. Both wire views borrow the same map during
+serialization and count toward the existing 32 MiB output limit.
 
 Targets contain `id`, `name`, canonical `kind`, `rawKinds`, `crateTypes`, nullable
 `edition`, `directory`, `sources`, nullable `importPath`, `requiredFeatures`,

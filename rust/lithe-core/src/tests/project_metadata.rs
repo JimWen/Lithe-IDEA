@@ -81,6 +81,10 @@ fn cargo_metadata_preserves_workspace_defaults_and_target_semantics() {
     assert_eq!(beta["id"], fixture["expected"]["cargoMemberIDs"]["beta"]);
     assert_eq!(result["defaultMemberIDs"], json!([alpha["id"]]));
     assert_eq!(alpha["defaultRun"], "tool");
+    assert_eq!(
+        alpha["featureEntries"],
+        json!([{"name":"default","enables":["fast"]},{"name":"fast","enables":[]}])
+    );
     assert_ne!(target(alpha, "tool")["id"], target(beta, "tool")["id"]);
     for (name, runnable, testable) in [
         ("tool", true, true),
@@ -116,6 +120,54 @@ fn cargo_metadata_preserves_workspace_defaults_and_target_semantics() {
 }
 
 #[test]
+fn cargo_feature_entries_preserve_unicode_names_and_legacy_map() {
+    let mut fixture = fixture();
+    let features: Value =
+        serde_json::from_str(fixture["unicodeFeatureMapJSON"].as_str().unwrap()).unwrap();
+    fixture["cargo"]["packages"][0]["features"] = features.clone();
+    let data = success(payload("rust", &fixture));
+    let beta = member(&data, "beta");
+    assert_eq!(beta["features"], features);
+    assert_eq!(beta["features"].as_object().unwrap().len(), 3);
+    assert_eq!(
+        beta["featureEntries"],
+        json!([
+            {"name":"YWJj","enables":["literal-base64"]},
+            {"name":"e\u{301}","enables":["decomp"]},
+            {"name":"é","enables":["pre"]}
+        ])
+    );
+    assert_eq!(
+        beta["featureEntries"][1]["name"]
+            .as_str()
+            .unwrap()
+            .as_bytes(),
+        &[0x65, 0xcc, 0x81]
+    );
+    assert_eq!(
+        beta["featureEntries"][2]["name"]
+            .as_str()
+            .unwrap()
+            .as_bytes(),
+        &[0xc3, 0xa9]
+    );
+}
+
+#[test]
+fn both_feature_wire_views_share_the_serialized_output_limit() {
+    let mut fixture = fixture();
+    // Each token and the entire input fit their limits. Duplicating the feature
+    // view on the wire must still count against the 32 MiB final output cap.
+    let features = (0..2044)
+        .map(|index| (format!("{index:04}{}", "a".repeat(8188)), json!([])))
+        .collect::<serde_json::Map<_, _>>();
+    fixture["cargo"]["packages"][0]["features"] = Value::Object(features);
+    let request = payload("rust", &fixture);
+    assert!(request["cargoMetadata"].as_str().unwrap().len() < 16 * 1024 * 1024);
+    failure(request, "invalid_request");
+}
+
+#[test]
 fn go_metadata_groups_modules_sources_and_incomplete_diagnostics() {
     let fixture = fixture();
     let result = success(payload("go", &fixture));
@@ -126,6 +178,8 @@ fn go_metadata_groups_modules_sources_and_incomplete_diagnostics() {
         );
     }
     let alpha = member(&result, "example.invalid/alpha");
+    assert_eq!(alpha["features"], json!({}));
+    assert_eq!(alpha["featureEntries"], json!([]));
     assert_eq!(alpha["targets"].as_array().unwrap().len(), 3);
     let packages = alpha["targets"].as_array().unwrap();
     let root = &packages[0];

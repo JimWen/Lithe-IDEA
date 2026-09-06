@@ -115,7 +115,7 @@ pub(super) fn normalize(
             manifest,
             default_run: None,
             targets: vec![],
-            features: BTreeMap::new(),
+            features: FeatureDeclarations(BTreeMap::new()),
             dependencies: vec![],
             incomplete: !module_diagnostics.is_empty(),
             diagnostics: module_diagnostics,

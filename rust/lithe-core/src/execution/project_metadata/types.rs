@@ -1,6 +1,7 @@
 //! Portable project-tool topology; native paths exist only in input root mappings.
 
-use serde::{Deserialize, Serialize};
+use serde::ser::{SerializeSeq, SerializeStruct};
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 
 /// Complete stdout from successful, fully drained native metadata commands.
@@ -58,11 +59,46 @@ pub(super) struct Member {
     pub manifest: Location,
     pub default_run: Option<String>,
     pub targets: Vec<Target>,
-    pub features: BTreeMap<String, Vec<String>>,
+    #[serde(flatten)]
+    pub features: FeatureDeclarations,
     /// Cargo declarations, not a resolved dependency graph.
     pub dependencies: Vec<Dependency>,
     pub incomplete: bool,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// One owned map with two wire views: legacy keys and byte-preserving entries.
+/// Entries let hosts whose string dictionaries fold Unicode decode every name.
+pub(super) struct FeatureDeclarations(pub BTreeMap<String, Vec<String>>);
+
+impl Serialize for FeatureDeclarations {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut fields = serializer.serialize_struct("FeatureDeclarations", 2)?;
+        fields.serialize_field("features", &self.0)?;
+        fields.serialize_field("featureEntries", &FeatureEntries(&self.0))?;
+        fields.end()
+    }
+}
+
+/// Borrowed projection avoids doubling feature allocations before LimitedWriter
+/// accounts for both wire views against the shared output-byte limit.
+struct FeatureEntries<'a>(&'a BTreeMap<String, Vec<String>>);
+
+impl Serialize for FeatureEntries<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut entries = serializer.serialize_seq(Some(self.0.len()))?;
+        for (name, enables) in self.0 {
+            entries.serialize_element(&FeatureEntry { name, enables })?;
+        }
+        entries.end()
+    }
+}
+
+#[derive(Serialize)]
+struct FeatureEntry<'a> {
+    name: &'a str,
+    /// Declared activation expressions, not a resolved feature closure.
+    enables: &'a [String],
 }
 
 #[derive(Serialize)]

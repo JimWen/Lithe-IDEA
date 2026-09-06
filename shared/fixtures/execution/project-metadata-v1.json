@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "unicodeFeatureMapJSON": "{\"é\":[\"pre\"],\"e\\u0301\":[\"decomp\"],\"YWJj\":[\"literal-base64\"]}",
   "workspaceDirectory": "/fixture/workspace",
   "roots": [
     {
