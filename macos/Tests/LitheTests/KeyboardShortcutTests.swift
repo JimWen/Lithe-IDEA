@@ -8,7 +8,9 @@ struct KeyboardShortcutTests {
     @Test
     func catalogHasStableUniqueCommandsAndConflictFreeDefaults() {
         let commands = LitheCommandCatalog.commands
-        #expect(commands.count == 37)
+        #expect(Set(["toggle-project", "toggle-commit", "toggle-find", "toggle-run",
+                     "toggle-debug", "toggle-problems", "toggle-git-log", "toggle-terminal",
+                     "toggle-tests"]).isSubset(of: Set(commands.map(\.id))))
         #expect(Set(commands.map(\.id)).count == commands.count)
 
         let owners = commands.flatMap { command in
@@ -41,7 +43,7 @@ struct KeyboardShortcutTests {
 
     @Test
     @MainActor
-    func actionRegistryCoversEveryCatalogCommand() {
+    func actionRegistryCoversEveryCatalogCommand() async {
         let store = KeyboardShortcutTestStore()
         let settings = AppSettings(store: store)
         let services = MacServiceContainer(
@@ -70,6 +72,7 @@ struct KeyboardShortcutTests {
         #expect(!actionIDs.contains("toggle-maven"))
         #expect(actionIDs.contains("toggle-breakpoint"))
         #expect(actionIDs.contains("view-breakpoints"))
+        await model.shutdownProjectSession()
     }
 
     @Test
@@ -207,6 +210,108 @@ struct KeyboardShortcutTests {
             feature.effectiveBindings(for: "run")
                 == LitheCommandCatalog.command(id: "run")?.defaultBindings
         )
+    }
+
+    @Test
+    func legacyOverrideOutranksNewToolDefaultAcrossSharedSettingsAndReload() throws {
+        let store = KeyboardShortcutTestStore()
+        let settings = AppSettings(store: store)
+        let first = KeyboardShortcutFeatureModel(settings: settings)
+        let second = KeyboardShortcutFeatureModel(settings: settings)
+        let binding = KeyboardShortcutBinding.keyPress(key: "1", modifiers: [.command])
+        settings.setKeyboardShortcutOverrides(["save": [binding], "toggle-debug": []])
+
+        for feature in [first, second, KeyboardShortcutFeatureModel(settings: AppSettings(store: store))] {
+            #expect(feature.effectiveBindings(for: "save") == [binding])
+            #expect(feature.effectiveBindings(for: "toggle-project").isEmpty)
+            #expect(feature.displayText(for: "toggle-project") == nil)
+            #expect(feature.primaryKeyPress(for: "toggle-project") == nil)
+            #expect(feature.registrations.first { $0.commandID == "toggle-project" }?.bindings == [])
+            #expect(feature.conflicts(for: "toggle-project").first?.commandIDs == ["save"])
+            #expect(feature.effectiveBindings(for: "toggle-debug").isEmpty)
+            #expect(feature.conflicts(for: "toggle-debug").isEmpty)
+        }
+        #expect(settings.keyboardShortcutOverrides == ["save": [binding], "toggle-debug": []])
+    }
+
+    @Test
+    func ambiguousLegacyOverridesKeepIntentButNeitherOwnsTheConflictingKey() throws {
+        let settings = AppSettings(store: KeyboardShortcutTestStore())
+        let feature = KeyboardShortcutFeatureModel(settings: settings)
+        let ambiguous = KeyboardShortcutBinding.keyPress(key: "1", modifiers: [.command])
+        let other = KeyboardShortcutBinding.keyPress(key: "k", modifiers: [.command, .option])
+        settings.setKeyboardShortcutOverrides(["save": [ambiguous, other], "run": [ambiguous]])
+
+        #expect(feature.effectiveBindings(for: "save") == [other])
+        #expect(feature.effectiveBindings(for: "run").isEmpty)
+        #expect(feature.effectiveBindings(for: "toggle-project").isEmpty)
+        #expect(feature.configuredBindings(for: "save") == [ambiguous, other])
+        #expect(feature.conflicts(for: "save").first?.commandIDs == ["run"])
+        #expect(feature.conflicts(for: "run").first?.commandIDs == ["save"])
+        #expect(feature.conflictingCommand(for: [ambiguous], excluding: "debug")?.id == "save")
+
+        // A non-conflicting binding can be removed without destroying legacy intent.
+        try feature.replaceBindings(for: "save", with: [ambiguous])
+        try feature.replaceBindings(for: "run", with: [])
+        #expect(feature.effectiveBindings(for: "save") == [ambiguous])
+        #expect(feature.conflicts(for: "save").isEmpty)
+        #expect(settings.keyboardShortcutOverrides["run"] == [])
+    }
+
+    @Test
+    func resettingToolDefaultKeepsItsExplicitOwnerAndReportsTheBlockedDefault() throws {
+        let settings = AppSettings(store: KeyboardShortcutTestStore())
+        let feature = KeyboardShortcutFeatureModel(settings: settings)
+        let binding = KeyboardShortcutBinding.keyPress(key: "1", modifiers: [.command])
+        settings.setKeyboardShortcutOverrides(["save": [binding], "toggle-project": []])
+        feature.resetCommand("toggle-project")
+        #expect(!feature.isCustomized("toggle-project"))
+        #expect(feature.effectiveBindings(for: "toggle-project").isEmpty)
+        #expect(feature.conflicts(for: "toggle-project").first?.commandIDs == ["save"])
+        #expect(settings.keyboardShortcutOverrides == ["save": [binding]])
+        feature.resetAll()
+        #expect(feature.effectiveBindings(for: "toggle-project") == [binding])
+        #expect(feature.resolution.conflicts.isEmpty)
+    }
+
+    @Test
+    func addingShortcutCannotPromoteABlockedDefaultAndDisableItsExistingOwner() throws {
+        let settings = AppSettings(store: KeyboardShortcutTestStore())
+        let feature = KeyboardShortcutFeatureModel(settings: settings)
+        let blocked = KeyboardShortcutBinding.keyPress(key: "1", modifiers: [.command])
+        let added = KeyboardShortcutBinding.keyPress(key: "2", modifiers: [.command])
+        settings.setKeyboardShortcutOverrides(["save": [blocked]])
+        #expect(throws: KeyboardShortcutUpdateError.conflict(commandID: "save")) {
+            try feature.replaceBindings(for: "toggle-project", with: [blocked, added])
+        }
+        #expect(feature.effectiveBindings(for: "save") == [blocked])
+        #expect(settings.keyboardShortcutOverrides["toggle-project"] == nil)
+        try feature.replaceBindings(for: "toggle-project", with: [added])
+        #expect(feature.effectiveBindings(for: "save") == [blocked])
+        #expect(feature.effectiveBindings(for: "toggle-project") == [added])
+    }
+
+    @Test
+    func toolWindowDefaultsMatchTheirMenuAndInputRegistrations() {
+        let feature = KeyboardShortcutFeatureModel(settings: AppSettings(store: KeyboardShortcutTestStore()))
+        let expected: [(String, KeyboardShortcutBinding)] = [
+            ("toggle-project", .keyPress(key: "1", modifiers: [.command])),
+            ("toggle-commit", .keyPress(key: "0", modifiers: [.command])),
+            ("toggle-find", .keyPress(key: "3", modifiers: [.command])),
+            ("toggle-run", .keyPress(key: "4", modifiers: [.command])),
+            ("toggle-debug", .keyPress(key: "5", modifiers: [.command])),
+            ("toggle-problems", .keyPress(key: "6", modifiers: [.command])),
+            ("toggle-git-log", .keyPress(key: "9", modifiers: [.command])),
+            ("toggle-terminal", .keyPress(key: "f12", modifiers: [.option]))
+        ]
+        for (id, binding) in expected {
+            #expect(feature.primaryKeyPress(for: id) == binding)
+            #expect(feature.registrations.first { $0.commandID == id }?.bindings == [binding])
+            #expect(feature.displayText(for: id) == binding.displayText)
+            #expect(ProjectMenuCommand.allCases.filter { $0.shortcutID == id }.count == 1)
+        }
+        #expect(feature.effectiveBindings(for: "toggle-tests").isEmpty)
+        #expect(feature.primaryKeyPress(for: "search-in-project") == .keyPress(key: "f", modifiers: [.shift, .command]))
     }
 }
 

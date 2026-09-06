@@ -387,6 +387,44 @@ struct ProjectWindowManagerTests {
     }
 
     @Test
+    func appearanceCommandsPersistAndFreezeMenuCheckmarksUntilTrackingEnds() async throws {
+        try await withFixture { fixture in
+            let environment = CommandEnvironmentFeatureModel()
+            environment.update(context: nil, isApplicationActive: true, isModal: false)
+            let scheduler = ManualCommandScheduler()
+            let coordinator = makeMenuCoordinator(fixture, environment: environment, scheduler: scheduler)
+            defer { coordinator.stop(); environment.stop() }
+            fixture.settings.colorTheme = .lithe
+            fixture.settings.themePreference = .system
+            fixture.settings.editorTabLayoutMode = .singleLine
+            scheduler.drain()
+            let original = coordinator.renderState
+            let tracking = NSObject()
+            environment.beginTracking(tracking)
+            coordinator.performAppearance(.colorTheme(.codex))
+            coordinator.performAppearance(.themePreference(.dark))
+            coordinator.performAppearance(.editorTabLayout(.multipleRows))
+            scheduler.drain()
+            #expect(coordinator.renderState == original)
+            #expect(fixture.settings.colorTheme == .codex)
+            #expect(fixture.settings.themePreference == .dark)
+            #expect(fixture.settings.editorTabLayoutMode == .multipleRows)
+            environment.endTracking(tracking)
+            scheduler.drain()
+            #expect(coordinator.renderState.colorTheme == .codex)
+            #expect(coordinator.renderState.themePreference == .dark)
+            #expect(coordinator.renderState.editorTabLayoutMode == .multipleRows)
+            environment.update(context: nil, isApplicationActive: true, isModal: true)
+            coordinator.performAppearance(.colorTheme(.linear))
+            #expect(fixture.settings.colorTheme == .codex)
+            coordinator.stop()
+            environment.update(context: nil, isApplicationActive: true, isModal: false)
+            coordinator.performAppearance(.colorTheme(.linear))
+            #expect(fixture.settings.colorTheme == .codex)
+        }
+    }
+
+    @Test
     func menuHostTimeoutRejectsRepeatedRequestsAndLateSceneDelivery() async throws {
         try await withFixture { fixture in
             let manager = fixture.manager

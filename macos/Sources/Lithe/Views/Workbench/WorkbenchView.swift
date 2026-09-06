@@ -767,7 +767,8 @@ struct WorkbenchView: View {
                 VStack(spacing: ActivityBarMetrics.spacing) {
                     ForEach(model.availableSidebarDestinations) { destination in
                         Button {
-                            model.toggleSidebar(destination)
+                            if let id = destination.commandID { model.performShortcutCommand(id: id) }
+                            else { model.toggleSidebar(destination) }
                         } label: {
                             Group {
                                 if let ideaAssetPath = destination.ideaAssetPath {
@@ -793,12 +794,14 @@ struct WorkbenchView: View {
                         }
                         .buttonStyle(.plain)
                         .lithePointer()
-                        .disabled(!destination.isAvailable)
+                        .disabled(!destination.isAvailable || destination.commandID.map {
+                            !model.canPerformShortcutCommand(id: $0)
+                        } == true)
                         .foregroundStyle(model.isSidebarVisible && model.selectedSidebar == destination ? LitheTheme.primaryText : LitheTheme.secondaryText)
                         .help(
                             destination.isAvailable
-                                ? LocalizedStringKey(destination.title)
-                                : LocalizedStringKey("Pull Requests integration is under development")
+                                ? commandHelp(destination.title, commandID: destination.commandID)
+                                : Text("Pull Requests integration is under development")
                         )
                         .accessibilityLabel(LocalizedStringKey(destination.title))
                         .accessibilityHint(
@@ -821,6 +824,7 @@ struct WorkbenchView: View {
                                     systemImage: contribution.icon ?? "square.grid.2x2",
                                     ideaAssetPath: renderer.ideaAssetPath,
                                     help: contribution.title,
+                                    commandID: moduleUIRegistry.commandID(for: contribution),
                                     isSelected: renderer.isSelected(model)
                                 ) {
                                     moduleUIRegistry.perform(contribution, model: model)
@@ -832,9 +836,10 @@ struct WorkbenchView: View {
                             systemImage: "gearshape",
                             ideaAssetPath: "general/gear.svg",
                             help: "Settings",
+                            commandID: "settings",
                             isSelected: model.isSettingsPresented
                         ) {
-                            model.showSettings()
+                            model.performShortcutCommand(id: "settings")
                         }
                     }
                     // Keep short tool lists against the status bar while preserving
@@ -1023,6 +1028,7 @@ struct WorkbenchView: View {
         systemImage: String,
         ideaAssetPath: String? = nil,
         help: String,
+        commandID: String? = nil,
         isSelected: Bool,
         action: @escaping () -> Void
     ) -> some View {
@@ -1052,8 +1058,16 @@ struct WorkbenchView: View {
         .buttonStyle(.plain)
         .lithePointer()
         .foregroundStyle(isSelected ? LitheTheme.primaryText : LitheTheme.secondaryText)
-        .help(LocalizedStringKey(help))
+        .disabled(commandID.map { !model.canPerformShortcutCommand(id: $0) } == true)
+        .help(commandHelp(help, commandID: commandID))
         .accessibilityLabel(Text(LocalizedStringKey(help)))
+    }
+
+    private func commandHelp(_ title: String, commandID: String?) -> Text {
+        let title = Text(LocalizedStringKey(title))
+        guard let commandID,
+              let binding = model.keyboardShortcutFeature.displayText(for: commandID) else { return title }
+        return title + Text(" (\(binding))")
     }
 
     private var workspaceArea: some View {

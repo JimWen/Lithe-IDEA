@@ -69,7 +69,7 @@ extension AppModel {
             let enabled: Bool
             switch command {
             case .newProject, .openProject, .openFile, .cloneRepository, .settings,
-                 .languageSettings, .checkUpdates: enabled = true
+                 .languageSettings, .appearanceSettings, .checkUpdates: enabled = true
             case .newFile, .newDirectory, .closeProject, .synchronize, .project:
                 enabled = workspace
             case .save, .replaceInFile: enabled = writable
@@ -83,7 +83,8 @@ extension AppModel {
                 enabled = git
             case .find, .searchEverywhere, .findInFiles, .replaceInFiles: enabled = search
             case .terminal: enabled = workspace && available(.terminal)
-            case .run, .editConfigurations, .rescan: enabled = execution
+            case .run, .tests, .editConfigurations, .rescan: enabled = execution
+            case .debug: enabled = execution && available(.debug)
             case .problems: enabled = workspace && language
             case .back: enabled = canNavigateBack
             case .forward: enabled = canNavigateForward
@@ -118,6 +119,8 @@ extension AppModel {
         if isGitLogVisible { result.selected.insert(.git) }
         if isTerminalVisible { result.selected.insert(.terminal) }
         if isRunVisible { result.selected.insert(.run) }
+        if isDebugVisible { result.selected.insert(.debug) }
+        if isTestsVisible { result.selected.insert(.tests) }
         if isProblemsVisible { result.selected.insert(.problems) }
         result.recentProjects = recentProjects
         return result
@@ -143,15 +146,9 @@ extension AppModel {
         case .saveAll: _ = saveAllDocuments()
         case .closeEditor: _ = requestCloseActiveWorkbenchItem()
         case .synchronize: scheduleMenuCommand(request, canBegin: canBegin) { model in await model.refreshWorkspace() }
-        case .project: toggleSidebar(.project)
-        case .commit:
-            if isSidebarVisible && selectedSidebar == .changes { isSidebarVisible = false }
-            else { showCommitToolWindow(request, canBegin: canBegin) }
-        case .find: toggleSidebar(.search)
+        case .project, .commit, .find, .terminal, .run, .debug, .tests, .problems:
+            if let id = command.shortcutID { performShortcutCommand(id: id) }
         case .git: scheduleMenuCommand(request, canBegin: canBegin) { model in await model.toggleGitLog() }
-        case .terminal: toggleTerminal()
-        case .run: toggleRun()
-        case .problems: toggleProblems()
         case .back: navigateBack()
         case .forward: navigateForward()
         case .searchEverywhere: toggleSearchEverywhere()
@@ -188,7 +185,7 @@ extension AppModel {
         case .closeProject, .mergeWindows, .detachWindow, .previousProject, .nextProject:
             break // The native router owns window operations and close confirmation.
         case .newProject, .openProject, .openFile, .cloneRepository, .settings,
-             .languageSettings, .checkUpdates:
+             .languageSettings, .appearanceSettings, .checkUpdates:
             break // Application requests never inherit project execution eligibility.
         }
     }

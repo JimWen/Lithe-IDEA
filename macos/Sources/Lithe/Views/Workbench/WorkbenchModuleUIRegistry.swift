@@ -16,7 +16,21 @@ enum WorkbenchModuleUIRegistryError: Error, Equatable {
 struct WorkbenchModuleUIRegistry {
     struct Action {
         let id: String
+        let commandID: String?
         let perform: @MainActor (AppModel) -> Void
+
+        init(id: String, perform: @escaping @MainActor (AppModel) -> Void) {
+            self.id = id
+            commandID = nil
+            self.perform = perform
+        }
+
+        init(id: String, commandID: String) {
+            precondition(LitheCommandCatalog.command(id: commandID) != nil)
+            self.id = id
+            self.commandID = commandID
+            perform = { $0.performShortcutCommand(id: commandID) }
+        }
     }
 
     struct Renderer {
@@ -75,11 +89,11 @@ struct WorkbenchModuleUIRegistry {
         }
     }
 
-    private let actions: [String: @MainActor (AppModel) -> Void]
+    private let actions: [String: Action]
     private let renderers: [String: Renderer]
 
     init(registrations: [Registration]) throws {
-        var actions: [String: @MainActor (AppModel) -> Void] = [:]
+        var actions: [String: Action] = [:]
         var renderers: [String: Renderer] = [:]
 
         for registration in registrations {
@@ -87,7 +101,7 @@ struct WorkbenchModuleUIRegistry {
                 guard actions[action.id] == nil else {
                     throw WorkbenchModuleUIRegistryError.duplicateActionID(action.id)
                 }
-                actions[action.id] = action.perform
+                actions[action.id] = action
             }
             for renderer in registration.renderers {
                 guard renderers[renderer.id] == nil else {
@@ -126,7 +140,11 @@ struct WorkbenchModuleUIRegistry {
 
     func perform(_ contribution: ModuleContribution, model: AppModel) {
         guard let actionID = contribution.actionID else { return }
-        actions[actionID]?(model)
+        actions[actionID]?.perform(model)
+    }
+
+    func commandID(for contribution: ModuleContribution) -> String? {
+        contribution.actionID.flatMap { actions[$0]?.commandID }
     }
 
     func selectedToolContent(

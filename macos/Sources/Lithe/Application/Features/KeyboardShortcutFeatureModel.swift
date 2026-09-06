@@ -18,16 +18,24 @@ struct KeyboardShortcutCommandSection: Identifiable, Equatable, Sendable {
 @MainActor
 final class KeyboardShortcutFeatureModel: ObservableObject {
     @Published private(set) var recordingCommandID: String?
+    @Published private(set) var resolution: KeyboardShortcutResolution
 
     private let settings: AppSettings
     private var settingsObservation: AnyCancellable?
 
     init(settings: AppSettings) {
         self.settings = settings
+        resolution = KeyboardShortcutResolution(
+            commands: LitheCommandCatalog.commands, overrides: settings.keyboardShortcutOverrides
+        )
         settingsObservation = settings.$keyboardShortcutOverrides
             .dropFirst()
-            .sink { [weak self] _ in
-                self?.objectWillChange.send()
+            .sink { [weak self] overrides in
+                // Published sends before AppSettings stores the value. Resolve
+                // the incoming payload, never reread its old stored property.
+                self?.resolution = KeyboardShortcutResolution(
+                    commands: LitheCommandCatalog.commands, overrides: overrides
+                )
             }
     }
 
@@ -76,10 +84,15 @@ final class KeyboardShortcutFeatureModel: ObservableObject {
     }
 
     func effectiveBindings(for commandID: String) -> [KeyboardShortcutBinding] {
-        if let override = settings.keyboardShortcutOverrides[commandID] {
-            return override
-        }
-        return LitheCommandCatalog.command(id: commandID)?.defaultBindings ?? []
+        resolution.effective[commandID] ?? []
+    }
+
+    func configuredBindings(for commandID: String) -> [KeyboardShortcutBinding] {
+        resolution.configured[commandID] ?? []
+    }
+
+    func conflicts(for commandID: String) -> [KeyboardShortcutResolution.Conflict] {
+        resolution.conflicts[commandID] ?? []
     }
 
     func displayText(for commandID: String) -> String? {
@@ -107,7 +120,11 @@ final class KeyboardShortcutFeatureModel: ObservableObject {
         guard Set(bindings).count == bindings.count else {
             throw KeyboardShortcutUpdateError.duplicateBinding
         }
-        if let owner = conflictingCommand(for: bindings, excluding: commandID) {
+        // Removing or keeping an already-conflicting legacy binding must not
+        // make the configuration impossible to repair one binding at a time.
+        let explicit = settings.keyboardShortcutOverrides[commandID] ?? []
+        let introduced = bindings.filter { !explicit.contains($0) }
+        if let owner = conflictingCommand(for: introduced, excluding: commandID) {
             throw KeyboardShortcutUpdateError.conflict(commandID: owner.id)
         }
 
@@ -149,7 +166,7 @@ final class KeyboardShortcutFeatureModel: ObservableObject {
         guard !candidates.isEmpty else { return nil }
         return commands.first { command in
             command.id != excludedCommandID
-                && !candidates.isDisjoint(with: effectiveBindings(for: command.id))
+                && !candidates.isDisjoint(with: configuredBindings(for: command.id))
         }
     }
 }

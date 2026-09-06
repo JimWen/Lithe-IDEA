@@ -123,6 +123,19 @@ struct KeyboardShortcutSettingsView: View {
                 }
             }
 
+            ForEach(feature.conflicts(for: command.id)) { conflict in
+                Label {
+                    Text(conflict.binding.displayText) + Text(" is not active; also assigned to ")
+                        + Text(conflict.commandIDs.map {
+                            localizedString(LitheCommandCatalog.command(id: $0)?.title ?? $0)
+                        }.joined(separator: ", "))
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(LitheTheme.warning)
+            }
+
             if editingTarget?.commandID == command.id {
                 KeyboardShortcutRecorderView(
                     feature: feature,
@@ -152,7 +165,7 @@ struct KeyboardShortcutSettingsView: View {
     }
 
     private func shortcutControls(for command: LitheCommandDefinition) -> some View {
-        let bindings = feature.effectiveBindings(for: command.id)
+        let bindings = feature.configuredBindings(for: command.id)
         return HStack(spacing: 6) {
             if bindings.isEmpty {
                 Button("Not Assigned") { beginEditing(commandID: command.id, bindingIndex: nil) }
@@ -234,7 +247,7 @@ struct KeyboardShortcutSettingsView: View {
 
     private func save(_ binding: KeyboardShortcutBinding, for command: LitheCommandDefinition) {
         guard let editingTarget, editingTarget.commandID == command.id else { return }
-        var bindings = feature.effectiveBindings(for: command.id)
+        var bindings = feature.configuredBindings(for: command.id)
         if let index = editingTarget.bindingIndex, bindings.indices.contains(index) {
             bindings[index] = binding
         } else {
@@ -268,10 +281,19 @@ struct KeyboardShortcutSettingsView: View {
 
     private func removeBinding(commandID: String, index: Int) {
         cancelEditing()
-        var bindings = feature.effectiveBindings(for: commandID)
+        var bindings = feature.configuredBindings(for: commandID)
         guard bindings.indices.contains(index) else { return }
         bindings.remove(at: index)
-        try? feature.replaceBindings(for: commandID, with: bindings)
+        do {
+            try feature.replaceBindings(for: commandID, with: bindings)
+        } catch KeyboardShortcutUpdateError.conflict(let ownerID) {
+            editingTarget = EditingTarget(commandID: commandID, bindingIndex: nil)
+            let title = LitheCommandCatalog.command(id: ownerID)?.title ?? ownerID
+            validationIssue = .conflict(commandTitle: title)
+        } catch {
+            editingTarget = EditingTarget(commandID: commandID, bindingIndex: nil)
+            validationIssue = .needsActionModifier
+        }
     }
 
     private func localizedString(_ key: String) -> String {

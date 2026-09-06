@@ -1439,3 +1439,17 @@
 "Collapse all file groups" = "折叠所有文件分组";
 
 "Search Git log" = "搜索 Git 日志";
+
+" is not active; also assigned to " = " 未启用；同时分配给 ";
+
+"Appearance Settings…" = "外观设置…";
+
+"Editor Tabs" = "编辑器标签";
+
+"Show or hide the Project tool window" = "显示或隐藏项目工具窗口";
+
+"Show or hide the Commit tool window" = "显示或隐藏提交工具窗口";
+
+"Show or hide the Find tool window" = "显示或隐藏查找工具窗口";
+
+"Tests" = "测试";

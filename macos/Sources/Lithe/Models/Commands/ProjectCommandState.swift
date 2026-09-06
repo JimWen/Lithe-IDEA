@@ -12,11 +12,11 @@ struct ProjectCommandContext: Equatable, Hashable, Sendable {
 enum ProjectMenuCommand: String, CaseIterable, Sendable {
     case newProject, newFile, newDirectory, openProject, openFile, cloneRepository
     case closeProject, save, saveAll, closeEditor, synchronize, settings, checkUpdates
-    case project, commit, find, git, terminal, run, problems
+    case project, commit, find, git, terminal, run, debug, tests, problems
     case mergeWindows, detachWindow, previousProject, nextProject
     case back, forward, searchEverywhere, goToLine, definition, implementation, usages
     case findInFile, replaceInFile, findInFiles, replaceInFiles, findNext, findPrevious
-    case editConfigurations, rescan, languageSettings, restartLanguageServers
+    case editConfigurations, rescan, languageSettings, appearanceSettings, restartLanguageServers
     case fileHistory, projectHistory, showCommit, push, update, fetch, branches, newBranch, showLog
 
     var shortcutID: String? {
@@ -31,6 +31,8 @@ enum ProjectMenuCommand: String, CaseIterable, Sendable {
         case .git: "toggle-git-log"
         case .terminal: "toggle-terminal"
         case .run: "toggle-run"
+        case .debug: "toggle-debug"
+        case .tests: "toggle-tests"
         case .problems: "toggle-problems"
         case .back: "navigate-back"
         case .forward: "navigate-forward"
@@ -54,7 +56,7 @@ enum ProjectMenuCommand: String, CaseIterable, Sendable {
     var isApplicationCommand: Bool {
         switch self {
         case .newProject, .openProject, .openFile, .cloneRepository, .settings,
-             .checkUpdates, .languageSettings: true
+             .checkUpdates, .languageSettings, .appearanceSettings: true
         default: false
         }
     }

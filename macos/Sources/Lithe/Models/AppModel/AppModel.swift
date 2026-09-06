@@ -23,24 +23,12 @@ final class AppModel: ObservableObject, Identifiable {
     @Published var selectedSidebar: SidebarDestination = .project {
         didSet {
             isSidebarVisible = true
-            guard oldValue != selectedSidebar else { return }
+            // Reopening the retained Commit selection must also wake a Git
+            // module that went idle while its tool window was hidden.
+            guard oldValue != selectedSidebar || selectedSidebar == .changes else { return }
             sidebarRefreshTask?.cancel()
             sidebarRefreshTask = nil
-            // Sidebar changes can happen faster than Git or GitHub can respond.
-            // Keep only the refresh associated with the currently visible pane.
-            sidebarRefreshTask = Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard !Task.isCancelled else { return }
-                switch self.selectedSidebar {
-                case .changes:
-                    await self.refreshGit()
-                case .pullRequests:
-                    guard LitheFeatureAvailability.githubPullRequests else { return }
-                    await self.githubFeature.refresh(workspaceURL: self.workspaceURL)
-                default:
-                    break
-                }
-            }
+            sidebarRefreshTask = makeSidebarRefreshTask()
         }
     }
     @Published var isRunVisible = false
@@ -697,10 +685,16 @@ final class AppModel: ObservableObject, Identifiable {
 
     func shutdownProjectSession() async {
         shortcutDetector?.stop()
-        menuCommandTasks.values.forEach { $0.cancel() }
+        let pendingSidebarRefresh = sidebarRefreshTask
+        sidebarRefreshTask = nil
         let pendingMenuCommands = Array(menuCommandTasks.values)
-        for task in pendingMenuCommands { await task.value }
         menuCommandTasks.removeAll()
+        // Cancel every producer before yielding: a pending menu action can
+        // otherwise create a new sidebar refresh while teardown awaits it.
+        pendingSidebarRefresh?.cancel()
+        pendingMenuCommands.forEach { $0.cancel() }
+        await pendingSidebarRefresh?.value
+        for task in pendingMenuCommands { await task.value }
         commandStateFeatureStorage?.stop()
         commandStateFeatureStorage = nil
         cancelJavaTestWorkflows()

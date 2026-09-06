@@ -51,12 +51,15 @@ enum LitheCommandCatalog {
         command("search-in-project", "Find in Files", "Search text across the workspace", .navigation, "f", [.shift, .command]),
         command("replace-in-project", "Replace in Files", "Replace text across the workspace", .navigation, "r", [.shift, .command]),
 
-        command("toggle-terminal", "Toggle Terminal", "Show or hide the Terminal tool window", .window),
-        command("toggle-problems", "Toggle Problems", "Show or hide language diagnostics", .window),
-        command("toggle-git-log", "Toggle Git Log", "Show or hide Git history", .window),
-        command("toggle-run", "Toggle Run", "Show or hide run output", .window),
+        command("toggle-project", "Project", "Show or hide the Project tool window", .window, "1", [.command]),
+        command("toggle-commit", "Commit", "Show or hide the Commit tool window", .window, "0", [.command]),
+        command("toggle-find", "Find", "Show or hide the Find tool window", .window, "3", [.command]),
+        command("toggle-terminal", "Toggle Terminal", "Show or hide the Terminal tool window", .window, "f12", [.option]),
+        command("toggle-problems", "Toggle Problems", "Show or hide language diagnostics", .window, "6", [.command]),
+        command("toggle-git-log", "Toggle Git Log", "Show or hide Git history", .window, "9", [.command]),
+        command("toggle-run", "Toggle Run", "Show or hide run output", .window, "4", [.command]),
         command("toggle-tests", "Toggle Tests", "Show or hide language-neutral test runners", .window),
-        command("toggle-debug", "Toggle Debug", "Show or hide the Debug tool window", .window),
+        command("toggle-debug", "Toggle Debug", "Show or hide the Debug tool window", .window, "5", [.command]),
 
         command("local-history", "Local History", "Open history for the active file", .history),
         command("project-local-history", "Project Local History", "Open project-wide local history", .history)

@@ -9,6 +9,64 @@ import Testing
 @Suite("Run entry points", .serialized)
 @MainActor
 struct RunEntryPointTests {
+    /// Integration coverage uses the native Git adapter against an isolated
+    /// temporary workspace; it does not create commits or contact a remote.
+    @Test
+    func reopeningRetainedCommitSelectionWakesSleepingGitIntegration() async throws {
+        try await withToolCommandModel { model, workspace in
+            model.openProjectDirectly(workspace.root)
+            model.performShortcutCommand(id: "toggle-commit")
+            #expect(await awaitChange(on: model) {
+                model.gitFeatureIfActive != nil && !model.isRefreshingGit
+            })
+            model.performShortcutCommand(id: "toggle-commit")
+            #expect(!model.isSidebarVisible && model.selectedSidebar == .changes)
+            try await model.services.moduleRuntime.sleep(.git)
+            #expect(model.gitFeatureIfActive == nil)
+            #expect(model.canPerformShortcutCommand(id: "rebuild-java-index"))
+            let action = try #require(LitheActionRegistry.actions(for: model).first { $0.id == "toggle-commit" })
+            action.perform()
+            #expect(model.isSidebarVisible && model.selectedSidebar == .changes)
+            #expect(await awaitChange(on: model) {
+                model.gitFeatureIfActive != nil && !model.isRefreshingGit
+            }, "Reopening the same Commit selection must reactivate Git")
+        }
+    }
+
+    @Test
+    func runToolCommandActivatesExecutionAndSwitchesTheVisibleTool() async throws {
+        try await withToolCommandModel { model, workspace in
+            model.openProjectDirectly(workspace.root)
+            model.isTerminalVisible = true
+            model.isGitLogVisible = true
+            model.isProblemsVisible = true
+            let action = try #require(LitheActionRegistry.actions(for: model).first { $0.id == "toggle-run" })
+            action.perform()
+            #expect(model.isRunVisible)
+            #expect(!model.isTerminalVisible && !model.isGitLogVisible && !model.isProblemsVisible)
+            #expect(await awaitLoadDrivenChange(on: model) {
+                model.runFeatureIfActive?.projectLoadState == .bound(workspace: workspace.root.standardizedFileURL)
+            }, "The command must activate and bind the execution module")
+            model.performShortcutCommand(id: "toggle-run")
+            #expect(!model.isRunVisible)
+        }
+    }
+
+    private func withToolCommandModel(
+        _ body: (AppModel, JavaWorkspaceFixture) async throws -> Void
+    ) async throws {
+        let workspace = try JavaWorkspaceFixture()
+        defer { workspace.remove() }
+        let model = makeAppModel(workspaceOperations: SequencedWorkspaceOperations.unavailableThenReady(workspace.snapshot))
+        do {
+            try await body(model, workspace)
+        } catch {
+            await model.shutdownProjectSession()
+            throw error
+        }
+        await model.shutdownProjectSession()
+    }
+
     @Test
     func editConfigurationsWaitsForTheSnapshotThenOpensWithoutLaunching() async throws {
         let workspace = try JavaWorkspaceFixture()

@@ -76,10 +76,13 @@ enum LitheActionRegistry {
             action("find-next", model: model) { model.navigateFind(offset: 1) },
             action("find-previous", model: model) { model.navigateFind(offset: -1) },
             action("go-to-implementation", model: model) { model.goToImplementation() },
+            action("toggle-project", model: model) { model.toggleSidebar(.project) },
+            action("toggle-commit", model: model) { model.toggleSidebar(.changes) },
+            action("toggle-find", model: model) { model.toggleSidebar(.search) },
             action("toggle-terminal", model: model) { model.toggleTerminal() },
             action("toggle-problems", model: model) { model.toggleProblems() },
             action("toggle-git-log", model: model) { Task { await model.toggleGitLog() } },
-            action("toggle-run", model: model) { model.isRunVisible.toggle() },
+            action("toggle-run", model: model) { model.toggleRun() },
             action("toggle-tests", model: model) { model.toggleTests() },
             action("toggle-debug", model: model) { model.toggleDebug() },
             action("search-in-project", model: model) { model.openProjectSearch() },
@@ -113,7 +116,10 @@ enum LitheActionRegistry {
             subtitle: definition.subtitle,
             group: definition.group,
             keyEquivalent: model.keyboardShortcutFeature.displayText(for: id),
-            perform: perform
+            perform: {
+                guard model.canPerformShortcutCommand(id: id) else { return }
+                perform()
+            }
         )
     }
 }

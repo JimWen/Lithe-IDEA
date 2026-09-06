@@ -22,6 +22,28 @@ extension AppModel {
         }
     }
 
+    /// The aggregate retains and cancels this task; the sidebar workflow owns
+    /// the activation logic and checks the project identity across suspension.
+    func makeSidebarRefreshTask() -> Task<Void, Never> {
+        let workspaceGeneration = workspaceFeature.workspaceGeneration
+        return Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled,
+                  self.workspaceFeature.workspaceGeneration == workspaceGeneration else { return }
+            switch self.selectedSidebar {
+            case .changes:
+                guard let git = await self.activateGitModule(), !Task.isCancelled,
+                      self.workspaceFeature.workspaceGeneration == workspaceGeneration,
+                      self.selectedSidebar == .changes else { return }
+                await git.refreshGit()
+            case .pullRequests:
+                guard LitheFeatureAvailability.githubPullRequests else { return }
+                await self.githubFeature.refresh(workspaceURL: self.workspaceURL)
+            default:
+                break
+            }
+        }
+    }
+
     var workspaceSnapshotID: UUID? { workspaceFeature.appliedSnapshot?.id }
     var rootNode: FileNode? { workspaceFeature.rootNode }
     var projectFiles: [URL] { workspaceFeature.projectFiles }
@@ -377,7 +399,10 @@ extension AppModel {
     }
 
     func canPerformShortcutCommand(id: String) -> Bool {
-        switch id {
+        if let command = ProjectMenuCommand.allCases.first(where: { $0.shortcutID == id }) {
+            return projectCommandState().enabled.contains(command)
+        }
+        return switch id {
         case "open-project", "settings":
             true
         case "save", "find-in-file", "replace-in-file", "go-to-line", "local-history", "reveal-in-finder", "toggle-breakpoint":
@@ -400,7 +425,7 @@ extension AppModel {
              "replace-in-project", "project-local-history", "run", "debug",
              "stop-run", "stop-debug", "toggle-terminal", "toggle-problems",
              "toggle-git-log", "toggle-run", "toggle-tests",
-             "toggle-debug", "view-breakpoints":
+             "toggle-debug", "view-breakpoints", "rebuild-java-index":
             workspaceURL != nil
         default:
             false

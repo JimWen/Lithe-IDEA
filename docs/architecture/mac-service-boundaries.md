@@ -109,6 +109,16 @@ availability runs on a bounded background worker. Window-opening and native rest
 paths allocate session managers; process-local retired identities prevent a
 delayed scene from reviving a cancelled presentation request.
 
+`KeyboardShortcutFeatureModel` resolves persisted bindings before registration
+or display. Explicit overrides outrank defaults; colliding explicit bindings
+are disabled for every owner while their original intent remains editable.
+Menus, activity-bar help, search actions and native detectors use that same
+resolution. Module UI actions map explicitly to catalog command IDs. Tool-window
+commands share live eligibility and activation paths, including reopening a
+retained Commit selection after Git sleeps. View-menu appearance and editor-tab
+choices join the frozen menu snapshot and write the existing application
+settings only after validating the native application context.
+
 Find in Files and the Find tool window share the search module's query/options
 and results. The popup owns selection and bounded source previews. Search
 generations reject late responses when the query or scope changes. Open Files

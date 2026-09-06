@@ -25,7 +25,7 @@ enum WorkbenchModuleUIComposition {
     private static let terminalRegistration = WorkbenchModuleUIRegistry.Registration(
         contributions: TerminalModule.moduleContributions,
         actions: [
-            .init(id: "terminal.toggle", perform: { $0.toggleTerminal() })
+            .init(id: "terminal.toggle", commandID: "toggle-terminal")
         ],
         renderers: [
             .init(
@@ -41,9 +41,7 @@ enum WorkbenchModuleUIComposition {
     private static let gitRegistration = WorkbenchModuleUIRegistry.Registration(
         contributions: GitModule.moduleContributions,
         actions: [
-            .init(id: "git.log.toggle", perform: { model in
-                Task { await model.toggleGitLog() }
-            })
+            .init(id: "git.log.toggle", commandID: "toggle-git-log")
         ],
         renderers: [
             .init(
@@ -59,7 +57,7 @@ enum WorkbenchModuleUIComposition {
     private static let languageRegistration = WorkbenchModuleUIRegistry.Registration(
         contributions: LanguageIntelligenceModule.moduleContributions,
         actions: [
-            .init(id: "language.problems.toggle", perform: { $0.toggleProblems() })
+            .init(id: "language.problems.toggle", commandID: "toggle-problems")
         ],
         renderers: [
             .init(
@@ -75,8 +73,8 @@ enum WorkbenchModuleUIComposition {
     private static let executionRegistration = WorkbenchModuleUIRegistry.Registration(
         contributions: ExecutionModule.moduleContributions,
         actions: [
-            .init(id: "execution.run.toggle", perform: { $0.toggleRun() }),
-            .init(id: "execution.tests.toggle", perform: { $0.toggleTests() })
+            .init(id: "execution.run.toggle", commandID: "toggle-run"),
+            .init(id: "execution.tests.toggle", commandID: "toggle-tests")
         ],
         renderers: [
             .init(
@@ -109,7 +107,7 @@ enum WorkbenchModuleUIComposition {
     private static let debugRegistration = WorkbenchModuleUIRegistry.Registration(
         contributions: DebugModule.moduleContributions,
         actions: [
-            .init(id: "debug.toggle", perform: { $0.toggleDebug() })
+            .init(id: "debug.toggle", commandID: "toggle-debug")
         ],
         renderers: [
             .init(

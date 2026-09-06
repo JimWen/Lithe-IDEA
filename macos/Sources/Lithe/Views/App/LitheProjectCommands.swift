@@ -13,6 +13,7 @@ struct LitheProjectCommands: Commands {
         LitheFileCommands(items: items)
         LitheFindCommands(items: items)
         LitheToolCommands(items: items)
+        LitheViewCommands(items: items)
         CommandGroup(replacing: .appSettings) {
             items.button("Settings…", .settings)
         }
@@ -20,17 +21,6 @@ struct LitheProjectCommands: Commands {
             items.button("Check for Updates…", .checkUpdates)
         }
         CommandGroup(after: .windowArrangement) {
-            Menu("Tool Windows") {
-                items.button("Project", .project)
-                items.button("Commit", .commit)
-                items.button("Find", .find)
-                Divider()
-                items.button("Git", .git)
-                items.button("Terminal", .terminal)
-                items.button("Run", .run)
-                items.button("Problems", .problems)
-            }
-            Divider()
             items.button("Merge All Project Windows", .mergeWindows)
             items.button("Move Project to New Window", .detachWindow)
             Divider()
@@ -51,6 +41,58 @@ struct LitheProjectCommands: Commands {
     }
 }
 
+private struct LitheViewCommands: Commands {
+    let items: ProjectCommandMenuItems
+
+    var body: some Commands {
+        CommandGroup(before: .toolbar) {
+            Menu("Tool Windows") {
+                items.toggle("Project", .project)
+                items.toggle("Commit", .commit)
+                items.toggle("Find", .find)
+                Divider()
+                items.toggle("Git", .git)
+                items.toggle("Terminal", .terminal)
+                items.toggle("Run", .run)
+                items.toggle("Debug", .debug)
+                items.toggle("Problems", .problems)
+                items.toggle("Tests", .tests)
+            }
+            Menu("Appearance") {
+                Menu("Color theme") {
+                    ForEach(AppColorTheme.allCases) { value in
+                        appearanceToggle(value.title, selected: items.snapshot.colorTheme == value,
+                                         command: .colorTheme(value))
+                    }
+                }
+                Menu("Appearance mode") {
+                    ForEach(AppThemePreference.allCases) { value in
+                        appearanceToggle(value.title, selected: items.snapshot.themePreference == value,
+                                         command: .themePreference(value))
+                    }
+                }
+                Divider()
+                items.button("Appearance Settings…", .appearanceSettings)
+            }
+            Menu("Editor Tabs") {
+                ForEach(EditorTabLayoutMode.allCases) { value in
+                    appearanceToggle(value.title, selected: items.snapshot.editorTabLayoutMode == value,
+                                     command: .editorTabLayout(value))
+                }
+            }
+            Divider()
+        }
+    }
+
+    private func appearanceToggle(_ title: String, selected: Bool, command: AppearanceMenuCommand) -> some View {
+        Toggle(LocalizedStringKey(title), isOn: Binding(
+            get: { selected }, set: { _ in items.presentation.performAppearance(command) }
+        ))
+        .disabled(!items.snapshot.isEnabled(.appearanceSettings))
+    }
+}
+
+@MainActor
 private struct ProjectCommandMenuItems {
     let snapshot: ProjectMenuRenderState
     let presentation: MenuPresentationCoordinator
@@ -59,6 +101,15 @@ private struct ProjectCommandMenuItems {
         Button(title) { presentation.perform(command, from: snapshot) }
             .disabled(!snapshot.isEnabled(command))
             .litheKeyboardShortcut(snapshot.project.bindings[command])
+    }
+
+    func toggle(_ title: LocalizedStringKey, _ command: ProjectMenuCommand) -> some View {
+        Toggle(title, isOn: Binding(
+            get: { snapshot.project.selected.contains(command) },
+            set: { _ in presentation.perform(command, from: snapshot) }
+        ))
+        .disabled(!snapshot.isEnabled(command))
+        .litheKeyboardShortcut(snapshot.project.bindings[command])
     }
 
     func recentTitle(_ project: RecentProject) -> String {

@@ -111,9 +111,9 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .project: "Project"
-        case .changes: "Changes"
+        case .changes: "Commit"
         case .pullRequests: "Pull Requests"
-        case .search: "Search"
+        case .search: "Find"
         case .database: "Database"
         }
     }
@@ -124,6 +124,14 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         case .pullRequests: "arrow.triangle.pull"
         case .search: "magnifyingglass"
         case .database: "cylinder.split.1x2"
+        }
+    }
+    var commandID: String? {
+        switch self {
+        case .project: "toggle-project"
+        case .changes: "toggle-commit"
+        case .search: "toggle-find"
+        default: nil
         }
     }
     var ideaAssetPath: String? {

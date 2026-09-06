@@ -524,7 +524,13 @@ private struct SettingsWindow: View {
             model.isSettingsPresented = false
         }
         .onReceive(model.$isSettingsPresented) { isPresented in
-            if isPresented { windowReference.requestPresentation() }
+            if isPresented {
+                // A retained settings window may show a manually selected category
+                // even when the requested category has not changed since last open.
+                viewState.searchQuery = ""
+                viewState.selection = model.requestedSettingsCategory
+                windowReference.requestPresentation()
+            }
         }
     }
 

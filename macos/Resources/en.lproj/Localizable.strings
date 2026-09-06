@@ -287,3 +287,17 @@
 "Open…" = "Open…";
 
 "Save All" = "Save All";
+
+" is not active; also assigned to " = " is not active; also assigned to ";
+
+"Appearance Settings…" = "Appearance Settings…";
+
+"Editor Tabs" = "Editor Tabs";
+
+"Show or hide the Project tool window" = "Show or hide the Project tool window";
+
+"Show or hide the Commit tool window" = "Show or hide the Commit tool window";
+
+"Show or hide the Find tool window" = "Show or hide the Find tool window";
+
+"Tests" = "Tests";

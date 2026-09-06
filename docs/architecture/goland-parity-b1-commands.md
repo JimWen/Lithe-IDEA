@@ -1,6 +1,17 @@
 # GoLand 对齐 B1：菜单生命周期、命令与工具窗口入口
 
-状态：2026-09-06 独立 agent 方案复核通过，见 [审查记录](goland-parity-plan-review.md)；实现进行中，本文不代表产品已验收。B1 是完整 GoLand/Zed 对齐目标的首批，Structure、TODO、Pull Requests、搜索、设置、语言工具等后续批次仍须实现。
+状态：2026-09-06 B1a 已在 `8b8f21be` 提交并安装；B1b/B1c 已通过独立代码审查、976 项测试及 ARM64 发布包实际点击验收。方案复核见 [审查记录](goland-parity-plan-review.md)。B1 是完整 GoLand/Zed 对齐目标的首批，Structure、TODO、Pull Requests、搜索、设置、语言工具等后续批次仍须实现。
+
+## 实现记录与方案调整
+
+以下各节保留实现前的设计与验收矩阵；实际落地以本记录及源码为准。
+
+- B1a 采用原生窗口观察器作为命令输入上下文的唯一来源，移除设计中的第二条 `FocusedValue` 路径。菜单携带窗口、会话和工作区代际身份，执行时仍重新验证。
+- 最近项目闪退的实际根因包含 `LitheApp` 根层观察 FPS/内存对象引起 Scene 重建。根层改为稳定持有，状态栏保留自身观察；配合菜单投影与 tracking 冻结，10 次原生菜单持续显示检查全部通过，发布包再次保持 3.5 秒并成功选择项目。
+- B1b 引入一次计算、共享消费的有效键位投影。已有用户覆盖优先于新增默认键；多个显式覆盖冲突时停止注册该键并保留配置，Keymap 显示冲突供修复。工具栏、菜单、提示和 detector 使用同一结果。
+- Project/Commit/Find 与底部工具通过稳定命令 ID 执行。Run 使用模块激活流程，Commit 从休眠恢复时重新激活 Git。关闭项目先取消所有动作生产者，再等待其结束，避免清理后生成新任务。
+- B1c 扩展原生 View 菜单，保留系统全屏入口；Tool Windows 从 Window 移至 View，避免重复注册键位。Appearance 和 Editor Tabs 使用冻结的设置投影；设置窗口每次收到显示请求都恢复请求分类，覆盖同分类重复打开。
+- B1a 证据位于 `.artifacts/goland-parity/iteration5-menu/acceptance.md`；B1b/B1c 的截图、时序采样、测试及发布包验收位于 `.artifacts/goland-parity/iteration6-commands/`。只将实际执行的条目标记通过，不将下文全部验收矩阵视为已完成。
 
 ## 1. 本批交付与证据
 

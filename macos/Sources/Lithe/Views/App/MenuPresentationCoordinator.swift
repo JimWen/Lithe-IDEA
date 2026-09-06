@@ -5,8 +5,17 @@ struct ProjectMenuRenderState: Equatable {
     var context: ProjectCommandContext?
     var project = ProjectCommandState()
     var access: [URL: RecentProjectAccess] = [:]
+    var colorTheme: AppColorTheme = .lithe
+    var themePreference: AppThemePreference = .system
+    var editorTabLayoutMode: EditorTabLayoutMode = .singleLine
 
     func isEnabled(_ command: ProjectMenuCommand) -> Bool { project.enabled.contains(command) }
+}
+
+enum AppearanceMenuCommand {
+    case colorTheme(AppColorTheme)
+    case themePreference(AppThemePreference)
+    case editorTabLayout(EditorTabLayoutMode)
 }
 
 /// Commands subscribe only to renderState. Native tracking may defer its next
@@ -173,7 +182,11 @@ final class MenuPresentationCoordinator: ObservableObject {
         let beganTracking = !wasTrackingMenu && environment.isTrackingMenu
         wasTrackingMenu = environment.isTrackingMenu
         refreshAccess(for: state.recentProjects.map { $0.url.standardizedFileURL }, force: beganTracking)
-        let next = ProjectMenuRenderState(context: context, project: state, access: access)
+        let next = ProjectMenuRenderState(
+            context: context, project: state, access: access,
+            colorTheme: settings.colorTheme, themePreference: settings.themePreference,
+            editorTabLayoutMode: settings.editorTabLayoutMode
+        )
         guard !environment.isTrackingMenu, next != renderState else { return }
         renderState = next
     }
@@ -229,6 +242,16 @@ final class MenuPresentationCoordinator: ObservableObject {
         }
     }
 
+    func performAppearance(_ command: AppearanceMenuCommand) {
+        refreshNativeFocus()
+        guard !stopped, environment.permitsApplicationCommand, !isPresentingRequest else { return }
+        switch command {
+        case .colorTheme(let value): settings.colorTheme = value
+        case .themePreference(let value): settings.themePreference = value
+        case .editorTabLayout(let value): settings.editorTabLayoutMode = value
+        }
+    }
+
     func openRecent(_ url: URL) {
         refreshNativeFocus()
         guard !stopped, environment.permitsApplicationCommand, !isPresentingRequest else { return }
@@ -271,12 +294,13 @@ final class MenuPresentationCoordinator: ObservableObject {
                     if model.workspaceURL == nil { model.openStandaloneFile(url) } else { model.openFile(url) }
                 } else if windows.openFileFromApplication(url) == nil { reportPresentationFailure() }
             } else { openProject(url, origin: origin) }
-        case .settings, .languageSettings, .cloneRepository:
+        case .settings, .languageSettings, .appearanceSettings, .cloneRepository:
             if let host {
                 if command == .cloneRepository {
                     windows.focusWindow?(host.windowID)
                     host.model.showCloneRepository()
                 } else if command == .languageSettings { host.model.showSettings(category: .lsp) }
+                else if command == .appearanceSettings { host.model.showSettings(category: .general) }
                 else { host.model.showSettings() }
             } else {
                 let id = UUID()
