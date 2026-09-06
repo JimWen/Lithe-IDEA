@@ -575,10 +575,6 @@ struct SettingsView: View {
                     accessibilityLabel: "Default shell",
                     title: \TerminalShell.title
                 )
-                .onChange(of: settings.terminalShell) { _ in
-                    guard model.activeTerminalSession?.isRunning == true else { return }
-                    model.restartActiveTerminal(using: model.activeTerminalShellPath)
-                }
             }
             Text("Used for new terminal sessions.")
                 .font(LitheTheme.smallFont)
