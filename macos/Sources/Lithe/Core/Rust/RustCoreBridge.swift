@@ -3000,12 +3000,14 @@ struct RustCoreBridge: Sendable {
     func executeResult<Payload: Encodable, Data: Decodable>(
         command: String,
         payload: Payload,
-        operationID: String? = nil
+        operationID: String? = nil,
+        timeoutMilliseconds: Int? = nil
     ) -> Result<Data, CoreCallError> {
         let outcome: Result<Envelope<Data>, CoreCallError> = decodeEnvelope(
             command: command,
             payload: payload,
-            operationID: operationID
+            operationID: operationID,
+            timeoutMilliseconds: timeoutMilliseconds
         )
         return outcome.flatMap { envelope in
             guard let value = envelope.data else {
@@ -3024,7 +3026,8 @@ struct RustCoreBridge: Sendable {
     private func decodeEnvelope<Payload: Encodable, Data: Decodable>(
         command: String,
         payload: Payload,
-        operationID: String? = nil
+        operationID: String? = nil,
+        timeoutMilliseconds: Int? = nil
     ) -> Result<Envelope<Data>, CoreCallError> {
         guard isAvailable else {
             return .failure(CoreCallError(
@@ -3033,15 +3036,9 @@ struct RustCoreBridge: Sendable {
                 details: nil
             ))
         }
-        let requestID = operationID ?? UUID().uuidString
-        guard let requestData = try? JSONEncoder().encode(
-            Request(
-                id: requestID,
-                operationId: requestID,
-                timeoutMilliseconds: nil,
-                command: command,
-                payload: payload
-            )
+        guard let requestData = try? encodeRequest(
+            command: command, payload: payload,
+            operationID: operationID, timeoutMilliseconds: timeoutMilliseconds
         ),
         let request = String(data: requestData, encoding: .utf8),
         let responsePointer = lithe_bridge_execute_json(request) else {
@@ -3075,6 +3072,19 @@ struct RustCoreBridge: Sendable {
             ))
         }
         return .success(envelope)
+    }
+
+    /// Shared request encoder keeps optional deadline and operation identity on
+    /// the production path without changing callers that omit the deadline.
+    func encodeRequest<Payload: Encodable>(
+        command: String, payload: Payload, operationID: String? = nil,
+        timeoutMilliseconds: Int? = nil
+    ) throws -> Data {
+        let requestID = operationID ?? UUID().uuidString
+        return try JSONEncoder().encode(Request(
+            id: requestID, operationId: requestID, timeoutMilliseconds: timeoutMilliseconds,
+            command: command, payload: payload
+        ))
     }
 
     @discardableResult

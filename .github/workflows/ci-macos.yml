@@ -155,6 +155,7 @@ jobs:
             --report .artifacts/test-stability/macos-unit.json \
             --suite-timeout-seconds 660 -- \
             --skip GitStatusObservationTests \
+            --skip ProjectMetadataOperationsTests \
             --skip '(LitheDatabaseModuleTests|LitheTests\.LitheCoreLogicTests/database)' \
             --skip '([Pp]lugin|LitheGoSupportModuleTests)'
 
@@ -207,6 +208,19 @@ jobs:
 
       - name: Run Rust Core tests and verify the Swift bridge
         run: ./scripts/verify-rust-core.sh
+
+      - name: Generate linked Core test report
+        if: always()
+        run: node .agents/skills/write-stable-tests/scripts/generate-test-report.mjs
+
+      - name: Upload linked Core test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-stability-linked-core
+          path: .artifacts/test-stability/
+          if-no-files-found: ignore
+          retention-days: 14
 
   release-build:
     name: Release package verification

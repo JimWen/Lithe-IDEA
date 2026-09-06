@@ -103,6 +103,18 @@ modify_language_support_test() {
     mkdir -p macos/Tests/LitheLanguageExtensionSupportTests
     printf '%s\n' 'struct LanguageProjectToolResourceTests {}' > macos/Tests/LitheLanguageExtensionSupportTests/LanguageProjectToolResourceTests.swift
 }
+modify_project_metadata_contract() {
+    mkdir -p macos/Sources/LitheCoreContracts/Execution
+    printf '%s\n' 'struct MetadataContract {}' > "macos/Sources/LitheCoreContracts/Execution/$1"
+}
+modify_project_metadata_bridge() {
+    mkdir -p macos/Sources/Lithe/Core/Rust
+    printf '%s\n' 'struct MetadataBridge {}' > "macos/Sources/Lithe/Core/Rust/$1"
+}
+modify_project_metadata_test() {
+    printf '%s\n' 'struct ProjectMetadataOperationsTests {}' > macos/Tests/LitheTests/ProjectMetadataOperationsTests.swift
+}
+modify_swift_package_graph() { printf '%s\n' '// package graph change' > "$1"; }
 modify_readme() { printf '%s\n' '# Updated' > README.md; }
 modify_rust_comment() { printf '%s\n' '//! Updated test module.' 'pub fn value() -> u8 { 1 }' > rust/lithe-core/src/lib.rs; }
 modify_rust_code() { printf '%s\n' '//! Test module.' 'pub fn value() -> u8 { 2 }' > rust/lithe-core/src/lib.rs; }
@@ -198,6 +210,24 @@ assert_classification plugin-host-test \
 assert_classification shared-swift-contract \
     "$(classification true true true false false true false false)" \
     modify_shared_swift_contract
+for contract in ProjectMetadataContracts.swift ProjectMetadataModels.swift ProjectMetadataFeatures.swift; do
+    assert_classification "metadata-contract-$contract" \
+        "$(classification true true true true false true false false)" \
+        modify_project_metadata_contract "$contract"
+done
+for bridge in RustCoreBridge.swift RustProjectMetadataOperations.swift; do
+    assert_classification "metadata-bridge-$bridge" \
+        "$(classification true false false true false true false false)" \
+        modify_project_metadata_bridge "$bridge"
+done
+assert_classification project-metadata-test \
+    "$(classification true false false true false false false false)" \
+    modify_project_metadata_test
+for graph in Package.swift Package.resolved; do
+    assert_classification "swift-package-$graph" \
+        "$(classification true true true true false true false false)" \
+        modify_swift_package_graph "$graph"
+done
 assert_classification database-swift \
     "$(classification false false true false false true false false)" \
     modify_database_swift

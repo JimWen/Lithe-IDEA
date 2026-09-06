@@ -53,4 +53,11 @@ if ! nm -gU "$BINARY" | grep -F "_lithe_core_lsp_provider_catalog_json" > /dev/n
     exit 1
 fi
 
-print "Rust Core verification passed: comments, Rust tests, Swift bridge build, and linked symbols"
+# This suite requires the real Core and must never pass via the weak unlinked
+# bridge used by the separate Swift-only CI lane.
+"$ROOT_DIR/.agents/skills/write-stable-tests/scripts/test-stability-macos.sh" \
+    --report "$ROOT_DIR/.artifacts/test-stability/macos-project-metadata.json" -- \
+    --filter ProjectMetadataOperationsTests \
+    -Xlinker -force_load -Xlinker "$RUST_LIBRARY"
+
+print "Rust Core verification passed: comments, Rust tests, Swift bridge build, linked symbols, and project metadata tests"

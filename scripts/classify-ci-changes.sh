@@ -117,6 +117,7 @@ while IFS=$'\t' read -r status first_path _; do
             swift=true
             plugins=true
             swift_database=true
+            rust_core=true
             macos_release=true
             ;;
         plugins/mac/*|macos/tests/litheofficialpluginverifier/*)
@@ -172,6 +173,14 @@ while IFS=$'\t' read -r status first_path _; do
             swift_database=true
             macos_release=true
             ;;
+        macos/sources/lithecorecontracts/execution/projectmetadatacontracts.swift|macos/sources/lithecorecontracts/execution/projectmetadatamodels.swift|macos/sources/lithecorecontracts/execution/projectmetadatafeatures.swift)
+            # These types are decoded by the real Rust-backed metadata suite.
+            swift=true
+            plugins=true
+            swift_database=true
+            rust_core=true
+            macos_release=true
+            ;;
         macos/sources/lithemoduleapi/*|macos/sources/litheapplicationkernel/*|macos/sources/lithecorecontracts/*)
             # These contracts and runtime primitives are direct dependencies of
             # both isolated Swift module suites.
@@ -207,6 +216,15 @@ while IFS=$'\t' read -r status first_path _; do
             rust_core=true
             swift=true
             macos_release=true
+            ;;
+        macos/sources/lithe/core/rust/rustcorebridge.swift|macos/sources/lithe/core/rust/rustprojectmetadataoperations.swift)
+            swift=true
+            rust_core=true
+            macos_release=true
+            ;;
+        macos/tests/lithetests/projectmetadataoperationstests.swift)
+            swift=true
+            rust_core=true
             ;;
         macos/sources/*|macos/resources/*)
             swift=true
