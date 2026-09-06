@@ -256,11 +256,17 @@ while IFS=$'\t' read -r status first_path _; do
             ;;
         scripts/test-macos.sh)
             swift=true
+            rust_core=true
             plugins=true
             swift_database=true
             ;;
         scripts/verify-official-plugins.sh|scripts/build-official-plugins.sh)
             plugins=true
+            ;;
+        scripts/prepare-rust-core-link.sh|scripts/test-rust-core-link.mjs)
+            swift=true
+            rust_core=true
+            macos_release=true
             ;;
         scripts/verify-rust-core.sh|scripts/verify-rust-core-comments.sh|scripts/verify-rust-core-layout.sh|scripts/build-rust-core.sh|scripts/rustcorebridgeverification.swift)
             rust_core=true

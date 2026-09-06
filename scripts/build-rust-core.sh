@@ -38,4 +38,4 @@ if [[ "$PROFILE" == "release" ]]; then
     BUILD_ARGS+=(--release)
 fi
 cargo "${BUILD_ARGS[@]}"
-print -r -- "$OUTPUT_DIR/$PROFILE/liblithe_core.a"
+"$ROOT_DIR/scripts/prepare-rust-core-link.sh" "$OUTPUT_DIR/$PROFILE/liblithe_core.a"

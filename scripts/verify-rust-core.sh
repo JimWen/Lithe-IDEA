@@ -8,6 +8,7 @@ scripts/verify-rust-core-comments.sh
 scripts/verify-rust-core-layout.sh
 cargo fmt --manifest-path rust/Cargo.toml -p lithe-core -- --check
 cargo test --manifest-path rust/Cargo.toml -p lithe-core
+node scripts/test-rust-core-link.mjs
 
 case "$(uname -m)" in
     arm64) TRIPLE="arm64-apple-macosx"; RUST_TARGET="aarch64-apple-darwin" ;;
