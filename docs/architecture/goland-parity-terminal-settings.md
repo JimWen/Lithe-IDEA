@@ -1,6 +1,6 @@
 # Terminal 核心设置：启动、显示与虚拟环境
 
-状态：基于 `5d4a45c6`，B4a4 经 `terminal_settings_review` 独立审查 GO，进入实施；尚未验收。用户最新优先级为 Terminal、重构、Go/Cargo 与语言/插件；已验收 B4a0–B4a3 跳过，Project 暂停。本文细化 [B4 Terminal 方案](goland-parity-b4-terminal.md)，不缩减总目标。
+状态：基于 `5d4a45c6`，B4a4 已通过方案/代码独立审查、997 项完整测试与 ARM64 点击验收，实现提交 `db44d036`，见 [本批验收](goland-parity-iteration9-acceptance.md)。用户最新优先级为 Terminal、重构、Go/Cargo 与语言/插件；已验收 B4a0–B4a3 跳过，Project 暂停。本文细化 [B4 Terminal 方案](goland-parity-b4-terminal.md)，不缩减总目标。
 
 ## 现状与实施顺序
 
