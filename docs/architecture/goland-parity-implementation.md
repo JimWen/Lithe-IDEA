@@ -1,6 +1,6 @@
 # GoLand 工作台与可扩展语言能力实施方案
 
-状态：B1 菜单、工具窗口命令和基础 View 已实现并验收，跳过重复实现。用户 2026-09-06 明确 Project 当前够用，B2 的 Project 部分暂停。B3a 搜索正确性与 B4a0–B4a3 终端设置/重启修复已验收，见 [输入与终端验收](goland-parity-iteration7-acceptance.md)。B3b1a Unicode 搜索崩溃与 Rust 增量链接也已通过独立审查、完整测试和 ARM64 实际验收，见 [Unicode 与链接验收](goland-parity-iteration8-acceptance.md)。B4a4 Terminal 启动配置亦已完成，见 [Terminal 设置验收](goland-parity-iteration9-acceptance.md)。其余批次仍待实施。现状审计与独立方案复核见 [审查记录](goland-parity-plan-review.md)。基线提交 `c09f2cc4`，目标分支 `dev/aiide`。
+状态：B1 菜单、工具窗口命令和基础 View 已实现并验收，跳过重复实现。用户 2026-09-06 明确 Project 当前够用，B2 的 Project 部分暂停。B3a 搜索正确性与 B4a0–B4a3 终端设置/重启修复已验收，见 [输入与终端验收](goland-parity-iteration7-acceptance.md)。B3b1a Unicode 搜索崩溃与 Rust 增量链接也已通过独立审查、完整测试和 ARM64 实际验收，见 [Unicode 与链接验收](goland-parity-iteration8-acceptance.md)。B4a4 Terminal 启动配置亦已完成，见 [Terminal 设置验收](goland-parity-iteration9-acceptance.md)。B4a5a 字体/同步绘制前置修正也已验收，见 [Terminal 字体验收](goland-parity-iteration10-acceptance.md)；产品显示设置 B4a5b 仍待实施。其余批次仍待实施。现状审计与独立方案复核见 [审查记录](goland-parity-plan-review.md)。基线提交 `c09f2cc4`，目标分支 `dev/aiide`。
 
 ## 1. 目标与完成规则
 
@@ -195,7 +195,7 @@ Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/
 | B1 | 方案复核通过 | B1a/B1b/B1c 完成，跳过 | 976 项测试、边界、ARM64 包通过 | 最近项稳定并可选；工具窗、改键及提示、主题、标签、设置入口通过 | 通过 | `8b8f21be`、`cb892c85` |
 | B2 | 设计基线复核通过，逐批细化 | Project 按用户要求暂停；其他待实施 | — | — | — | — |
 | B3 | B3a、B3b1a 通过；其余逐批细化 | B3a、Unicode matcher/候选修复完成；scope/事务与 B3c/B3d 待实施 | Rust 331、Swift 985、原生链接 7 项及 ARM64 包通过 | 输入/键盘和 Find 预览已验收；新包 Unicode 查找与替换预览通过 | B3a、B3b1a 通过 | B3a `010d4d57`；B3b1a `b0dac7e2`，构建依赖 `00a9f9c1` |
-| B4 | B4a0–B4a4 通过；其余逐批细化 | 停止/连接隔离与完整启动配置完成；显示、venv 及其他核心设置待实施 | 997 项完整测试、边界、ARM64 包通过 | 活动 PID/输出、argv/env/cwd、Restart 快照、失败 Retry、Restore Defaults、中文及退出清理通过 | B4a0–B4a4 通过 | B4a0 `59c4ce74`；停止/连接 `517b4584`；启动设置 `db44d036` |
+| B4 | B4a0–B4a5a 通过；显示配置细化通过 | 停止/连接隔离、启动配置、字体与同步绘制前置完成；产品显示、venv 及其他设置待实施 | 1006 项完整测试、边界、来源核验、ARM64 包通过 | 启动配置原验收保留；字体/同步画面、Metal/CG、窗口移动、真实 PTY 与清理通过 | B4a0–B4a5a 通过 | 启动设置 `db44d036`；字体前置 `68d51977` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
 | B6 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
 | B7 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
