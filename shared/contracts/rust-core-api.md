@@ -496,6 +496,22 @@ and additionally accepts `maxSymbolResults`. Results are ordered as file,
 type, symbol, and content matches. Java type and method results include a
 one-based line, `symbolName`, and the matching source line in `preview`.
 
+Case-insensitive literal search and replacement use Unicode simple case
+folding, as provided by the existing Rust regex engine. This includes Kelvin
+sign, long s, and final sigma equivalents; it does not perform locale-specific
+Turkish I conversion or multi-character full folding such as sharp s to `ss`.
+Match ranges always refer to the original UTF-8 text, not a case-converted copy.
+Literal queries escape regex metacharacters and literal replacement text never
+expands `$` captures. Literal whole-word boundaries inspect adjacent original
+characters using the existing ASCII letters/digits/underscore/dollar definition;
+regex queries retain their own boundary and capture semantics. The shared
+regression matrix is `shared/fixtures/search/unicode-replacement-v1.json`.
+
+The lowercase trigram index is only a candidate filter. For case-insensitive
+ASCII queries it additionally includes indexed files containing non-ASCII text,
+even if a trigram posting is absent, before performing exact matching. File
+updates and deletions update this property together with the indexed contents.
+
 `workspace.replacePreview` accepts `root`, `query`, `replacement`, the same
 query options, optional workspace-relative `paths`, optional `textOverrides`
 keyed by relative path, and visibility fields. It returns `{ "files": [] }`

@@ -23,6 +23,8 @@ pub(crate) struct WorkspaceSearchIndex {
 pub(crate) struct IndexedFile {
     pub(crate) path: String,
     trigrams: Vec<u32>,
+    /// Lowercase postings cannot represent all Unicode simple case-fold matches.
+    has_non_ascii_text: bool,
     pub(crate) symbols: Vec<IndexedSymbol>,
 }
 
@@ -190,7 +192,7 @@ impl WorkspaceSearchIndex {
         if let Some(existing) = self.path_to_id.get(&relative).copied() {
             self.remove_id(existing);
         }
-        let (trigrams, symbols) = read_search_data(path, &relative);
+        let (trigrams, symbols, has_non_ascii_text) = read_search_data(path, &relative);
         let id = self
             .free_ids
             .pop()
@@ -204,6 +206,7 @@ impl WorkspaceSearchIndex {
         let file = Some(IndexedFile {
             path: relative.clone(),
             trigrams,
+            has_non_ascii_text,
             symbols,
         });
         let id_index = id as usize;
@@ -278,7 +281,12 @@ impl WorkspaceSearchIndex {
         self.path_to_id.get(path).copied()
     }
 
-    pub(crate) fn candidate_ids(&self, query: &str, regular_expression: bool) -> Vec<u32> {
+    pub(crate) fn candidate_ids(
+        &self,
+        query: &str,
+        regular_expression: bool,
+        case_sensitive: bool,
+    ) -> Vec<u32> {
         let Some(anchor) = search_anchor(query, regular_expression) else {
             return self.all_file_ids();
         };
@@ -286,9 +294,26 @@ impl WorkspaceSearchIndex {
         if trigrams.is_empty() {
             return self.all_file_ids();
         }
+        let mut candidates = self.posting_candidates(&trigrams);
+        if !case_sensitive {
+            // ASCII queries can match non-ASCII source under simple folding
+            // (for example, sxs matches ſxſ). Include those files even when an
+            // ASCII posting is absent; the final matcher rejects false hits.
+            candidates.extend(self.files.iter().enumerate().filter_map(|(id, file)| {
+                file.as_ref()
+                    .filter(|file| file.has_non_ascii_text)
+                    .map(|_| id as u32)
+            }));
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates
+    }
+
+    fn posting_candidates(&self, trigrams: &[u32]) -> Vec<u32> {
         let mut postings = Vec::with_capacity(trigrams.len());
         for trigram in trigrams {
-            let Some(posting) = self.postings.get(&trigram) else {
+            let Some(posting) = self.postings.get(trigram) else {
                 return Vec::new();
             };
             postings.push(posting);
@@ -408,9 +433,9 @@ fn collect_files(
     Ok(())
 }
 
-fn read_search_data(path: &Path, relative: &str) -> (Vec<u32>, Vec<IndexedSymbol>) {
+fn read_search_data(path: &Path, relative: &str) -> (Vec<u32>, Vec<IndexedSymbol>, bool) {
     let Some(text) = read_searchable_text(path) else {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), false);
     };
     let trigrams = unique_trigrams(&text);
     let symbols = java_symbols(relative, &text)
@@ -422,7 +447,7 @@ fn read_search_data(path: &Path, relative: &str) -> (Vec<u32>, Vec<IndexedSymbol
             signature: symbol.signature,
         })
         .collect();
-    (trigrams, symbols)
+    (trigrams, symbols, !text.is_ascii())
 }
 
 fn unique_trigrams(value: &str) -> Vec<u32> {

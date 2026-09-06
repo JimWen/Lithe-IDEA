@@ -230,7 +230,7 @@ fn search_with_index(
     }
 
     let mut content_matches = 0;
-    for id in index.candidate_ids(query, request.regular_expression) {
+    for id in index.candidate_ids(query, request.regular_expression, request.case_sensitive) {
         crate::protocol::cancellation::check()?;
         if matches.len() >= limit || content_matches >= content_limit {
             break;
@@ -355,7 +355,8 @@ pub fn replace_preview(
         request.whole_words,
         request.regular_expression,
     )?;
-    let candidate_ids = index.candidate_ids(&query, request.regular_expression);
+    let candidate_ids =
+        index.candidate_ids(&query, request.regular_expression, request.case_sensitive);
     let candidate_set = candidate_ids.iter().copied().collect::<HashSet<_>>();
     let paths = if request.paths.is_empty() {
         candidate_ids
@@ -828,10 +829,10 @@ fn glob_matches(pattern: &str, value: &str) -> bool {
 
 /// Literal or regular-expression search semantics compiled for repeated matches.
 struct Matcher {
-    plain_query: String,
-    regex: Option<Regex>,
-    case_sensitive: bool,
+    expression: Regex,
+    regular_expression: bool,
     whole_words: bool,
+    empty_literal: bool,
 }
 
 impl Matcher {
@@ -841,49 +842,42 @@ impl Matcher {
         whole_words: bool,
         regular_expression: bool,
     ) -> Result<Self, CoreError> {
-        if regular_expression {
-            let pattern = query.to_string();
-            let regex = RegexBuilder::new(&pattern)
-                .case_insensitive(!case_sensitive)
-                .build()
-                .map_err(|error| {
-                    CoreError::new(ErrorCode::ParseFailed, "Invalid search expression")
-                        .with_details(error.to_string())
-                })?;
-            Ok(Self {
-                plain_query: query.to_string(),
-                regex: Some(regex),
-                case_sensitive,
-                whole_words: false,
-            })
+        let pattern = if regular_expression {
+            query.to_string()
         } else {
-            Ok(Self {
-                plain_query: query.to_string(),
-                regex: None,
-                case_sensitive,
-                whole_words,
-            })
-        }
+            regex::escape(query)
+        };
+        let expression = RegexBuilder::new(&pattern)
+            .case_insensitive(!case_sensitive)
+            .build()
+            .map_err(|error| {
+                CoreError::new(ErrorCode::ParseFailed, "Invalid search expression")
+                    .with_details(error.to_string())
+            })?;
+        Ok(Self {
+            expression,
+            regular_expression,
+            whole_words: whole_words && !regular_expression,
+            empty_literal: query.is_empty() && !regular_expression,
+        })
     }
 
     fn matches(&self, text: &str) -> bool {
-        if let Some(regex) = &self.regex {
-            return regex.is_match(text);
-        }
-        let (haystack, needle) = if self.case_sensitive {
-            (text.to_string(), self.plain_query.clone())
-        } else {
-            (text.to_lowercase(), self.plain_query.to_lowercase())
-        };
         if !self.whole_words {
-            return haystack.contains(&needle);
+            return self.expression.is_match(text);
         }
-        haystack.match_indices(&needle).any(|(start, _)| {
-            let end = start + needle.len();
-            let before = haystack[..start].chars().next_back();
-            let after = haystack[end..].chars().next();
-            !before.is_some_and(is_word_character) && !after.is_some_and(is_word_character)
-        })
+        self.expression
+            .find_iter(text)
+            .any(|matched| self.accepts_boundaries(text, matched.start(), matched.end()))
+    }
+
+    fn accepts_boundaries(&self, text: &str, start: usize, end: usize) -> bool {
+        !self.whole_words
+            || (!text[..start]
+                .chars()
+                .next_back()
+                .is_some_and(is_word_character)
+                && !text[end..].chars().next().is_some_and(is_word_character))
     }
 
     /// Preserve Case applies only to literal replacements. Regex replacements
@@ -894,54 +888,37 @@ impl Matcher {
         replacement: &str,
         preserve_case: bool,
     ) -> (String, usize) {
-        if let Some(regex) = &self.regex {
-            let count = regex.find_iter(text).count();
-            return (regex.replace_all(text, replacement).into_owned(), count);
+        if self.regular_expression {
+            let count = self.expression.find_iter(text).count();
+            return (
+                self.expression.replace_all(text, replacement).into_owned(),
+                count,
+            );
         }
-        let haystack = if self.case_sensitive {
-            text.to_string()
-        } else {
-            text.to_lowercase()
-        };
-        let needle = if self.case_sensitive {
-            self.plain_query.clone()
-        } else {
-            self.plain_query.to_lowercase()
-        };
-        if needle.is_empty() {
+        if self.empty_literal {
             return (text.to_string(), 0);
         }
-        let ranges = haystack
-            .match_indices(&needle)
-            .filter_map(|(start, matched)| {
-                let end = start + matched.len();
-                if self.whole_words {
-                    let before = haystack[..start].chars().next_back();
-                    let after = haystack[end..].chars().next();
-                    if before.is_some_and(is_word_character) || after.is_some_and(is_word_character)
-                    {
-                        return None;
-                    }
-                }
-                Some((start, end))
-            })
-            .collect::<Vec<_>>();
-        if ranges.is_empty() {
-            return (text.to_string(), 0);
-        }
+        // Case conversion can expand or contract UTF-8 (for example, İ and K).
+        // Regex returns ranges in the original text, never in a lowercased copy.
+        // Literal replacements are assembled here so `$1` stays literal text.
         let mut result = String::with_capacity(text.len());
         let mut cursor = 0;
-        for (start, end) in &ranges {
-            result.push_str(&text[cursor..*start]);
+        let mut count = 0;
+        for matched in self.expression.find_iter(text) {
+            if !self.accepts_boundaries(text, matched.start(), matched.end()) {
+                continue;
+            }
+            result.push_str(&text[cursor..matched.start()]);
             if preserve_case {
-                result.push_str(&apply_case_pattern(&text[*start..*end], replacement));
+                result.push_str(&apply_case_pattern(matched.as_str(), replacement));
             } else {
                 result.push_str(replacement);
             }
-            cursor = *end;
+            cursor = matched.end();
+            count += 1;
         }
         result.push_str(&text[cursor..]);
-        (result, ranges.len())
+        (result, count)
     }
 }
 

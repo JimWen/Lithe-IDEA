@@ -1,0 +1,298 @@
+{
+  "version": 1,
+  "caseFolding": "Unicode simple case folding; no locale-specific or multi-character full folding",
+  "cases": [
+    {
+      "name": "expanded-prefix",
+      "source": "İ needle",
+      "query": "needle",
+      "replacement": "changed",
+      "options": {},
+      "expectedText": "İ changed",
+      "expectedCount": 1,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "contracted-prefix",
+      "source": "Kneedle",
+      "query": "needle",
+      "replacement": "changed",
+      "options": {},
+      "expectedText": "Kchanged",
+      "expectedCount": 1,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "kelvin-fold",
+      "source": "K k K",
+      "query": "k",
+      "replacement": "x",
+      "options": {},
+      "expectedText": "x x x",
+      "expectedCount": 3,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "long-s-missing-posting",
+      "source": "ſxſ",
+      "query": "sxs",
+      "replacement": "changed",
+      "options": {},
+      "expectedText": "changed",
+      "expectedCount": 1,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "long-s-and-ascii",
+      "source": "ſxſ SxS sxs",
+      "query": "sxs",
+      "replacement": "changed",
+      "options": {},
+      "expectedText": "changed changed changed",
+      "expectedCount": 3,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "greek-sigma-fold",
+      "source": "Σ σ ς",
+      "query": "σ",
+      "replacement": "x",
+      "options": {},
+      "expectedText": "x x x",
+      "expectedCount": 3,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "turkish-i-policy",
+      "source": "I i İ ı",
+      "query": "i",
+      "replacement": "x",
+      "options": {},
+      "expectedText": "x x İ ı",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "sharp-s-not-full-fold",
+      "source": "Straße",
+      "query": "strasse",
+      "replacement": "x",
+      "options": {},
+      "expectedText": "Straße",
+      "expectedCount": 0,
+      "matchedLines": []
+    },
+    {
+      "name": "dotted-i-exact",
+      "source": "İ",
+      "query": "İ",
+      "replacement": "x",
+      "options": {
+        "caseSensitive": true
+      },
+      "expectedText": "x",
+      "expectedCount": 1,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "case-sensitive-folds",
+      "source": "ſxſ SXS sxs",
+      "query": "sxs",
+      "replacement": "x",
+      "options": {
+        "caseSensitive": true
+      },
+      "expectedText": "ſxſ SXS x",
+      "expectedCount": 1,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "unicode-prefixes",
+      "source": "中😀İ needle KNEEDLE😀文",
+      "query": "needle",
+      "replacement": "$1",
+      "options": {},
+      "expectedText": "中😀İ $1 K$1😀文",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "literal-metacharacters",
+      "source": "a.b axb a.b",
+      "query": "a.b",
+      "replacement": "$1 $$ ${name}",
+      "options": {},
+      "expectedText": "$1 $$ ${name} axb $1 $$ ${name}",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "literal-brackets",
+      "source": "[x] x [X]",
+      "query": "[x]",
+      "replacement": "$1",
+      "options": {},
+      "expectedText": "$1 x $1",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "literal-backslash",
+      "source": "a\\b A\\B a/b",
+      "query": "a\\b",
+      "replacement": "\\$1",
+      "options": {},
+      "expectedText": "\\$1 \\$1 a/b",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "literal-inline-flag",
+      "source": "(?i:x) X (?I:X)",
+      "query": "(?i:x)",
+      "replacement": "$1",
+      "options": {},
+      "expectedText": "$1 X $1",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "whole-words",
+      "source": "load load_ _load $load load$ reload LOAD",
+      "query": "load",
+      "replacement": "x",
+      "options": {
+        "wholeWords": true
+      },
+      "expectedText": "x load_ _load $load load$ reload x",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "whole-words-original-neighbor",
+      "source": "Kload loadK",
+      "query": "load",
+      "replacement": "x",
+      "options": {
+        "wholeWords": true
+      },
+      "expectedText": "Kx xK",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "preserve-case",
+      "source": "fooBar FooBar FOOBAR fOoBaR();",
+      "query": "fooBar",
+      "replacement": "bazQux",
+      "options": {
+        "preserveCase": true
+      },
+      "expectedText": "bazQux BazQux BAZQUX bazQux();",
+      "expectedCount": 4,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "preserve-case-original-unicode",
+      "source": "K k K Σ σ ς",
+      "query": "k",
+      "replacement": "word",
+      "options": {
+        "preserveCase": true
+      },
+      "expectedText": "Word word Word Σ σ ς",
+      "expectedCount": 3,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "regex-captures",
+      "source": "ab AB",
+      "query": "(a)(b)",
+      "replacement": "$2$1",
+      "options": {
+        "regularExpression": true,
+        "preserveCase": true
+      },
+      "expectedText": "ba BA",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "regex-zero-width",
+      "source": "é",
+      "query": "^|$",
+      "replacement": "x",
+      "options": {
+        "regularExpression": true
+      },
+      "expectedText": "xéx",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "non-overlapping",
+      "source": "aaaa",
+      "query": "aa",
+      "replacement": "x",
+      "options": {},
+      "expectedText": "xx",
+      "expectedCount": 2,
+      "matchedLines": [
+        1
+      ]
+    },
+    {
+      "name": "bom-crlf-eof",
+      "source": "﻿İ needle\r\nneedle\r\n",
+      "query": "needle",
+      "replacement": "changed",
+      "options": {},
+      "expectedText": "﻿İ changed\r\nchanged\r\n",
+      "expectedCount": 2,
+      "matchedLines": [
+        1,
+        2
+      ]
+    }
+  ]
+}
