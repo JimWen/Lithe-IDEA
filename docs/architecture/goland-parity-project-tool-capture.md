@@ -1,14 +1,15 @@
 # B7a2：项目工具捕获与只读刷新
 
 状态：B7a2a 已完成（`d6fb2d1f`），两名独立 reviewer GO，1047 项 Swift 测试和
-ARM64 调试构建通过；B7a2b 方案已独立预审 GO，待实现；B7a2c 仍待细化审查。
+ARM64 调试构建通过；B7a2b 已完成（`daf43b7f`、`0003c624`），独立审查 GO，
+1090 项 Swift 测试、真实新旧插件加载及 ARM64 完整构建通过；B7a2c 仍待细化审查。
 B7a1 元数据契约已完成（`4039f0f0`），本方案不改变
 原 B7 的 Go Tools/Cargo 右栏、独立任务、配置和实际 GUI 验收目标。
 
 ## 1. 进程所有权前置修复（B7a2a）
 
 继续复用 `MacManagedProcess` 的 posix_spawn 原子进程组、PID 注册、waitpid 和
-已有 registry。当前 reapRootProcess 忽略子组清理失败后清空 group，而现有
+已有 registry。修复前 reapRootProcess 忽略子组清理失败后清空 group，而现有
 MacStreamingProcess 在 await 前移除 registry。这些行为不能作为新捕获的完成证据。
 
 `MacManagedProcess.isRunning` 保留既有完成时序：waitpid 之后立即冻结 rootReaped
@@ -54,12 +55,14 @@ executable/argv/cwd/完整 env、timeout、stdout/stderr byte limit。明确拒�
 结果区分 succeeded/processFailed/startFailed/cancelled/timedOut/outputLimit/readFailed/
 cleanupFailed，保留独立原始 Data、exit code 和 cleanupConfirmed。
 
-成功需要：根进程已 reap、stdout/stderr 均实际 EOF、进程组确认清理、reader source
-及读端已关闭。非零 exit 仍排空后返回完整两流，但不交给 normalize。主动关闭
+成功需要：spawn worker 已返回、宿主 writer 已确认关闭、根进程已 reap、
+stdout/stderr 均实际 EOF、进程组确认清理、reader source 及读端已关闭。非零 exit 仍排空后返回完整两流，但不交给 normalize。主动关闭
 read fd 不算 EOF。首个失败原因锁定；错误结果的 partial stdout 不得当完整 JSON。
 
 清理失败可以有界返回失败结果，但 session 继续处于 cleanupFailed/active，
-持有 registry、模块 lease、并发槽及必要资源；后续 stop 可重试。一次 capture
+持有模块 lease、全局并发槽及必要资源；PID 监控 token 在根进程 reap 时注销，避免把
+已复用的 PID 计入旧模块。监控 token 以 UUID 独立配对，跨会话不会相互删除。
+进程组清理所有权继续由 native owner 和资源持有；后续 stop 可重试。一次 capture
 只返回一个结果，迟到真实退出仅完成剩余资源回收，不重放成功。调用者取消
 capture 会发起所属进程清理，不能仅丢弃 continuation。并发 stop 共用一个 attempt
 和固定期限，不因为新等待者重置宽限期。
@@ -69,8 +72,12 @@ capture 会发起所属进程清理，不能仅丢弃 continuation。并发 stop
 原始字节及所有 pipe/state 状态由 dedicated native serial owner 管理；View/MainActor
 不按每个 chunk 接收 Task。用两个非阻塞 DispatchSourceRead，固定小块 read；
 0 是 EOF，EINTR 重试，EAGAIN 等下一次就绪，其他错误锁定 readFailed。每轮读取
-有工作量上限并续排，让 deadline/stop 有机会执行。到 EOF 后 cancel source，
-cancel-handler 是读端唯一关闭者，并向 owner 报 readerClosed。
+最多执行四次 16 KiB read（EINTR 也消耗次数），后续交回 Dispatch 就绪通知，
+让 deadline/stop 有机会执行。到 EOF 后 cancel source，
+cancel-handler 是读端唯一关闭者，close 成功才向 owner 报 readerClosed。关闭失败
+保留 cleanupFailed；不能重关可能已复用的裸 fd。writer 逐句柄保存成功关闭证据，
+首次关闭失败后不再访问 FileHandle 或裸 fd；macOS 的失效 wrapper 连读取
+fileDescriptor 都可能抛 Objective-C 异常。后续重试必须稳定保留“未确认”。
 
 stdout 默认/上限 16 MiB、stderr 默认/上限 1 MiB，超限前拒绝继续累计，不能先无限
 排队到 MainActor 再限流。整体 deadline 默认 30 s，覆盖 starting、root exit 后
@@ -90,6 +97,12 @@ Go/Rust 原 execution module 导出独立 project-tools capability，其 module 
 持有 metadata 与工具 sessions；Execution feature 只拥有 UI/任务状态。资源活动
 包括 starting、draining 和 cleanupFailed。shutdown/disable/window close 先要求
 所有自有会话停止，再有界等待；停止失败保留 owner/lease 并可重试。
+
+共享的 `LitheLanguageExtensionSupport` 库只依赖 Module API/Core Contracts，复用
+Go 与 bundled Rust 的 capture resource、activity lease 和会话门禁。它不是新的
+runtime module，不声明 ID/manifest；不承担 Go/Cargo 策略、native I/O 或 UI。
+OfficialPluginVerifier 直接链接该库，官方插件构建检查其 swiftmodule；CI 中库
+源码变更选择 Swift、Plugins、macOS release，测试变更选择 Swift 与 Plugins。
 
 资源有 closed/activationEpoch 门禁。停用后已有 capability/session 引用不能再次
 start；仅 capability=nil 不足以失效外部引用。关闭门禁需在 release/sleep/shutdown
@@ -160,3 +173,5 @@ B7a4 按完整方案实际打开应用、点击/右键/配置/取消/窄窗口/�
 基础验证不能代替用户要求的最终 GUI 验收。
 
 B7a2a 的逐项证据见[第十五批验收](goland-parity-iteration15-acceptance.md)。
+
+B7a2b 的逐项证据见[第十六批验收](goland-parity-iteration16-acceptance.md)。
