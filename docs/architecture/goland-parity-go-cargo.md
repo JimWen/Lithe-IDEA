@@ -1,6 +1,6 @@
 # Go Tools / Cargo 工具窗口实施方案
 
-状态：B7a1 方案经两名独立 reviewer 放行；纯 Rust 基础实现已通过完整验证并提交 `4039f0f0`。B7a2a 原生进程清理亦已完成（`d6fb2d1f`）；B7a2b capture/插件资源完成（`daf43b7f`、`0003c624`）；只读刷新、a3–a4 尚未实施；Project 保持现状。前置 Terminal B4a6 已完成。
+状态：B7a1 方案经两名独立 reviewer 放行；纯 Rust 基础实现已通过完整验证并提交 `4039f0f0`。B7a2a 原生进程清理亦已完成（`d6fb2d1f`）；B7a2b capture/插件资源完成（`daf43b7f`、`0003c624`）；B7a2c1 Swift 元数据消费/Unicode feature 完成（`8b8e7fe9`、`0b5dfcaa`）。只读原生刷新、a3–a4 尚未实施；Project 保持现状。前置 Terminal B4a6 已完成。
 
 ## 1. 最终体验与本批依赖
 
@@ -80,3 +80,6 @@ B7a1 验收记录：[第十四批](goland-parity-iteration14-acceptance.md)。
 B7a2a 验收记录：[第十五批](goland-parity-iteration15-acceptance.md)。后续细化见[捕获方案](goland-parity-project-tool-capture.md)。
 
 B7a2b 验收记录：[第十六批](goland-parity-iteration16-acceptance.md)。
+
+B7a2c1 验收记录：[第十七批](goland-parity-iteration17-acceptance.md)。后续读取与工作流
+细化见[项目元数据读取](goland-parity-project-metadata-refresh.md)。

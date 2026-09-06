@@ -2,7 +2,8 @@
 
 状态：B7a2a 已完成（`d6fb2d1f`），两名独立 reviewer GO，1047 项 Swift 测试和
 ARM64 调试构建通过；B7a2b 已完成（`daf43b7f`、`0003c624`），独立审查 GO，
-1090 项 Swift 测试、真实新旧插件加载及 ARM64 完整构建通过；B7a2c 仍待细化审查。
+1090 项 Swift 测试、真实新旧插件加载及 ARM64 完整构建通过；B7a2c1 的 Swift 消费边界
+已完成（`8b8e7fe9`、`0b5dfcaa`），只读原生刷新仍待接入。
 B7a1 元数据契约已完成（`4039f0f0`），本方案不改变
 原 B7 的 Go Tools/Cargo 右栏、独立任务、配置和实际 GUI 验收目标。
 
@@ -131,6 +132,9 @@ executionModuleID 定位新 capability，不向 LanguageSupportDeclaration 追�
 共享两个并发槽；单纯比较 mock manifest 不足以证明 dynamic_lookup 兼容性。
 
 ## 5. 只读读取策略（B7a2c，仍需最终审查）
+
+后续细化以[项目元数据读取](goland-parity-project-metadata-refresh.md)为准，包含已完成
+的 c1、Cargo 真实探测、Go 缓存/vendor 分支及待审的资源接线；以下保留原前置边界。
 
 Cargo 使用已安装实体工具链执行 metadata version 1/no-deps/frozen，不能触发
 rustup 自动安装；Cargo 配置与环境的外部 helper/网络行为逐项校验。

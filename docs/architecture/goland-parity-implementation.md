@@ -198,7 +198,7 @@ Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/
 | B4 | B4a0–B4a6 通过 | Terminal 启动、显示/输入、venv 完成；其他设置待实施 | 1032 项完整测试、42+3 个 shell 场景、边界、ARM64 包通过 | 真实设置、Python prefix、Restart、环境缺失/恢复、迟到确认焦点及清理通过 | B4a0–B4a6 通过 | 启动 `db44d036`；字体 `4f74218a`；输入 `266c0c52`；venv `3724ea20` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
 | B6 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
-| B7 | B7a1/B7a2a–b 通过；其余待细化 | 共享元数据、原生清理、capture/插件资源完成；只读刷新/任务/UI/gutter/Structure/TODO 待实施 | Rust 344、Swift 1090、原生链接 7 项、真实新旧插件加载、ARM64 及 Core 通过 | 元数据/进程/插件集成通过；新 UI 尚未实现/验收 | 各子批独立 agent GO | `4039f0f0`、`d6fb2d1f`、`daf43b7f`、`0003c624`；[第十六批](goland-parity-iteration16-acceptance.md) |
+| B7 | B7a1/B7a2a–b/c1 通过；其余待细化 | 共享元数据、原生清理、capture/插件、Swift 消费与 Unicode feature 完成；只读原生刷新/任务/UI/gutter/Structure/TODO 待实施 | Rust 346、Swift 1108、原生链接 7 项、ARM64 及 Core 通过；既有新旧插件验证保留 | 元数据/进程/插件集成通过；新 UI 尚未实现/验收 | 各子批独立 agent GO | 新增 `8b8e7fe9`、`0b5dfcaa`；[第十七批](goland-parity-iteration17-acceptance.md) |
 | L0–L7 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 11.png 已核对 | 未开始 | — |
 | G1 | 设计基线复核通过 | 已有首轮基线 | 待最终复验 | 待 GoLand 对照 | 未开始 | — |
 
