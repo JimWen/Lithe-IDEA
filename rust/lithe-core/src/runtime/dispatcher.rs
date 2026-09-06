@@ -1022,6 +1022,20 @@ fn execute(request: &str) -> CoreResponse {
                 Err(error) => CoreResponse::failure(id, error),
             }
         }
+        CoreCommand::ExecutionNormalizeProjectMetadata => {
+            match serde_json::from_value::<crate::execution::ProjectMetadataRequest>(parsed.payload)
+                .map_err(|_| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "Invalid project metadata request",
+                    )
+                })
+                .and_then(crate::execution::normalize_project_metadata)
+            {
+                Ok(data) => CoreResponse::success(id, data),
+                Err(error) => CoreResponse::failure(id, error),
+            }
+        }
         CoreCommand::RunConfigInspect => {
             match serde_json::from_value::<crate::execution::InspectRequest>(parsed.payload)
                 .map_err(|error| {

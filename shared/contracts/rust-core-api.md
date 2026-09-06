@@ -117,6 +117,7 @@ stable error code and a user-facing message:
 | `java.sourceDefinition` | Locate a Java type, method, or field declaration in source text |
 | `java.structure` | Parse Java editor folds, inlay hints, and portable syntax roles |
 | `runConfig.inspect` | Inspect `.lithe` run documents, versions, and staleness without writing files |
+| `execution.normalizeProjectMetadata` | Normalize captured Go/Cargo project topology without native I/O |
 | `runConfig.generate` | Generate deterministic multi-language configurations and toolchain requirements |
 | `runConfig.resolve` | Merge generated, project, and local layers and return diagnostics |
 | `runConfig.updateOptions` | Apply typed option edits and return an updated project or local document |
@@ -962,3 +963,7 @@ system. Syntax highlights contain document-relative `utf16Start`,
 are sorted and non-overlapping, so native renderers can apply semantic colors
 without maintaining another Java parser. The parser is platform-independent
 and does not start a Java process or contact JDT.
+
+## Project tools metadata
+
+`execution.normalizeProjectMetadata` consumes captured Go/Cargo stdout and returns portable, stable project topology. It performs no native I/O. See [project-tools-metadata.md](project-tools-metadata.md) for the version 1 fields, root mapping, eligibility, ordering, resource limits and error behavior.

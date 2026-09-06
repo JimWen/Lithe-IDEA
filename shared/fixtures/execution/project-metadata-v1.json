@@ -1,0 +1,320 @@
+{
+  "version": 1,
+  "workspaceDirectory": "/fixture/workspace",
+  "roots": [
+    {
+      "id": "workspace",
+      "path": "/fixture/workspace"
+    },
+    {
+      "id": "external",
+      "path": "/fixture/external"
+    }
+  ],
+  "cargo": {
+    "version": 1,
+    "workspace_root": "/fixture/workspace",
+    "workspace_members": [
+      "opaque-beta-v1",
+      "opaque-alpha-v1"
+    ],
+    "workspace_default_members": [
+      "opaque-alpha-v1"
+    ],
+    "packages": [
+      {
+        "id": "opaque-beta-v1",
+        "name": "beta",
+        "version": "0.2.0",
+        "edition": "2021",
+        "manifest_path": "/fixture/external/beta/Cargo.toml",
+        "default_run": null,
+        "features": {},
+        "dependencies": [],
+        "targets": [
+          {
+            "name": "tool",
+            "kind": [
+              "bin"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "src_path": "/fixture/external/beta/src/main.rs",
+            "edition": "2021",
+            "test": true,
+            "doctest": false
+          }
+        ]
+      },
+      {
+        "id": "opaque-alpha-v1",
+        "name": "alpha",
+        "version": "0.1.0",
+        "edition": "2021",
+        "manifest_path": "/fixture/workspace/alpha/Cargo.toml",
+        "default_run": "tool",
+        "features": {
+          "default": [
+            "fast"
+          ],
+          "fast": []
+        },
+        "dependencies": [
+          {
+            "name": "external-lib",
+            "rename": "local_lib",
+            "req": "^1.0",
+            "kind": "dev",
+            "optional": true,
+            "uses_default_features": false,
+            "features": [
+              "extras"
+            ],
+            "target": "cfg(unix)",
+            "path": "/fixture/external/lib"
+          }
+        ],
+        "targets": [
+          {
+            "name": "tool",
+            "kind": [
+              "bin"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "src_path": "/fixture/workspace/alpha/entry.rs",
+            "edition": "2021",
+            "test": true,
+            "doctest": false
+          },
+          {
+            "name": "alpha",
+            "kind": [
+              "rlib",
+              "cdylib"
+            ],
+            "crate_types": [
+              "rlib",
+              "cdylib"
+            ],
+            "src_path": "/fixture/workspace/alpha/src/lib.rs",
+            "edition": "2021",
+            "test": true,
+            "doctest": true
+          },
+          {
+            "name": "sample",
+            "kind": [
+              "example"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "src_path": "/fixture/workspace/alpha/examples/sample.rs",
+            "edition": "2021",
+            "test": true,
+            "doctest": false,
+            "required-features": [
+              "fast"
+            ]
+          },
+          {
+            "name": "sample_lib",
+            "kind": [
+              "example"
+            ],
+            "crate_types": [
+              "rlib"
+            ],
+            "src_path": "/fixture/workspace/alpha/examples/sample_lib.rs",
+            "edition": "2021",
+            "test": true,
+            "doctest": false
+          },
+          {
+            "name": "integration",
+            "kind": [
+              "test"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "src_path": "/fixture/workspace/alpha/tests/integration.rs",
+            "edition": "2021",
+            "test": true,
+            "doctest": false
+          },
+          {
+            "name": "speed",
+            "kind": [
+              "bench"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "src_path": "/fixture/workspace/alpha/benches/speed.rs",
+            "edition": "2021",
+            "test": true,
+            "doctest": false
+          },
+          {
+            "name": "build-script-build",
+            "kind": [
+              "custom-build"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "src_path": "/fixture/workspace/alpha/build.rs",
+            "edition": "2021",
+            "test": true,
+            "doctest": false
+          },
+          {
+            "name": "future",
+            "kind": [
+              "future-kind"
+            ],
+            "crate_types": [
+              "future-crate"
+            ],
+            "src_path": "/fixture/workspace/alpha/future.rs",
+            "edition": "2021",
+            "test": true,
+            "doctest": false
+          }
+        ]
+      }
+    ]
+  },
+  "goModules": [
+    {
+      "Path": "example.invalid/beta",
+      "Main": true,
+      "Dir": "/fixture/external/beta",
+      "GoMod": "/fixture/external/beta/go.mod",
+      "GoVersion": "1.23.0"
+    },
+    {
+      "Path": "example.invalid/alpha",
+      "Main": true,
+      "Dir": "/fixture/workspace/alpha",
+      "GoMod": "/fixture/workspace/alpha/go.mod",
+      "GoVersion": "1.23.0"
+    }
+  ],
+  "goPackages": [
+    {
+      "Dir": "/fixture/external/beta",
+      "ImportPath": "example.invalid/beta",
+      "Name": "main",
+      "Module": {
+        "Path": "example.invalid/beta",
+        "Main": true,
+        "Dir": "/fixture/external/beta",
+        "GoMod": "/fixture/external/beta/go.mod",
+        "GoVersion": "1.23.0"
+      },
+      "GoFiles": [
+        "run.go"
+      ]
+    },
+    {
+      "ImportPath": "unknown/...",
+      "Error": {
+        "Err": "pattern has no mapped directory"
+      }
+    },
+    {
+      "Dir": "/fixture/workspace/alpha/broken",
+      "ImportPath": "example.invalid/alpha/broken",
+      "Name": "main",
+      "Module": {
+        "Path": "example.invalid/alpha",
+        "Main": true,
+        "Dir": "/fixture/workspace/alpha",
+        "GoMod": "/fixture/workspace/alpha/go.mod",
+        "GoVersion": "1.23.0"
+      },
+      "GoFiles": [
+        "broken.go"
+      ],
+      "Incomplete": true,
+      "DepsErrors": [
+        {
+          "Err": "dependency is unavailable",
+          "Pos": "broken.go:3:2",
+          "ImportStack": [
+            "example.invalid/alpha/broken",
+            "example.invalid/missing"
+          ]
+        }
+      ]
+    },
+    {
+      "Dir": "/fixture/workspace/alpha/foo.test",
+      "ImportPath": "example.invalid/alpha/foo.test",
+      "Name": "main",
+      "Module": {
+        "Path": "example.invalid/alpha",
+        "Main": true,
+        "Dir": "/fixture/workspace/alpha",
+        "GoMod": "/fixture/workspace/alpha/go.mod",
+        "GoVersion": "1.23.0"
+      },
+      "GoFiles": [
+        "main.go"
+      ]
+    },
+    {
+      "Dir": "/fixture/workspace/alpha",
+      "ImportPath": "example.invalid/alpha",
+      "Name": "main",
+      "Module": {
+        "Path": "example.invalid/alpha",
+        "Main": true,
+        "Dir": "/fixture/workspace/alpha",
+        "GoMod": "/fixture/workspace/alpha/go.mod",
+        "GoVersion": "1.23.0"
+      },
+      "GoFiles": [
+        "入口.go",
+        "helper.go"
+      ],
+      "CgoFiles": [
+        "native.go"
+      ],
+      "TestGoFiles": [
+        "entry_test.go"
+      ],
+      "XTestGoFiles": [
+        "external_test.go"
+      ],
+      "IgnoredGoFiles": [
+        "tagged.go"
+      ],
+      "Imports": [
+        "fmt",
+        "fmt"
+      ],
+      "TestImports": [
+        "testing"
+      ],
+      "XTestImports": [
+        "testing"
+      ]
+    }
+  ],
+  "expected": {
+    "cargoMemberIDs": {
+      "alpha": "sha256:57b43c1c8596a650d19476c580120662e8e38763e28d5dd492554b6970496548",
+      "beta": "sha256:f864d1ff3358148c25b05832a202da8c803e44ff04f36e3caa2cb3f5948b078c"
+    },
+    "goMemberIDs": {
+      "example.invalid/alpha": "sha256:a4fc993f61b06285dd28f3e13858f12cdf86a1843676657263c8fc4bac7e60b2",
+      "example.invalid/beta": "sha256:4829943b9f9ae390cd5cb3da8bd20be5b2217ef89a99423401cca738c56730f9"
+    }
+  }
+}

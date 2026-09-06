@@ -4,6 +4,7 @@ mod github;
 mod languages;
 mod plugins;
 mod project;
+mod project_metadata;
 mod project_search;
 mod protocol;
 mod run_configuration;

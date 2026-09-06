@@ -147,6 +147,8 @@ pub enum CoreCommand {
     JavaRunConfigurations,
     /// Validates layered run-configuration documents (`runConfig.inspect`).
     RunConfigInspect,
+    /// Normalizes captured Go/Cargo project metadata (`execution.normalizeProjectMetadata`).
+    ExecutionNormalizeProjectMetadata,
     /// Regenerates detected run configurations (`runConfig.generate`).
     RunConfigGenerate,
     /// Merges configuration layers and toolchains (`runConfig.resolve`).
@@ -282,6 +284,7 @@ impl CoreCommand {
             "lsp.destroyServer" => Some(Self::LspDestroyServer),
             "java.runConfigurations" => Some(Self::JavaRunConfigurations),
             "runConfig.inspect" => Some(Self::RunConfigInspect),
+            "execution.normalizeProjectMetadata" => Some(Self::ExecutionNormalizeProjectMetadata),
             "runConfig.generate" => Some(Self::RunConfigGenerate),
             "runConfig.resolve" => Some(Self::RunConfigResolve),
             "runConfig.updateOptions" => Some(Self::RunConfigUpdateOptions),
