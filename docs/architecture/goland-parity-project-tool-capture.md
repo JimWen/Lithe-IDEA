@@ -1,6 +1,8 @@
 # B7a2：项目工具捕获与只读刷新
 
-状态：细化方案待独立审查。B7a1 元数据契约已完成（`4039f0f0`），本方案不改变
+状态：B7a2a 已完成（`d6fb2d1f`），两名独立 reviewer GO，1047 项 Swift 测试和
+ARM64 调试构建通过；B7a2b 方案已独立预审 GO，待实现；B7a2c 仍待细化审查。
+B7a1 元数据契约已完成（`4039f0f0`），本方案不改变
 原 B7 的 Go Tools/Cargo 右栏、独立任务、配置和实际 GUI 验收目标。
 
 ## 1. 进程所有权前置修复（B7a2a）
@@ -94,9 +96,26 @@ start；仅 capability=nil 不足以失效外部引用。关闭门禁需在 rele
 显式调用，因为 ModuleResourceScope 只停止 active resource。不引入 Execution
 静态依赖 Go/Rust 来阻止用户停用插件。
 
+重激活也要检查 context.resources 中尚未清理的同类 capture owner，不能只看
+module 实例属性：ModuleRuntime 可能重用清理失败实例，也可能在失败 activate
+后清空实例但保留活跃 resource。旧资源停止重试确认前禁止建立新 owner/epoch，
+确认后才允许重新激活；无需为此扩大 kernel 的修改范围。
+
 旧插件在新宿主缺 capability 时提示更新，保留既有 Run/LSP；新插件用最低宿主
 版本和加载检查防止旧宿主调用不存在的符号。contribution 注册仍由 B7a4 在 factory
 层接入；本批不能以存在 host service 声称右栏已完成。
+
+独立预审发现旧 Go 插件通过 dynamic_lookup 调用宿主
+`OfficialPluginCatalog.moduleManifest(for:)`。必须冻结该旧 accessor 的 v1 返回值；
+新插件使用独立版本化 accessor 或自有声明。否则宿主追加 capability 后旧插件
+factory 与其已安装 manifest 不一致，会触发 factoryCatalogMismatch，连旧 Run/LSP
+也被拒绝。不能放宽严格校验。新 host/Go 插件采用兼容的 0.3.1 门槛（旧包接受
+`<0.4.0`）；Plugin API/schema 仍为 1。旧 protocol/struct 布局保持，沿已有
+executionModuleID 定位新 capability，不向 LanguageSupportDeclaration 追加字段。
+新 factory 保持惰性，`context: .empty` 的官方插件校验仍可执行；Python/Node
+不得随 bundled execution module 意外声明 Go/Rust 专用能力。验收必须包含真实
+旧版 Go 动态插件在新宿主的 Run/LSP、旧宿主加载新插件前拒绝，以及两个 workspace
+共享两个并发槽；单纯比较 mock manifest 不足以证明 dynamic_lookup 兼容性。
 
 ## 5. 只读读取策略（B7a2c，仍需最终审查）
 
@@ -139,3 +158,5 @@ reaped/后代退出；缺 executable/cwd 的 FD 清理。所有失败路径也 a
 各子批先独立方案/代码审查，再 focused/full timing、边界、ARM64 构建、分批 commit。
 B7a4 按完整方案实际打开应用、点击/右键/配置/取消/窄窗口/对照并截图；纯后台
 基础验证不能代替用户要求的最终 GUI 验收。
+
+B7a2a 的逐项证据见[第十五批验收](goland-parity-iteration15-acceptance.md)。
