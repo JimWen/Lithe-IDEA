@@ -9,6 +9,9 @@ import Foundation
 /// launch and remains available after the group leader exits.
 final class MacManagedProcess: @unchecked Sendable {
     typealias TerminationHandler = @Sendable (MacManagedProcess) -> Void
+    typealias GroupFactory = @Sendable (pid_t) -> any MacProcessGroupControlling
+
+    enum CleanupState: Equatable { case idle, cleaning, failed, complete }
 
     let executableURL: URL
     let arguments: [String]
@@ -19,6 +22,7 @@ final class MacManagedProcess: @unchecked Sendable {
     let standardError: FileHandle
 
     private let lock = NSLock()
+    private let rootReapCompletion = DispatchGroup()
     private let terminationQueue = DispatchQueue(
         label: "dev.lithe.managed-process.termination",
         qos: .utility
@@ -27,8 +31,16 @@ final class MacManagedProcess: @unchecked Sendable {
     private var running = false
     private var status: Int32 = 0
     private var pid: pid_t = 0
-    private var group: MacProcessGroup?
+    private var group: (any MacProcessGroupControlling)?
+    private let groupFactory: GroupFactory
+    private var rootReaped = false
+    private var rootExitPublished = false
+    private var cleanupAttempt: MacProcessCleanupAttempt?
+    private var firstCleanupAttempt: MacProcessCleanupAttempt?
+    private var cleanupOutcome: Bool?
+    private var exitCleanupOutcome: Bool?
     private var handler: TerminationHandler?
+    private var rootReapHandler: TerminationHandler?
 
     init(
         executableURL: URL,
@@ -37,7 +49,8 @@ final class MacManagedProcess: @unchecked Sendable {
         environment: [String: String]? = nil,
         standardInput: FileHandle,
         standardOutput: FileHandle,
-        standardError: FileHandle
+        standardError: FileHandle,
+        groupFactory: @escaping GroupFactory = { MacProcessGroup(processGroupID: $0) }
     ) {
         self.executableURL = executableURL
         self.arguments = arguments
@@ -46,6 +59,7 @@ final class MacManagedProcess: @unchecked Sendable {
         self.standardInput = standardInput
         self.standardOutput = standardOutput
         self.standardError = standardError
+        self.groupFactory = groupFactory
     }
 
     var processIdentifier: pid_t {
@@ -56,6 +70,25 @@ final class MacManagedProcess: @unchecked Sendable {
         lock.withLock { running }
     }
 
+    var isRootReaped: Bool { lock.withLock { rootReaped } }
+
+    /// Unlike legacy isRunning, failure retains ownership after the root exits.
+    var hasOwnedProcesses: Bool {
+        lock.withLock { (pid > 0 && !rootReaped) || group != nil }
+    }
+
+    var cleanupState: CleanupState {
+        lock.withLock {
+            guard cleanupAttempt != nil else { return .idle }
+            guard let cleanupOutcome else { return .cleaning }
+            return cleanupOutcome ? .complete : .failed
+        }
+    }
+
+    /// The immutable outcome attached to the single legacy root-exit callback,
+    /// independent of a later explicit retry's current cleanupState.
+    var rootExitCleanupSucceeded: Bool? { lock.withLock { exitCleanupOutcome } }
+
     var terminationStatus: Int32 {
         lock.withLock { status }
     }
@@ -65,7 +98,21 @@ final class MacManagedProcess: @unchecked Sendable {
         set { lock.withLock { handler = newValue } }
     }
 
+    /// Native capture can begin draining immediately after waitpid, while
+    /// legacy consumers keep their post-cleanup termination notification.
+    var onRootReaped: TerminationHandler? {
+        get { lock.withLock { rootReapHandler } }
+        set { lock.withLock { rootReapHandler = newValue } }
+    }
+
     func run(onLaunch: (pid_t) -> Void = { _ in }) throws {
+        // This owner is single-use; a retained failed group must never be
+        // overwritten by another launch on the same object.
+        try lock.withLock {
+            guard pid == 0 else { throw POSIXError(.EALREADY) }
+            pid = -1
+        }
+        defer { lock.withLock { if pid == -1 { pid = 0 } } }
         let launchedPID = try Self.spawn(
             executableURL: executableURL,
             arguments: arguments,
@@ -75,7 +122,8 @@ final class MacManagedProcess: @unchecked Sendable {
             standardOutput: standardOutput.fileDescriptor,
             standardError: standardError.fileDescriptor
         )
-        let processGroup = MacProcessGroup(processGroupID: launchedPID)
+        rootReapCompletion.enter()
+        let processGroup = groupFactory(launchedPID)
         let processSource = DispatchSource.makeProcessSource(
             identifier: launchedPID,
             eventMask: .exit,
@@ -103,50 +151,105 @@ final class MacManagedProcess: @unchecked Sendable {
         gracePeriod: Duration = .milliseconds(200),
         forcedTerminationTimeout: Duration = .seconds(1)
     ) -> Task<Bool, Never>? {
-        lock.withLock {
-            group?.terminate(
-                gracePeriod: gracePeriod,
-                forcedTerminationTimeout: forcedTerminationTimeout
-            )
-        }
+        guard let attempt = requestCleanup(
+            explicit: true, gracePeriod: Self.seconds(gracePeriod),
+            forcedTerminationTimeout: Self.seconds(forcedTerminationTimeout)
+        ) else { return nil }
+        return Task { await attempt.value() }
     }
 
     @discardableResult
     func terminateAndWait(
         gracePeriod: TimeInterval = 0.2,
-        forcedTerminationTimeout: TimeInterval = 1
+        forcedTerminationTimeout: TimeInterval = 1,
+        waitTimeout: TimeInterval? = nil
     ) -> Bool {
-        guard let processGroup = lock.withLock({ group }) else { return true }
-        return processGroup.terminateAndWait(
-            gracePeriod: gracePeriod,
+        guard let attempt = requestCleanup(
+            explicit: true, gracePeriod: gracePeriod,
             forcedTerminationTimeout: forcedTerminationTimeout
-        )
+        ) else { return !hasOwnedProcesses }
+        // A local timeout does not finish the physical attempt or permit an
+        // overlapping retry. The independent worker keeps its fixed deadline.
+        return attempt.wait(timeout: waitTimeout ?? (max(0, gracePeriod) + max(0, forcedTerminationTimeout) + 0.5))
     }
 
     private func reapRootProcess(_ processSource: DispatchSourceProcess) {
         let processID = processIdentifier
+        lock.withLock { group }?.prepareForRootReap()
         var waitStatus: Int32 = 0
         var waitResult: pid_t
         repeat {
             waitResult = Darwin.waitpid(processID, &waitStatus, 0)
         } while waitResult == -1 && errno == EINTR
+        let waitError = errno
 
-        let processGroup = lock.withLock { group }
-        if processGroup?.hasRunningProcesses == true {
-            // A normally exiting launcher must not leave background descendants
-            // alive merely because they closed or retained inherited pipes.
-            _ = processGroup?.terminateAndWait()
-        }
-
-        let callback = lock.withLock { () -> TerminationHandler? in
+        let reapPublication = lock.withLock { () -> (TerminationHandler?, Bool) in
             status = waitResult == processID ? Self.exitCode(from: waitStatus) : 1
-            running = false
+            let previouslyReaped = rootReaped
+            rootReaped = waitResult == processID || (waitResult == -1 && waitError == ECHILD)
             source = nil
-            group = nil
+            return (rootReaped ? rootReapHandler : nil, rootReaped && !previouslyReaped)
+        }
+        if reapPublication.1 { rootReapCompletion.leave() }
+        processSource.cancel()
+        reapPublication.0?(self)
+        // Reap before joining cleanup: otherwise a worker waiting for group
+        // disappearance could wait on the unreaped root itself. Legacy running
+        // and callback publication still wait for this attempt to finish.
+        if let attempt = requestCleanup(explicit: false, gracePeriod: 0.2, forcedTerminationTimeout: 1) {
+            attempt.observe { [self] result in publishRootExit(cleanupSucceeded: result) }
+        } else {
+            publishRootExit(cleanupSucceeded: !hasOwnedProcesses)
+        }
+    }
+
+    private func publishRootExit(cleanupSucceeded: Bool) {
+        let callback = lock.withLock { () -> TerminationHandler? in
+            guard !rootExitPublished else { return nil }
+            rootExitPublished = true
+            exitCleanupOutcome = cleanupSucceeded
+            running = false
             return handler
         }
-        processSource.cancel()
         callback?(self)
+    }
+
+    private func requestCleanup(
+        explicit: Bool, gracePeriod: TimeInterval, forcedTerminationTimeout: TimeInterval
+    ) -> MacProcessCleanupAttempt? {
+        lock.withLock {
+            if !explicit, let firstCleanupAttempt { return firstCleanupAttempt }
+            if let cleanupAttempt, cleanupOutcome == nil { return cleanupAttempt }
+            guard let group else { return nil }
+            let attempt = MacProcessCleanupAttempt()
+            cleanupAttempt = attempt
+            if firstCleanupAttempt == nil { firstCleanupAttempt = attempt }
+            cleanupOutcome = nil
+            // A native worker owns all blocking cleanup. Reaper and callers can
+            // join it without occupying that worker or holding a state lock.
+            DispatchQueue.global(qos: .utility).async { [self] in
+                let groupStopped = group.terminateAndWait(
+                    gracePeriod: gracePeriod, forcedTerminationTimeout: forcedTerminationTimeout
+                )
+                // Group disappearance can race the reaper's state publication.
+                // Only this native worker joins the root latch, with a bounded
+                // deadline; the reaper never waits on this worker to reap.
+                let result = groupStopped
+                    && rootReapCompletion.wait(timeout: .now() + .milliseconds(500)) == .success
+                lock.withLock {
+                    guard cleanupAttempt === attempt else { return }
+                    cleanupOutcome = result
+                    if result { self.group = nil }
+                }
+                attempt.complete(result)
+            }
+            return attempt
+        }
+    }
+
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        let parts = duration.components
+        return max(0, Double(parts.seconds) + Double(parts.attoseconds) / 1e18)
     }
 
     private static func spawn(
