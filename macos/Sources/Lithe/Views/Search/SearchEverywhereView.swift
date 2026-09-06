@@ -20,7 +20,6 @@ struct SearchEverywhereView: View {
     @State private var selectedIndex = 0
     @State private var scope: SearchEverywhereScope = .all
     @State private var searchOptions = ProjectSearchOptions.default
-    @State private var keyMonitor: Any?
 
     private enum SearchItem {
         case result(FileSearchResult)
@@ -102,10 +101,13 @@ struct SearchEverywhereView: View {
         .onAppear {
             searchFocused = true
             selectedIndex = 0
-            installKeyMonitor()
         }
-        .onDisappear { removeKeyMonitor() }
-        .onChange(of: model.searchEverywhereQuery) { _ in selectedIndex = 0 }
+        .background(MacSearchKeyboardHandler(isEnabled: { model.isSearchEverywhereVisible }, handle: handleKey))
+        .onChange(of: model.searchEverywhereQuery) { _ in
+            selectedIndex = 0
+            model.clearSearchEverywhereResults()
+        }
+        .onChange(of: searchOptions) { _ in model.clearSearchEverywhereResults() }
         .onChange(of: scope) { _ in selectedIndex = 0 }
         .task(id: "\(model.searchEverywhereQuery)|\(searchOptions.cacheKey)") {
             try? await Task.sleep(for: .milliseconds(180))
@@ -420,34 +422,17 @@ struct SearchEverywhereView: View {
         results.map(SearchItem.result)
     }
 
-    private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard model.isSearchEverywhereVisible else { return event }
-            switch event.keyCode {
-            case 125: // Arrow Down
-                if !visibleItems.isEmpty { selectedIndex = min(selectedIndex + 1, visibleItems.count - 1) }
-                return nil
-            case 126: // Arrow Up
-                if !visibleItems.isEmpty { selectedIndex = max(selectedIndex - 1, 0) }
-                return nil
-            case 123, 124: // Arrow Left / Right
-                moveScope(by: event.keyCode == 124 ? 1 : -1)
-                return nil
-            case 48: // Tab / Shift-Tab
-                let isShiftDown = event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift)
-                moveScope(by: isShiftDown ? -1 : 1)
-                return nil
-            case 36, 76: // Return / Enter
-                performSelectedItem()
-                return nil
-            case 53: // Escape
-                model.dismissSearchEverywhere()
-                return nil
-            default:
-                return event
+    private func handleKey(_ action: MacSearchKeyboardAction) -> Bool {
+        switch action {
+        case .move(let delta):
+            if !visibleItems.isEmpty {
+                selectedIndex = min(max(selectedIndex + delta, 0), visibleItems.count - 1)
             }
+        case .category(let delta): moveScope(by: delta)
+        case .submit: performSelectedItem()
+        case .dismiss: model.dismissSearchEverywhere()
         }
+        return true
     }
 
     private func moveScope(by offset: Int) {
@@ -465,10 +450,4 @@ struct SearchEverywhereView: View {
         }
     }
 
-    private func removeKeyMonitor() {
-        if let keyMonitor {
-            NSEvent.removeMonitor(keyMonitor)
-            self.keyMonitor = nil
-        }
-    }
 }

@@ -18,12 +18,19 @@ public final class SearchFeatureModel: ObservableObject {
     )
     @Published public private(set) var isSearchingEverywhere = false
     @Published public private(set) var projectReplacementFiles: [ProjectReplacementFile] = []
-    @Published public private(set) var isLoadingProjectReplacement = false
+    @Published public private(set) var isPreviewingProjectReplacement = false
+    @Published public private(set) var isApplyingProjectReplacement = false
+
+    public var isLoadingProjectReplacement: Bool {
+        isPreviewingProjectReplacement || isApplyingProjectReplacement
+    }
 
     private let operations: any SearchOperations
     private var indexTask: Task<Void, Never>?
     private var indexTaskGeneration = 0
     private var searchGeneration = 0
+    private var everywhereGeneration = 0
+    private var replacementGeneration = 0
 
     public var hasActiveModuleWork: Bool {
         isSearching || isSearchingEverywhere || isLoadingProjectReplacement || indexTask != nil
@@ -35,6 +42,8 @@ public final class SearchFeatureModel: ObservableObject {
 
     public func reset() {
         searchGeneration += 1
+        everywhereGeneration += 1
+        replacementGeneration += 1
         indexTaskGeneration += 1
         indexTask?.cancel()
         indexTask = nil
@@ -43,7 +52,7 @@ public final class SearchFeatureModel: ObservableObject {
         searchEverywhereResults = SearchEverywhereResults(fileMatches: [], contentMatches: [])
         isSearchingEverywhere = false
         projectReplacementFiles = []
-        isLoadingProjectReplacement = false
+        isPreviewingProjectReplacement = false
     }
 
     public func warmIndex(at workspaceURL: URL, visibilityRules: SearchVisibilityRules) {
@@ -129,7 +138,7 @@ public final class SearchFeatureModel: ObservableObject {
         let generation = searchGeneration
         isSearching = true
         let operations = self.operations
-        let results = await Task.detached(priority: .userInitiated) {
+        let results = await Self.runSearch {
             if let paths {
                 // The shared preview operation supports an explicit file set
                 // and unsaved buffers. It performs no writes, and avoids
@@ -148,7 +157,7 @@ public final class SearchFeatureModel: ObservableObject {
                 options: options,
                 visibilityRules: visibilityRules
             ) ?? []
-        }.value
+        }
 
         guard generation == searchGeneration else { return }
         guard !Task.isCancelled, isCurrent() else {
@@ -160,6 +169,7 @@ public final class SearchFeatureModel: ObservableObject {
     }
 
     public func clearSearchEverywhere() {
+        everywhereGeneration += 1
         searchEverywhereResults = SearchEverywhereResults(fileMatches: [], contentMatches: [])
         isSearchingEverywhere = false
     }
@@ -176,18 +186,21 @@ public final class SearchFeatureModel: ObservableObject {
             return
         }
 
+        everywhereGeneration += 1
+        let generation = everywhereGeneration
         isSearchingEverywhere = true
         let operations = self.operations
-        let indexedResults = await Task.detached(priority: .userInitiated) {
+        let indexedResults = await Self.runSearch {
             operations.searchEverywhere(
                 at: workspaceURL,
                 query: query,
                 options: options,
                 visibilityRules: visibilityRules
             ) ?? SearchEverywhereResults()
-        }.value
+        }
 
-        guard isCurrent() else {
+        guard generation == everywhereGeneration else { return }
+        guard !Task.isCancelled, isCurrent() else {
             isSearchingEverywhere = false
             return
         }
@@ -201,12 +214,9 @@ public final class SearchFeatureModel: ObservableObject {
     }
 
     public func clearProjectReplacementPreview() {
+        replacementGeneration += 1
         projectReplacementFiles = []
-        isLoadingProjectReplacement = false
-    }
-
-    public func setProjectReplacementLoading(_ loading: Bool) {
-        isLoadingProjectReplacement = loading
+        isPreviewingProjectReplacement = false
     }
 
     public func applyProjectReplacement(
@@ -216,12 +226,16 @@ public final class SearchFeatureModel: ObservableObject {
         recordHistory: @escaping @MainActor (String, URL) async -> Void,
         saveTextOverride: @escaping @MainActor (URL, String) throws -> Bool
     ) async -> ProjectReplacementApplyResult {
+        guard !isLoadingProjectReplacement else {
+            return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: [])
+        }
         let targets = projectReplacementFiles.filter { selectedPaths.contains($0.relativePath) }
         guard !targets.isEmpty else {
             return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: [])
         }
 
-        isLoadingProjectReplacement = true
+        isApplyingProjectReplacement = true
+        defer { isApplyingProjectReplacement = false }
         var changedFiles = 0
         var failedFiles: [String] = []
         for target in targets {
@@ -250,13 +264,13 @@ public final class SearchFeatureModel: ObservableObject {
                 failedFiles.append(target.relativePath)
             }
         }
-        isLoadingProjectReplacement = false
         return ProjectReplacementApplyResult(
             changedFiles: changedFiles,
             failedFiles: failedFiles
         )
     }
 
+    @discardableResult
     public func previewProjectReplacement(
         at workspaceURL: URL,
         query: String,
@@ -266,15 +280,18 @@ public final class SearchFeatureModel: ObservableObject {
         options: ProjectSearchOptions = .default,
         visibilityRules: SearchVisibilityRules,
         isCurrent: @escaping @MainActor () -> Bool
-    ) async {
+    ) async -> Bool {
+        guard !isApplyingProjectReplacement else { return false }
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             clearProjectReplacementPreview()
-            return
+            return false
         }
 
-        isLoadingProjectReplacement = true
+        replacementGeneration += 1
+        let generation = replacementGeneration
+        isPreviewingProjectReplacement = true
         let operations = self.operations
-        let results = await Task.detached(priority: .userInitiated) {
+        let results = await Self.runSearch {
             operations.previewReplacement(
                 at: workspaceURL,
                 query: query,
@@ -284,13 +301,27 @@ public final class SearchFeatureModel: ObservableObject {
                 textOverrides: textOverrides,
                 visibilityRules: visibilityRules
             ) ?? []
-        }.value
+        }
 
-        guard isCurrent() else {
-            isLoadingProjectReplacement = false
-            return
+        guard generation == replacementGeneration else { return false }
+        guard !Task.isCancelled, isCurrent() else {
+            isPreviewingProjectReplacement = false
+            return false
         }
         projectReplacementFiles = results
-        isLoadingProjectReplacement = false
+        isPreviewingProjectReplacement = false
+        return true
+    }
+
+    /// Synchronous ports run on GCD, never on Swift's cooperative executor.
+    /// The awaiting request owns completion; stale generations discard results.
+    private nonisolated static func runSearch<Value: Sendable>(
+        _ operation: @escaping @Sendable () -> Value
+    ) async -> Value {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: operation())
+            }
+        }
     }
 }

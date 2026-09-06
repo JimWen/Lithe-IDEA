@@ -244,7 +244,6 @@ struct ProjectReplaceView: View {
     }
 
     private func clearPreview() {
-        guard !model.projectReplacementFiles.isEmpty else { return }
         model.clearProjectReplacementPreview()
     }
 }

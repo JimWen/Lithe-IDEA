@@ -47,9 +47,14 @@ final class AppModel: ObservableObject, Identifiable {
     @Published var projectSearchScope = ProjectSearchScope.project
     @Published var projectSearchDirectory = ""
     @Published var projectSearchError: String?
-    @Published var isSearchEverywhereVisible = false
+    let searchRequests = SearchRequestLifecycle()
+    @Published var isSearchEverywhereVisible = false {
+        didSet { if !isSearchEverywhereVisible { clearSearchEverywhereResults() } }
+    }
     @Published var searchEverywhereQuery = ""
-    @Published var isProjectReplaceVisible = false
+    @Published var isProjectReplaceVisible = false {
+        didSet { if !isProjectReplaceVisible { clearProjectReplacementPreview() } }
+    }
     @Published var projectReplaceQuery = ""
     @Published var projectReplaceText = ""
     /// Replace in Project 面板的搜索选项（Preserve Case、文件掩码等）。

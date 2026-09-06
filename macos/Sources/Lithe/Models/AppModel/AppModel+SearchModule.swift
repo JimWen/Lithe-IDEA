@@ -29,12 +29,23 @@ extension AppModel {
     }
 
     func searchProject(options suppliedOptions: ProjectSearchOptions? = nil) async {
-        guard let workspaceURL, let searchFeature = await activateSearchModule() else { return }
+        guard let workspaceURL else { return }
+        let request = searchRequests.begin(.project)
         let identity = currentWorkspaceIdentity
         let query = searchQuery
         let options = suppliedOptions ?? projectSearchOptions
         let scope = projectSearchScope
         let directory = projectSearchDirectory
+        let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.searchRequests.isCurrent(request) && self.currentWorkspaceIdentity == identity
+                && self.searchQuery == query && self.projectSearchScope == scope
+                && (suppliedOptions != nil || self.projectSearchOptions == options)
+                && self.projectSearchDirectory == directory
+        }
+        guard let searchFeature = await searchRequests.activate(
+            for: request, isValid: isCurrent, operation: { await self.activateSearchModule() }
+        ) else { return }
         projectSearchError = nil
         if options.regularExpression, !query.isEmpty {
             do { _ = try NSRegularExpression(pattern: query) }
@@ -64,13 +75,7 @@ extension AppModel {
                 workspaceRelativePath(for: $0.url, root: workspaceURL)
             } : nil,
             textOverrides: scope == .openFiles ? openDocumentTextOverrides(rootURL: workspaceURL) : [:],
-            isCurrent: { [weak self] in
-                guard let self else { return false }
-                return !Task.isCancelled && self.currentWorkspaceIdentity == identity
-                    && self.searchQuery == query && self.projectSearchScope == scope
-                    && (suppliedOptions != nil || self.projectSearchOptions == options)
-                    && self.projectSearchDirectory == directory
-            }
+            isCurrent: isCurrent
         )
         try? services.moduleRuntime.markIdle(.search)
     }
@@ -109,17 +114,29 @@ extension AppModel {
     func dismissSearchEverywhere() {
         isSearchEverywhereVisible = false
         searchEverywhereQuery = ""
+    }
+
+    func clearSearchEverywhereResults() {
+        searchRequests.invalidate(.everywhere)
         searchFeatureIfActive?.clearSearchEverywhere()
     }
 
     func searchEverywhere(options: ProjectSearchOptions = .default) async {
-        guard let searchFeature = await activateSearchModule() else { return }
-        guard let workspaceURL else { searchFeature.clearSearchEverywhere(); return }
+        guard let workspaceURL, isSearchEverywhereVisible else { return }
+        let request = searchRequests.begin(.everywhere)
+        let identity = currentWorkspaceIdentity
         let query = searchEverywhereQuery
+        let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.searchRequests.isCurrent(request) && self.currentWorkspaceIdentity == identity
+                && self.isSearchEverywhereVisible && self.searchEverywhereQuery == query
+        }
+        guard let searchFeature = await searchRequests.activate(
+            for: request, isValid: isCurrent, operation: { await self.activateSearchModule() }
+        ) else { return }
         await searchFeature.searchEverywhere(
             at: workspaceURL, query: query, options: options,
-            visibilityRules: settings.fileVisibilityRules.searchRules,
-            isCurrent: { [weak self] in self?.workspaceURL == workspaceURL && self?.searchEverywhereQuery == query }
+            visibilityRules: settings.fileVisibilityRules.searchRules, isCurrent: isCurrent
         )
         try? services.moduleRuntime.markIdle(.search)
     }
@@ -131,6 +148,7 @@ extension AppModel {
     }
 
     func clearProjectReplacementPreview() {
+        searchRequests.invalidate(.replacement)
         searchFeatureIfActive?.clearProjectReplacementPreview()
         selectedProjectReplacementPaths = []
     }
@@ -146,25 +164,40 @@ extension AppModel {
     }
 
     func previewProjectReplacement() async {
-        guard let rootURL = workspaceURL, let searchFeature = await activateSearchModule() else { return }
+        guard let rootURL = workspaceURL, isProjectReplaceVisible else { return }
+        let request = searchRequests.begin(.replacement)
+        let identity = currentWorkspaceIdentity
         let query = projectReplaceQuery
+        let replacement = projectReplaceText
+        let options = projectReplaceOptions
+        let files = projectFiles
         let overrides = openDocumentTextOverrides(rootURL: rootURL)
-        await searchFeature.previewProjectReplacement(
-            at: rootURL, query: query, replacement: projectReplaceText,
-            paths: projectFiles.compactMap { workspaceRelativePath(for: $0, root: rootURL) },
-            textOverrides: overrides, options: projectReplaceOptions,
-            visibilityRules: settings.fileVisibilityRules.searchRules,
-            isCurrent: { [weak self] in self?.workspaceURL == rootURL && self?.projectReplaceQuery == query }
+        let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.searchRequests.isCurrent(request) && self.currentWorkspaceIdentity == identity
+                && self.isProjectReplaceVisible && self.projectReplaceQuery == query
+                && self.projectReplaceText == replacement && self.projectReplaceOptions == options
+                && self.projectFiles == files && self.openDocumentTextOverrides(rootURL: rootURL) == overrides
+        }
+        guard let searchFeature = await searchRequests.activate(
+            for: request, isValid: isCurrent, operation: { await self.activateSearchModule() }
+        ) else { return }
+        let accepted = await searchFeature.previewProjectReplacement(
+            at: rootURL, query: query, replacement: replacement,
+            paths: files.compactMap { workspaceRelativePath(for: $0, root: rootURL) },
+            textOverrides: overrides, options: options,
+            visibilityRules: settings.fileVisibilityRules.searchRules, isCurrent: isCurrent
         )
         try? services.moduleRuntime.markIdle(.search)
-        guard projectReplaceQuery == query else { return }
+        guard accepted, isCurrent() else { return }
         selectedProjectReplacementPaths = Set(projectReplacementFiles.map(\.relativePath))
     }
 
     func applyProjectReplacement() async {
         guard let rootURL = workspaceURL,
               !projectReplaceQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let searchFeature = await activateSearchModule() else { return }
+              let searchFeature = await activateSearchModule(),
+              !searchFeature.isLoadingProjectReplacement else { return }
         let result = await searchFeature.applyProjectReplacement(
             at: rootURL, selectedPaths: selectedProjectReplacementPaths,
             textOverrides: openDocumentTextOverrides(rootURL: rootURL),

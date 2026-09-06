@@ -57,7 +57,11 @@ struct ProjectSearchView: View {
             guard !Task.isCancelled, selectedID == selected.id else { return }
             preview = value
         }
-        .background(ProjectSearchKeyboardHandler(moveSelection: moveSelection))
+        .background(MacSearchKeyboardHandler(isEnabled: { model.isProjectSearchPresented }) { action in
+            guard case .move(let delta) = action else { return false }
+            moveSelection(delta)
+            return true
+        })
     }
 
     private var header: some View {
@@ -244,40 +248,5 @@ struct ProjectSearchView: View {
         guard let selected else { return }
         model.isProjectSearchPresented = false
         model.openSearchResult(selected)
-    }
-}
-
-/// Limit arrow handling to the owning sheet's window so a hidden project's
-/// search panel cannot consume keys from another project in the same process.
-private struct ProjectSearchKeyboardHandler: NSViewRepresentable {
-    let moveSelection: (Int) -> Void
-    func makeNSView(context: Context) -> KeyView { KeyView() }
-    func updateNSView(_ view: KeyView, context: Context) {
-        view.moveSelection = moveSelection
-    }
-    static func dismantleNSView(_ view: KeyView, coordinator: ()) { view.removeMonitor() }
-
-    final class KeyView: NSView {
-        var moveSelection: ((Int) -> Void)?
-        private var monitor: Any?
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            removeMonitor()
-            guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, let window = self.window, event.window === window,
-                      window.isKeyWindow,
-                      event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
-                if event.keyCode == 125 { self.moveSelection?(1); return nil }
-                if event.keyCode == 126 { self.moveSelection?(-1); return nil }
-                return event
-            }
-        }
-        func removeMonitor() {
-            if let monitor { NSEvent.removeMonitor(monitor) }
-            monitor = nil
-        }
-        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
     }
 }
