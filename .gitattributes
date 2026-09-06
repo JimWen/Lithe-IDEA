@@ -1,0 +1,5 @@
+# Preserve upstream source bytes; verify-swiftterm-source.mjs separately checks
+# the restored hashes and enforces whitespace rules on our patch's added lines.
+third_party/SwiftTerm/Sources/SwiftTerm/** -whitespace
+third_party/SwiftTerm/lithe-typography.patch -whitespace
+third_party/SwiftTerm/Sources/SwiftTerm/Notices/LitheChanges.txt whitespace

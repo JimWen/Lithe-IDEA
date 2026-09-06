@@ -18,6 +18,7 @@ if [[ "$CONFIGURATION" != "debug" && "$CONFIGURATION" != "release" ]]; then
 fi
 
 cd "$ROOT_DIR"
+node "$ROOT_DIR/scripts/verify-swiftterm-source.mjs"
 "$ROOT_DIR/scripts/verify-macos-app-build-safety.sh"
 
 RUST_TARGET=""

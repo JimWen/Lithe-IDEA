@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Darwin
 import Foundation
@@ -5,9 +6,76 @@ import LitheTerminalModule
 import Testing
 @testable import Lithe
 
+@_silgen_name("proc_pidinfo")
+private func configurationTestPIDInfo(
+    _ pid: pid_t, _ flavor: Int32, _ argument: UInt64,
+    _ buffer: UnsafeMutableRawPointer?, _ size: Int32
+) -> Int32
+
 @Suite("Native terminal configuration", .serialized)
 @MainActor
 struct MacTerminalConfigurationTests {
+    @Test
+    func typographyKeepsRealPTYAndApplicationArrowInput() async throws {
+        try await withTerminalFixture { root, transport, session, captureChild in
+            transport.view.setFrameSize(CGSize(width: 800, height: 480))
+            let ready = TestGate()
+            let modeChecked = TestGate()
+            let done = TestGate()
+            defer { ready.open(); modeChecked.open(); done.open() }
+            var output = ""
+            session.onOutput = { text in
+                output += text
+                if output.contains("LITHE_READY") { ready.open() }
+                if output.contains("LITHE_MODE_OK") { modeChecked.open() }
+                if output.contains("LITHE_DONE") { done.open() }
+            }
+            var configuration = TerminalShellConfiguration()
+            configuration.shell = .bash
+            configuration.loginShell = false
+            // The child enables DECCKM, waits for the test's typography update,
+            // then checks the emulator's real reply and native Up-arrow bytes.
+            let script = #"""
+            stty raw -echo
+            printf '\033[?1hLITHE_READY\n'
+            IFS= read -r -n 1 trigger
+            printf '\033[?1$p'
+            IFS= read -r -d y reply
+            if [[ "$reply" == $'\e[?1;1$' ]]; then printf 'LITHE_MODE_OK\n'; else printf 'LITHE_MODE_BAD\n'; fi
+            IFS= read -r -n 3 arrow
+            if [[ "$arrow" == $'\eOA' ]]; then printf 'LITHE_KEY_OK\n'; else printf 'LITHE_KEY_BAD\n'; fi
+            printf 'LITHE_SIZE:'; stty size
+            printf 'LITHE_DONE\n'
+            IFS= read -r -n 1 finish
+            """#
+            configuration.arguments = ["--noprofile", "--norc", "-c", script]
+            session.start(configuration: configuration, context: .init(projectURL: root))
+            try captureChild()
+            try #require(await ready.waitUntilOpen())
+            let pid = try #require(transport.processID)
+            let surface = transport.nativeView
+            let emulator = transport.view.getTerminal()
+            transport.view.updateTypography(font: .monospacedSystemFont(ofSize: 18, weight: .regular), lineSpacing: 1.3)
+            #expect(transport.processID == pid)
+            let sameSurface = transport.nativeView === surface
+            #expect(sameSurface)
+            #expect(transport.view.getTerminal() === emulator)
+            try transport.send(Data("x".utf8))
+            try #require(await modeChecked.waitUntilOpen())
+            let arrow = try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.function], timestamp: 0,
+                windowNumber: 0, context: nil, characters: "\u{f700}",
+                charactersIgnoringModifiers: "\u{f700}", isARepeat: false, keyCode: 126
+            ))
+            transport.view.keyDown(with: arrow)
+            try #require(await done.waitUntilOpen())
+            #expect(output.contains("LITHE_KEY_OK"))
+            #expect(output.contains("LITHE_SIZE:\(emulator.rows) \(emulator.cols)"))
+            #expect(transport.processID == pid)
+            #expect(session.isRunning)
+        }
+    }
+
     @Test
     func realShellReceivesLiteralArgumentsEnvironmentAndWorkingDirectory() async throws {
         try await withTerminalFixture { root, terminal, session, captureChild in
@@ -113,9 +181,16 @@ struct MacTerminalConfigurationTests {
         // deliver exit/reap callbacks. Never adopt an identity during cleanup.
         let captureChild: @MainActor () throws -> Void = {
             let pid = try #require(terminal.processID)
-            let process = try #require(MacTerminalProcessIdentity.read(pid))
-            try #require(process.info.pbi_ppid == UInt32(getpid()))
-            child = process.identity
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout.size(ofValue: info))
+            // Argument 1 includes zombies. A bad interpreter can already be
+            // dead, but SwiftTerm's main-queue waitpid cannot reap it before
+            // this synchronous capture. Read ownership without consuming exit.
+            let bytes = configurationTestPIDInfo(pid, PROC_PIDTBSDINFO, 1, &info, size)
+            try #require(bytes == size)
+            try #require(info.pbi_ppid == UInt32(getpid()))
+            child = MacTerminalProcessIdentity(pid: pid, startSeconds: info.pbi_start_tvsec,
+                                               startMicroseconds: info.pbi_start_tvusec)
         }
         do { try await operation(root, terminal, session, captureChild) }
         catch { await cleanUp(child, session: session); throw error }

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="${0:A:h:h}"
 cd "$ROOT_DIR"
+node "$ROOT_DIR/scripts/verify-swiftterm-source.mjs"
 
 FORWARDED_ARGS=("$@")
 SKIP_BUILD=false

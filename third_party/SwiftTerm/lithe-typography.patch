@@ -1,0 +1,339 @@
+--- a/Package.swift
++++ b/Package.swift
+@@ -1,127 +1,22 @@
+ // swift-tools-version:5.9
+ 
+ import PackageDescription
+-import Foundation
+ 
+-#if os(Linux) || os(Windows)
+-let platformExcludes = ["Apple", "Mac", "iOS"]
+-#else
+-let platformExcludes: [String] = []
+-#endif
+-
+-let isGitHubActions = ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
+-let disableBenchmark = true
+-let benchmarkDependencies: [Package.Dependency] = (isGitHubActions || disableBenchmark) ? [] : [
+-    .package(url: "https://github.com/ordo-one/package-benchmark", .upToNextMajor(from: "1.29.11"))
+-]
+-
+-#if os(Windows)
+-let products: [Product] = [
+-    .executable(name: "SwiftTermFuzz", targets: ["SwiftTermFuzz"]),
+-    .library(
+-        name: "SwiftTerm",
+-        targets: ["SwiftTerm"]
+-    ),
+-]
+-
+-let targets: [Target] = [
+-    .target(
+-        name: "SwiftTerm",
+-        dependencies: [],
+-        path: "Sources/SwiftTerm",
+-        exclude: platformExcludes + ["Mac/README.md"]
+-//        swiftSettings: [
+-//            .unsafeFlags(["-enforce-exclusivity=none"])
+-//        ]
+-    ),
+-    .executableTarget (
+-        name: "SwiftTermFuzz",
+-        dependencies: ["SwiftTerm"],
+-        path: "Sources/SwiftTermFuzz"
+-    ),
+-    .testTarget(
+-        name: "SwiftTermTests",
+-        dependencies: ["SwiftTerm"],
+-        path: "Tests/SwiftTermTests"
+-    )
+-]
+-#else
+-let products: [Product] = [
+-    .executable(name: "SwiftTermFuzz", targets: ["SwiftTermFuzz"]),
+-    .executable(name: "termcast", targets: ["Termcast"]),
+-    .library(
+-        name: "SwiftTerm",
+-        targets: ["SwiftTerm"]
+-    ),
+-]
+-
+-let benchmarkTargets: [Target] = (isGitHubActions || disableBenchmark) ? [] : [
+-    .executableTarget(
+-        name: "SwiftTermBenchmarks",
+-        dependencies: [
+-            "SwiftTerm",
+-            .product(name: "Benchmark", package: "package-benchmark")
+-        ],
+-        path: "Benchmarks/SwiftTermBenchmarks",
+-        plugins: [
+-            .plugin(name: "BenchmarkPlugin", package: "package-benchmark")
+-        ]
+-    )
+-]
+-
+-let targets: [Target] = [
+-    .target(
+-        name: "SwiftTerm",
+-        //
+-        // We can not use Swift Subprocess, because there is no way of configuring the child process to
+-        // be a controlling terminal, as it is posix-spawn based.
+-//        dependencies: [
+-//            .product(name: "Subprocess", package: "swift-subprocess", condition: .when(platforms: [.macOS, .linux]))
+-//        ],
+-        path: "Sources/SwiftTerm",
+-        exclude: platformExcludes + ["Mac/README.md"],
+-        resources: [
+-            .process("Apple/Metal/Shaders.metal")
+-        ]
+-//        swiftSettings: [
+-//            .unsafeFlags(["-enforce-exclusivity=none"])
+-//        ]
+-    ),
+-    .executableTarget (
+-        name: "SwiftTermFuzz",
+-        dependencies: ["SwiftTerm"],
+-        path: "Sources/SwiftTermFuzz"
+-    ),
+-    .executableTarget (
+-        name: "Termcast",
+-        dependencies: [
+-            "SwiftTerm",
+-            .product(name: "ArgumentParser", package: "swift-argument-parser")
+-        ],
+-        path: "Sources/Termcast"
+-    ),
+-    .testTarget(
+-        name: "SwiftTermTests",
+-        dependencies: ["SwiftTerm"],
+-        path: "Tests/SwiftTermTests"
+-    )
+-] + benchmarkTargets
+-#endif
+-
++// Lithe compiles only the fixed-version terminal library. See upstream.json
++// and lithe-typography.patch for the exact upstream inputs and local changes.
+ let package = Package(
+     name: "SwiftTerm",
+-    platforms: [
+-        .iOS(.v14),
+-        (disableBenchmark ? .macOS(.v11) : .macOS(.v13)),
+-        .tvOS(.v13),
+-        .visionOS(.v1)
++    platforms: [.macOS(.v11)],
++    products: [.library(name: "SwiftTerm", targets: ["SwiftTerm"])],
++    targets: [
++        .target(
++            name: "SwiftTerm",
++            path: "Sources/SwiftTerm",
++            resources: [
++                .process("Apple/Metal/Shaders.metal"),
++                .copy("Notices")
++            ]
++        )
+     ],
+-    products: products,
+-    dependencies: [
+-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.0.0"),
+-        .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.4.3"),
+-    ] + benchmarkDependencies,
+-//        .package(url: "https://github.com/swiftlang/swift-subprocess", revision: "426790f3f24afa60b418450da0afaa20a8b3bdd4")
+-    targets: targets,
+     swiftLanguageVersions: [.v5]
+ )
+--- a/Sources/SwiftTerm/Apple/AppleTerminalView.swift
++++ b/Sources/SwiftTerm/Apple/AppleTerminalView.swift
+@@ -127,8 +127,12 @@
+     @objc open var lineSpacing: CGFloat {
+         get { _lineSpacing }
+         set {
++            #if os(macOS)
++            updateTypography(font: pendingTypographyUpdate?.font ?? fontSet.normal, lineSpacing: newValue)
++            #else
+             _lineSpacing = newValue
+             resetFont()
++            #endif
+         }
+     }
+ 
+@@ -146,11 +150,20 @@
+         resetCaches()
+         self.cellDimension = computeFontDimensions ()
+         if (frame.width > 0) && (frame.height > 0) {
+-            let newCols = Int(frame.width / cellDimension.width)
+-            let newRows = Int(frame.height / cellDimension.height)
+-            resize(cols: newCols, rows: newRows)
+-        }
++            // Typography is a native geometry change, not a terminal reset.
++            // Preserve application modes and use the scroller-aware resize path.
++            processSizeChange(newSize: frame.size)
++        }
++        // Font/cascade changes also invalidate geometry and shaping when the
++        // number of cells is unchanged.
++        accessibility.invalidate()
++        search.invalidate()
+         updateCaretView()
++        updateCursorPosition()
++        #if canImport(MetalKit)
++        metalRenderer?.invalidateTypography()
++        requestMetalDisplay()
++        #endif
+         
+         #if os(macOS)
+         needsDisplay = true
+@@ -427,7 +440,39 @@
+ 
+     public func synchronizedOutputChanged (source: Terminal, active: Bool)
+     {
++        #if os(macOS)
++        if active, !isUsingMetalRenderer, redrawPolicyBeforeSynchronizedOutput == nil {
++            // Preserve the backing contents before AppKit allocates/clears a
++            // drawing context. Returning early from draw would produce black.
++            redrawPolicyBeforeSynchronizedOutput = layerContentsRedrawPolicy
++            // Drain invalidation from the preceding committed frame before
++            // freezing. This callback runs before any bytes in the new frame.
++            displayIfNeeded()
++            if source.synchronizedOutputActive, !isUsingMetalRenderer,
++               redrawPolicyBeforeSynchronizedOutput != nil {
++                layerContentsRedrawPolicy = .never
++            }
++        } else if !active, let policy = redrawPolicyBeforeSynchronizedOutput {
++            redrawPolicyBeforeSynchronizedOutput = nil
++            layerContentsRedrawPolicy = policy
++        }
++        #endif
+         if !active {
++            #if os(macOS)
++            if pendingTypographyUpdate != nil || pendingMetalWindowRebind {
++                // endSynchronizedOutput can run inside Terminal.resize. Avoid
++                // reentering resize before its original dimensions are committed.
++                DispatchQueue.main.async { [weak self] in
++                    guard let self, !self.terminal.synchronizedOutputActive else { return }
++                    if let pending = self.pendingTypographyUpdate {
++                        self.updateTypography(font: pending.font, lineSpacing: pending.lineSpacing)
++                    }
++                    #if canImport(MetalKit)
++                    self.finishDeferredMetalWindowRebind()
++                    #endif
++                }
++            }
++            #endif
+             updateScroller()
+             queuePendingDisplay()
+             terminalDelegate?.scrolled(source: self, position: scrollPosition)
+--- a/Sources/SwiftTerm/Apple/Metal/MetalTerminalRenderer.swift
++++ b/Sources/SwiftTerm/Apple/Metal/MetalTerminalRenderer.swift
+@@ -302,11 +302,25 @@
+         cursorBlinkTimer?.invalidate()
+     }
+ 
++    /// A descriptor cascade can change while font name, size and cell geometry
++    /// remain equal, so cache signatures alone cannot detect typography changes.
++    func invalidateTypography() {
++        shaperCache.removeAll()
++        glyphCache.removeAll()
++        scaledFontCache.removeAll()
++        customGlyphCache.removeAll()
++        rowCache.removeAll()
++        cacheSignature = nil
++    }
++
+     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+         // The view already updates drawableSize; avoid feedback loops.
+     }
+ 
+     func draw(in view: MTKView) {
++        // Cursor blink and external invalidations can bypass updateDisplay's
++        // guard; never draw the live buffer until its synchronized frame commits.
++        guard terminalView?.terminal.synchronizedOutputActive == false else { return }
+ #if canImport(os)
+         let drawID = OSSignpostID(log: MetalTerminalRenderer.profileLog)
+         if MetalTerminalRenderer.profileEnabled {
+@@ -1839,6 +1853,11 @@
+             self.maxEntries = maxEntries
+         }
+ 
++        func removeAll() {
++            cache.removeAll()
++            order.removeAll()
++        }
++
+         func shape(text: String, font: CTFont) -> ShaperRun? {
+             guard !text.isEmpty else {
+                 return nil
+--- a/Sources/SwiftTerm/Mac/MacTerminalView.swift
++++ b/Sources/SwiftTerm/Mac/MacTerminalView.swift
+@@ -304,6 +304,9 @@
+     /// https://developer.apple.com/forums/thread/663256?answerId=646653022#646653022
+     public var disableFullRedrawOnAnyChanges = false
+     var fontSet: FontSet
++    var pendingTypographyUpdate: (font: NSFont, lineSpacing: CGFloat)?
++    var redrawPolicyBeforeSynchronizedOutput: NSView.LayerContentsRedrawPolicy?
++    var pendingMetalWindowRebind = false
+ 
+     /// The font to use to render the terminal
+     public var font: NSFont {
+@@ -311,10 +314,23 @@
+             return fontSet.normal
+         }
+         set {
+-            fontSet = FontSet (font: newValue)
+-            resetFont()
+-            selectNone()
+-        }
++            updateTypography(font: newValue, lineSpacing: pendingTypographyUpdate?.lineSpacing ?? _lineSpacing)
++        }
++    }
++
++    /// Updates font and line height with at most one grid resize, preserving
++    /// terminal protocol state and the existing emulator/delegate connection.
++    /// Selection is cleared, matching the font setter's existing contract.
++    public func updateTypography(font: NSFont, lineSpacing: CGFloat) {
++        if terminal.synchronizedOutputActive {
++            pendingTypographyUpdate = (font, lineSpacing)
++            return
++        }
++        pendingTypographyUpdate = nil
++        fontSet = FontSet(font: font)
++        _lineSpacing = lineSpacing
++        resetFont()
++        selectNone()
+     }
+     
+     public init(frame: CGRect, font: NSFont?) {
+@@ -406,6 +422,7 @@
+             needsDisplay = false
+             mtkView.setNeedsDisplay(mtkView.bounds)
+         } else {
++            pendingMetalWindowRebind = false
+             metalView?.delegate = nil
+             metalView?.removeFromSuperview()
+             metalView = nil
+@@ -491,6 +508,12 @@
+     /// degraded but responsive terminal beats a dead one.
+     private func rebindMetalRendererToWindow(_ targetWindow: NSWindow) {
+         guard useMetalRenderer, let oldView = metalView else { return }
++        // Keep the old layer's committed contents until a new layer can draw
++        // its first frame; the renderer deliberately pauses during SYNC.
++        guard !terminal.synchronizedOutputActive else {
++            pendingMetalWindowRebind = true
++            return
++        }
+         // Reuse the old view's MTLDevice when possible so we don't churn
+         // GPUs unnecessarily on multi-GPU or eGPU setups.
+         guard let device = oldView.device ?? MTLCreateSystemDefaultDevice() else {
+@@ -523,6 +546,14 @@
+         metalView = newView
+         metalRenderer = newRenderer
+         metalBoundWindow = targetWindow
++    }
++
++    func finishDeferredMetalWindowRebind() {
++        guard pendingMetalWindowRebind, !terminal.synchronizedOutputActive else { return }
++        pendingMetalWindowRebind = false
++        if let currentWindow = window, metalBoundWindow !== currentWindow {
++            rebindMetalRendererToWindow(currentWindow)
++        }
+     }
+ 
+     /// Tears down the Metal renderer and reverts to CoreGraphics rendering
