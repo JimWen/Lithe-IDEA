@@ -18,15 +18,26 @@ extension AppModel {
         do {
             let value = try await services.moduleRuntime.activateCapability(.terminalWorkspace)
             guard let capability = value as? LitheTerminalModule.TerminalModuleCapability else { return false }
+            if let existing = terminalCapability { return existing === capability }
             let feature = capability.feature
             cacheModuleCapability(capability, id: .terminalWorkspace, moduleID: .terminal)
             observeModuleFeature(.terminal, observation: feature.objectWillChange.sink { [weak self] _ in
                 self?.scheduleObjectWillChangeRelay()
             })
+            observeModuleFeature(.terminal, observation: settings.$terminalDisplayConfiguration
+                .removeDuplicates().sink { [weak feature] configuration in
+                    // Published emits before storage changes. Use this value,
+                    // including the initial one when a sleeping module wakes.
+                    feature?.applyDisplayConfiguration(configuration)
+                })
             return true
         } catch {
             return false
         }
+    }
+
+    func retryTerminalDisplayConfiguration() {
+        terminalFeature?.applyDisplayConfiguration(settings.terminalDisplayConfiguration)
     }
 
     func toggleTerminal() {

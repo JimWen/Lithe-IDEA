@@ -162,7 +162,7 @@ struct SettingsView: View {
         case .keymap:
             ["Keymap", "Keyboard shortcuts", "Shortcuts", "Actions"]
         case .terminal:
-            ["Terminal", "Shell", "Default shell"]
+            ["Terminal", "Shell", "Default shell", "Terminal font", "Font family", "Font size", "Line height", "Fallback fonts", "Arguments", "Working directory", "Environment variables"]
         case .lsp:
             ["LSP", "Language server", "Language Support"]
         case .go:
@@ -230,7 +230,10 @@ struct SettingsView: View {
                     case .general: generalSettings
                     case .editor: editorSettings
                     case .keymap: EmptyView()
-                    case .terminal: TerminalSettingsView(settings: settings)
+                    case .terminal:
+                        TerminalSettingsView(settings: settings,
+                                             displayDiagnostics: model.terminalFeature?.displayDiagnostics ?? [],
+                                             retryDisplay: model.retryTerminalDisplayConfiguration)
                     case .lsp, .go, .rust, .python: EmptyView()
                     case .ai: aiSettings
                     case .updates: updatesSettings
@@ -1248,7 +1251,12 @@ struct SettingsView: View {
 
     private var footer: some View {
         HStack {
-            Button("Restore Defaults") { settings.restoreDefaults() }
+            Button("Restore Defaults") {
+                // Commit native field editors before resetting so an old draft
+                // cannot be submitted later when the settings window closes.
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                settings.restoreDefaults()
+            }
                 .buttonStyle(LitheSecondaryButtonStyle())
             Spacer()
             HStack(spacing: 10) {
@@ -1291,6 +1299,7 @@ struct SettingsView: View {
     }
 
     private func closeSettings() {
+        NSApp.keyWindow?.makeFirstResponder(nil)
         if let onDismiss {
             onDismiss()
         } else {

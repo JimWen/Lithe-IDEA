@@ -4946,6 +4946,7 @@ private final class TestTerminalTransport: TerminalTransport {
     var startRequests: [String] = []
     var stopCount = 0
 
+    func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) -> [String] { [] }
     func defaultShellPath() -> String { "/bin/zsh" }
 
     func defaultEnvironment() -> [String: String] { [:] }

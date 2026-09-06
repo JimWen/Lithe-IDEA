@@ -50,6 +50,10 @@ final class MacServiceContainer {
         MacLogDirectoryProvider()
     }
 
+    static func makeTerminalFontCatalog() -> any TerminalFontCatalogProviding {
+        MacTerminalFontCatalog()
+    }
+
     static func makeApplicationLogWriter() -> MacApplicationLogWriter {
         MacApplicationLogWriter()
     }

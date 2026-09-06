@@ -142,6 +142,7 @@ private final class TestTransport: TerminalTransport {
     var processEnvironments: [[String: String]] = []
     var sentInputs: [String] = []
     var outputOnStart: String?
+    func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) -> [String] { [] }
     func defaultShellPath() -> String { "/bin/zsh" }
     func defaultEnvironment() -> [String: String] { ["REMOVE_ME": "old"] }
     func prepareShellLaunch(_ configuration: TerminalShellConfiguration, context: TerminalLaunchContext) throws -> TerminalShellLaunch {

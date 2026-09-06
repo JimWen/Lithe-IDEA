@@ -149,6 +149,7 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     private let stoppedChildProcessReaper = MacStoppedChildProcessReaper()
     private var processSession: MacTerminalProcessSession?
     private var connection: MacTerminalProcessConnection?
+    private var appliedDisplayConfiguration: TerminalDisplayConfiguration?
 
     var isRunning: Bool {
         connection?.process.running ?? false
@@ -184,8 +185,7 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         view.terminal.setup(isReset: false)
     }
 
-    private static func preferredTerminalFont() -> NSFont {
-        let size: CGFloat = 13
+    private static func preferredTerminalFont(size: CGFloat = 13) -> NSFont {
         let fontNames = [
             "MesloLGS NF",
             "MesloLGS Nerd Font Mono",
@@ -202,6 +202,38 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
             }
         }
         return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) -> [String] {
+        if let error = configuration.validationMessage { return [error] }
+        guard appliedDisplayConfiguration != configuration else { return [] }
+        let size = CGFloat(configuration.fontSize)
+        let base: NSFont
+        if let name = configuration.fontName {
+            guard let resolved = NSFont(name: name, size: size), resolved.fontName == name else {
+                return ["Terminal font settings were not applied because a font is unavailable. Choose installed fonts and retry."]
+            }
+            base = resolved
+        } else {
+            base = Self.preferredTerminalFont(size: size)
+        }
+        var fallbackDescriptors: [NSFontDescriptor] = []
+        for name in configuration.fallbackFontNames {
+            guard let font = NSFont(name: name, size: size), font.fontName == name else {
+                return ["Terminal font settings were not applied because a font is unavailable. Choose installed fonts and retry."]
+            }
+            fallbackDescriptors.append(font.fontDescriptor)
+        }
+        let descriptor = fallbackDescriptors.isEmpty ? base.fontDescriptor
+            : base.fontDescriptor.addingAttributes([.cascadeList: fallbackDescriptors])
+        guard let font = NSFont(descriptor: descriptor, size: size) else {
+            return ["Terminal font settings could not be applied. Choose installed fonts and retry."]
+        }
+        view.updateTypography(font: font, lineSpacing: CGFloat(configuration.lineSpacing))
+        // Failed resolution never advances this cache, so Retry can apply an
+        // unchanged request after the font becomes available.
+        appliedDisplayConfiguration = configuration
+        return []
     }
 
     func defaultShellPath() -> String {

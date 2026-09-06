@@ -55,7 +55,9 @@ struct MacTerminalConfigurationTests {
             let pid = try #require(transport.processID)
             let surface = transport.nativeView
             let emulator = transport.view.getTerminal()
-            transport.view.updateTypography(font: .monospacedSystemFont(ofSize: 18, weight: .regular), lineSpacing: 1.3)
+            var display = TerminalDisplayConfiguration()
+            display.fontSize = 18; display.lineSpacing = 1.3
+            #expect(transport.applyDisplayConfiguration(display).isEmpty)
             #expect(transport.processID == pid)
             let sameSurface = transport.nativeView === surface
             #expect(sameSurface)

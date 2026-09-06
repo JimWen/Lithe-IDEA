@@ -173,6 +173,7 @@ private final class PlacementTestTerminalTransport: TerminalTransport {
     var startCount = 0
     var stopCount = 0
 
+    func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) -> [String] { [] }
     func defaultShellPath() -> String { "/bin/zsh" }
     func defaultEnvironment() -> [String: String] { [:] }
 

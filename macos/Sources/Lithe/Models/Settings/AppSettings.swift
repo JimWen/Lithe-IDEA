@@ -19,6 +19,7 @@ final class AppSettings: ObservableObject {
         static let autoSaveDelay = "settings.autoSaveDelay"
         static let terminalShell = "settings.terminalShell"
         static let terminalConfiguration = "settings.terminalConfiguration"
+        static let terminalDisplayConfiguration = "settings.terminalDisplayConfiguration"
         static let hiddenDirectories = "settings.hiddenDirectories"
         static let hiddenFilePatterns = "settings.hiddenFilePatterns"
         static let gitSaveChangesPolicy = "settings.gitSaveChangesPolicy"
@@ -41,8 +42,16 @@ final class AppSettings: ObservableObject {
         let configuration: TerminalShellConfiguration
     }
 
+    private struct TerminalDisplayConfigurationPayload: Codable {
+        let version: Int
+        let configuration: TerminalDisplayConfiguration
+    }
+
     private let defaults: any KeyValueStore
     private let logDirectoryProvider: any LogDirectoryProviding
+    private let terminalFontCatalog: (any TerminalFontCatalogProviding)?
+    private var terminalFontsLoaded = false
+    @Published private(set) var terminalFonts: [TerminalFontChoice] = []
 
     @Published var colorTheme: AppColorTheme {
         didSet {
@@ -69,6 +78,10 @@ final class AppSettings: ObservableObject {
         didSet { saveTerminalConfiguration() }
     }
     @Published private(set) var terminalConfigurationLoadError: String?
+    @Published var terminalDisplayConfiguration: TerminalDisplayConfiguration {
+        didSet { saveTerminalDisplayConfiguration() }
+    }
+    @Published private(set) var terminalDisplayConfigurationLoadError: String?
     @Published var hiddenDirectoryNames: [String] {
         didSet {
             defaults.set(hiddenDirectoryNames, forKey: Key.hiddenDirectories)
@@ -111,10 +124,12 @@ final class AppSettings: ObservableObject {
 
     init(
         store: any KeyValueStore,
-        logDirectoryProvider: any LogDirectoryProviding
+        logDirectoryProvider: any LogDirectoryProviding,
+        terminalFontCatalog: (any TerminalFontCatalogProviding)? = nil
     ) {
         self.defaults = store
         self.logDirectoryProvider = logDirectoryProvider
+        self.terminalFontCatalog = terminalFontCatalog
         colorTheme = AppColorTheme(
             rawValue: defaults.string(forKey: Key.colorTheme) ?? ""
         ) ?? .lithe
@@ -134,6 +149,9 @@ final class AppSettings: ObservableObject {
         let terminal = Self.loadTerminalConfiguration(from: defaults)
         terminalConfiguration = terminal.configuration
         terminalConfigurationLoadError = terminal.error
+        let display = Self.loadTerminalDisplayConfiguration(from: defaults)
+        terminalDisplayConfiguration = display.configuration
+        terminalDisplayConfigurationLoadError = display.error
         hiddenDirectoryNames = defaults.stringArray(forKey: Key.hiddenDirectories)
             ?? FileVisibilityRules.default.hiddenDirectoryNames
         hiddenFilePatterns = defaults.stringArray(forKey: Key.hiddenFilePatterns)
@@ -167,6 +185,53 @@ final class AppSettings: ObservableObject {
     }
 
     var terminalShellPath: String? { terminalConfiguration.specifiedShellPath }
+
+    func loadTerminalFontsIfNeeded() {
+        guard !terminalFontsLoaded else { return }
+        refreshTerminalFonts()
+    }
+
+    func refreshTerminalFonts() {
+        let fonts = terminalFontCatalog?.availableFonts() ?? []
+        terminalFontsLoaded = true
+        terminalFonts = fonts
+    }
+
+    var terminalFontAvailabilityDiagnostic: String? {
+        guard terminalFontsLoaded, terminalFontCatalog != nil,
+              terminalDisplayConfiguration.validationMessage == nil else { return nil }
+        let available = Set(terminalFonts.map(\.id))
+        let requested = (terminalDisplayConfiguration.fontName.map { [$0] } ?? [])
+            + terminalDisplayConfiguration.fallbackFontNames
+        guard requested.contains(where: { !available.contains($0) }) else { return nil }
+        return "Terminal font settings were not applied because a font is unavailable. Choose installed fonts and retry."
+    }
+
+    private func saveTerminalDisplayConfiguration() {
+        if let error = terminalDisplayConfiguration.validationMessage {
+            terminalDisplayConfigurationLoadError = error
+            return
+        }
+        do {
+            let data = try JSONEncoder().encode(TerminalDisplayConfigurationPayload(version: 1, configuration: terminalDisplayConfiguration))
+            defaults.set(data, forKey: Key.terminalDisplayConfiguration)
+            terminalDisplayConfigurationLoadError = nil
+        } catch {
+            terminalDisplayConfigurationLoadError = "Terminal display settings could not be saved."
+        }
+    }
+
+    private static func loadTerminalDisplayConfiguration(from store: any KeyValueStore) -> (configuration: TerminalDisplayConfiguration, error: String?) {
+        guard let stored = store.object(forKey: Key.terminalDisplayConfiguration) else { return (.init(), nil) }
+        guard let data = stored as? Data,
+              let payload = try? JSONDecoder().decode(TerminalDisplayConfigurationPayload.self, from: data),
+              payload.version == 1, payload.configuration.validationMessage == nil else {
+            // Keep unreadable settings for recovery. Default display settings
+            // still allow new and existing shells to run.
+            return (.init(), "Terminal display settings could not be read. Default fonts are in use; edit the settings or restore defaults.")
+        }
+        return (payload.configuration, nil)
+    }
 
     private func saveTerminalConfiguration() {
         do {
@@ -277,6 +342,7 @@ final class AppSettings: ObservableObject {
         autoSave = true
         autoSaveDelay = 1.5
         terminalConfiguration = TerminalShellConfiguration()
+        terminalDisplayConfiguration = TerminalDisplayConfiguration()
         hiddenDirectoryNames = FileVisibilityRules.default.hiddenDirectoryNames
         hiddenFilePatterns = FileVisibilityRules.default.hiddenFilePatterns
         gitSaveChangesPolicy = .stash

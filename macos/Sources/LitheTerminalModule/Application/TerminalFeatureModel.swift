@@ -6,6 +6,8 @@ import Foundation
 public final class TerminalFeatureModel: ObservableObject {
     @Published public private(set) var terminalSessions: [TerminalSession] = []
     @Published public private(set) var activeTerminalSessionID: UUID?
+    @Published public private(set) var displayDiagnostics: [String] = []
+    public private(set) var displayConfiguration = TerminalDisplayConfiguration()
 
     private let terminalFactory: () -> any TerminalTransport
     private let shellDiscovery: () -> [String]
@@ -19,6 +21,23 @@ public final class TerminalFeatureModel: ObservableObject {
     }
 
     public var availableShells: [String] { shellDiscovery() }
+
+    public func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) {
+        displayConfiguration = configuration
+        terminalSessions.forEach { $0.applyDisplayConfiguration(configuration) }
+        updateDisplayDiagnostics()
+    }
+
+    private func makeSession() -> TerminalSession {
+        let session = TerminalSession(transport: terminalFactory())
+        session.applyDisplayConfiguration(displayConfiguration)
+        return session
+    }
+
+    private func updateDisplayDiagnostics() {
+        let diagnostics = Array(Set(terminalSessions.flatMap(\.displayDiagnostics))).sorted()
+        if diagnostics != displayDiagnostics { displayDiagnostics = diagnostics }
+    }
 
     public var activeTerminalSession: TerminalSession? {
         guard let activeTerminalSessionID else { return terminalSessions.first }
@@ -35,18 +54,20 @@ public final class TerminalFeatureModel: ObservableObject {
 
     @discardableResult
     public func createSession(in workspaceURL: URL, shellPath: String? = nil) -> TerminalSession {
-        let session = TerminalSession(transport: terminalFactory())
+        let session = makeSession()
         session.start(in: workspaceURL, shellPath: shellPath)
         terminalSessions.append(session)
+        updateDisplayDiagnostics()
         activeTerminalSessionID = session.id
         return session
     }
 
     @discardableResult
     public func createSession(configuration: TerminalShellConfiguration, context: TerminalLaunchContext) -> TerminalSession {
-        let session = TerminalSession(transport: terminalFactory())
+        let session = makeSession()
         session.start(configuration: configuration, context: context)
         terminalSessions.append(session)
+        updateDisplayDiagnostics()
         activeTerminalSessionID = session.id
         return session
     }
@@ -56,10 +77,11 @@ public final class TerminalFeatureModel: ObservableObject {
         _ launch: TerminalProcessLaunch,
         onOutput: ((String) -> Void)? = nil
     ) throws -> (session: TerminalSession, processID: Int32) {
-        let session = TerminalSession(transport: terminalFactory())
+        let session = makeSession()
         session.onOutput = onOutput
         let processID = try session.startProcess(launch)
         terminalSessions.append(session)
+        updateDisplayDiagnostics()
         activeTerminalSessionID = session.id
         return (session, processID)
     }
@@ -78,6 +100,7 @@ public final class TerminalFeatureModel: ObservableObject {
             ?? (index > 0 ? terminalSessions[index - 1] : nil)
         session.stop()
         terminalSessions.remove(at: index)
+        updateDisplayDiagnostics()
         if wasActive { activeTerminalSessionID = replacement?.id }
         if terminalSessions.isEmpty { activeTerminalSessionID = nil }
     }
@@ -100,6 +123,7 @@ public final class TerminalFeatureModel: ObservableObject {
     public func stopAllSessions() {
         terminalSessions.forEach { $0.stop() }
         terminalSessions.removeAll()
+        updateDisplayDiagnostics()
         activeTerminalSessionID = nil
     }
 }

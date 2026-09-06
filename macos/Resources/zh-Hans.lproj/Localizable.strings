@@ -1494,3 +1494,31 @@
 "Program" = "程序";
 "Value" = "值";
 "Environment variables" = "环境变量";
+
+/* Terminal typography settings */
+"Terminal font" = "终端字体";
+"Default terminal font" = "默认终端字体";
+"Font family" = "字体";
+"Terminal font family" = "终端字体";
+"Terminal font size" = "终端字号";
+"Line height" = "行高";
+"Terminal line height" = "终端行高";
+"Fallback fonts" = "回退字体";
+"Fallback font" = "回退字体";
+"Font changes apply to all open terminals without restarting their shells." = "字体修改会应用到所有已打开的终端，无需重启 Shell。";
+"Fallbacks are tried in order before the system fallback fonts." = "按列表顺序尝试回退字体，随后使用系统回退字体。";
+"Move fallback font up" = "上移回退字体";
+"Move fallback font down" = "下移回退字体";
+"Remove fallback font" = "删除回退字体";
+"Add fallback font" = "添加回退字体";
+"Refresh fonts" = "刷新字体";
+"Retry font settings" = "重试字体设置";
+"Terminal font size must be between 8 and 48 points." = "终端字号必须介于 8 和 48 磅之间。";
+"Terminal line height must be between 1 and 2." = "终端行高必须介于 1 和 2 之间。";
+"Terminal settings allow at most 8 fallback fonts." = "终端最多可配置 8 个回退字体。";
+"Choose a valid terminal font identifier." = "请选择有效的终端字体标识。";
+"Each terminal font must be unique." = "终端字体不能重复。";
+"Terminal display settings could not be saved." = "无法保存终端显示设置。";
+"Terminal display settings could not be read. Default fonts are in use; edit the settings or restore defaults." = "无法读取终端显示设置。正在使用默认字体；请修改设置或恢复默认值。";
+"Terminal font settings were not applied because a font is unavailable. Choose installed fonts and retry." = "字体不可用，终端字体设置未应用。请选择已安装的字体后重试。";
+"Terminal font settings could not be applied. Choose installed fonts and retry." = "无法应用终端字体设置。请选择已安装的字体后重试。";

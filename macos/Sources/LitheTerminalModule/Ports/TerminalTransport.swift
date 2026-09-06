@@ -49,6 +49,8 @@ public protocol TerminalTransport: AnyObject {
     var onDirectoryUpdate: ((String?) -> Void)? { get set }
     var onLink: ((String, [String: String]) -> Void)? { get set }
 
+    /// Returns display diagnostics without interrupting the running process.
+    func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) -> [String]
     func defaultShellPath() -> String
     func defaultEnvironment() -> [String: String]
     func prepareShellLaunch(_ configuration: TerminalShellConfiguration, context: TerminalLaunchContext) throws -> TerminalShellLaunch

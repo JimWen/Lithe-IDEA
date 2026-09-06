@@ -10,6 +10,35 @@ import Testing
 @MainActor
 struct TerminalActivationTests {
     @Test
+    func displaySettingsUseLatestValueAndOneOwnedSubscription() async throws {
+        try await withFixture { fixture in
+            fixture.settings.terminalDisplayConfiguration.fontSize = 14
+            #expect(!fixture.module.entered.isOpen)
+            #expect(fixture.module.transports.isEmpty)
+            fixture.model.toggleTerminal()
+            try #require(await fixture.module.entered.waitUntilOpen())
+            fixture.settings.terminalDisplayConfiguration.fontSize = 17
+            fixture.module.release.open()
+            try #require(await fixture.awaitTerminalBinding())
+            let transport = try #require(fixture.module.transports.first)
+            #expect(transport.displayConfigurations.last?.fontSize == 17)
+            let initialCount = transport.displayConfigurations.count
+            #expect(await fixture.model.activateTerminalModule())
+            fixture.settings.terminalDisplayConfiguration.fontSize = 19
+            #expect(transport.displayConfigurations.count == initialCount + 1)
+            #expect(transport.displayConfigurations.last?.fontSize == 19)
+            fixture.model.clearModuleBindings(for: .terminal)
+            fixture.settings.terminalDisplayConfiguration.fontSize = 21
+            #expect(transport.displayConfigurations.count == initialCount + 1)
+            #expect(await fixture.model.activateTerminalModule())
+            #expect(transport.displayConfigurations.count == initialCount + 2)
+            #expect(transport.displayConfigurations.last?.fontSize == 21)
+            #expect(transport.launches.count == 1)
+            #expect(transport.isRunning)
+        }
+    }
+
+    @Test
     func firstToggleKeepsTheConfigurationCapturedBeforeActivation() async throws {
         try await withFixture { fixture in
             var original = TerminalShellConfiguration()

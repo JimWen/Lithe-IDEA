@@ -342,3 +342,31 @@
 "Program" = "Program";
 "Value" = "Value";
 "Environment variables" = "Environment variables";
+
+/* Terminal typography settings */
+"Terminal font" = "Terminal font";
+"Default terminal font" = "Default terminal font";
+"Font family" = "Font family";
+"Terminal font family" = "Terminal font family";
+"Terminal font size" = "Terminal font size";
+"Line height" = "Line height";
+"Terminal line height" = "Terminal line height";
+"Fallback fonts" = "Fallback fonts";
+"Fallback font" = "Fallback font";
+"Font changes apply to all open terminals without restarting their shells." = "Font changes apply to all open terminals without restarting their shells.";
+"Fallbacks are tried in order before the system fallback fonts." = "Fallbacks are tried in order before the system fallback fonts.";
+"Move fallback font up" = "Move fallback font up";
+"Move fallback font down" = "Move fallback font down";
+"Remove fallback font" = "Remove fallback font";
+"Add fallback font" = "Add fallback font";
+"Refresh fonts" = "Refresh fonts";
+"Retry font settings" = "Retry font settings";
+"Terminal font size must be between 8 and 48 points." = "Terminal font size must be between 8 and 48 points.";
+"Terminal line height must be between 1 and 2." = "Terminal line height must be between 1 and 2.";
+"Terminal settings allow at most 8 fallback fonts." = "Terminal settings allow at most 8 fallback fonts.";
+"Choose a valid terminal font identifier." = "Choose a valid terminal font identifier.";
+"Each terminal font must be unique." = "Each terminal font must be unique.";
+"Terminal display settings could not be saved." = "Terminal display settings could not be saved.";
+"Terminal display settings could not be read. Default fonts are in use; edit the settings or restore defaults." = "Terminal display settings could not be read. Default fonts are in use; edit the settings or restore defaults.";
+"Terminal font settings were not applied because a font is unavailable. Choose installed fonts and retry." = "Terminal font settings were not applied because a font is unavailable. Choose installed fonts and retry.";
+"Terminal font settings could not be applied. Choose installed fonts and retry." = "Terminal font settings could not be applied. Choose installed fonts and retry.";

@@ -3,17 +3,22 @@ import LitheTerminalModule
 
 struct TerminalSettingsView: View {
     @ObservedObject var settings: AppSettings
+    let displayDiagnostics: [String]
+    let retryDisplay: () -> Void
     @State private var argumentIDs: [UUID]
     @State private var environmentIDs: [UUID]
 
-    init(settings: AppSettings) {
+    init(settings: AppSettings, displayDiagnostics: [String], retryDisplay: @escaping () -> Void) {
         self.settings = settings
+        self.displayDiagnostics = displayDiagnostics
+        self.retryDisplay = retryDisplay
         _argumentIDs = State(initialValue: settings.terminalConfiguration.arguments.map { _ in UUID() })
         _environmentIDs = State(initialValue: settings.terminalConfiguration.environment.map { _ in UUID() })
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            TerminalTypographySettingsView(settings: settings, diagnostics: displayDiagnostics, retry: retryDisplay)
             Text("Launch settings apply to new terminals. Restart keeps the original session configuration.")
                 .font(LitheTheme.smallFont).foregroundStyle(LitheTheme.secondaryText)
             if let error = settings.terminalConfigurationLoadError ?? settings.terminalConfiguration.validationMessage {

@@ -14,6 +14,7 @@ public final class TerminalSession: ObservableObject, Identifiable {
     @Published public private(set) var startedAt: Date?
     @Published public private(set) var endedAt: Date?
     @Published public private(set) var lastError: String?
+    @Published public private(set) var displayDiagnostics: [String] = []
     public var onLink: ((String, [String: String]) -> Void)?
     /// Receives decoded child-process output without taking ownership of the
     /// terminal surface.
@@ -49,6 +50,11 @@ public final class TerminalSession: ObservableObject, Identifiable {
     }
 
     public var nativeView: AnyObject { transport.nativeView }
+
+    public func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) {
+        let diagnostics = transport.applyDisplayConfiguration(configuration)
+        if displayDiagnostics != diagnostics { displayDiagnostics = diagnostics }
+    }
     public var displayTitle: String { processTitle?.isEmpty == false ? processTitle! : shellName }
     public var displayDirectory: String? { currentDirectory?.lastPathComponent.nonEmpty }
 

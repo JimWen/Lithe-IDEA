@@ -183,7 +183,15 @@ final class ConfigurationTestTransport: TerminalTransport {
     var launches: [TerminalShellLaunch] = []
     var prepareCount = 0
     var failPreparation = false
+    var displayConfigurations: [TerminalDisplayConfiguration] = []
+    var displayDiagnostics: [String] = []
+    var lifecycleEvents: [String] = []
 
+    func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) -> [String] {
+        displayConfigurations.append(configuration)
+        lifecycleEvents.append("display")
+        return displayDiagnostics
+    }
     func defaultShellPath() -> String { "/bin/zsh" }
     func defaultEnvironment() -> [String: String] { inheritedEnvironment }
     func resolveExecutablePath(_ executablePath: String, workingDirectory: String, environment: [String: String]) throws -> String {
@@ -198,6 +206,7 @@ final class ConfigurationTestTransport: TerminalTransport {
         _ = try startProcess(.init(title: nil, executablePath: shellPath, arguments: ["-l"], workingDirectory: workingDirectory), environment: environment)
     }
     func startProcess(_ launch: TerminalProcessLaunch, environment: [String: String]) throws -> Int32 {
+        lifecycleEvents.append("start")
         launches.append(.init(process: launch, environment: environment))
         isRunning = true
         return 42
@@ -206,7 +215,7 @@ final class ConfigurationTestTransport: TerminalTransport {
     func interrupt() throws {}
     func focus() {}
     func clear() {}
-    func stop() { isRunning = false }
+    func stop() { lifecycleEvents.append("stop"); isRunning = false }
 }
 
 final class TerminalConfigurationTestStore: KeyValueStore, @unchecked Sendable {
