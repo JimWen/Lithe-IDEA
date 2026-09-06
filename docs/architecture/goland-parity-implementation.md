@@ -198,7 +198,7 @@ Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/
 | B4 | B4a0–B4a6 通过 | Terminal 启动、显示/输入、venv 完成；其他设置待实施 | 1032 项完整测试、42+3 个 shell 场景、边界、ARM64 包通过 | 真实设置、Python prefix、Restart、环境缺失/恢复、迟到确认焦点及清理通过 | B4a0–B4a6 通过 | 启动 `db44d036`；字体 `4f74218a`；输入 `266c0c52`；venv `3724ea20` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
 | B6 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
-| B7 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
+| B7 | B7a1 方案通过；a2–a4 待细化 | Go/Cargo 共享元数据完成；capture/任务/UI/gutter/Structure/TODO 待实施 | Rust 344 项、原生链接 7 项、ARM64 调试构建与桥接通过 | 真实 Go/Cargo stdout → C ABI 通过；新 UI 尚未实现/验收 | B7a1 双 agent GO | `4039f0f0`；夹具修复 `3411e755`；[第十四批](goland-parity-iteration14-acceptance.md) |
 | L0–L7 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 11.png 已核对 | 未开始 | — |
 | G1 | 设计基线复核通过 | 已有首轮基线 | 待最终复验 | 待 GoLand 对照 | 未开始 | — |
 

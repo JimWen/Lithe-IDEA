@@ -1,6 +1,6 @@
 # Go Tools / Cargo 工具窗口实施方案
 
-状态：B7a1 方案经两名独立 reviewer 放行；纯 Rust 基础实现验证中。B7a2–a4 尚未实施；Project 保持现状。前置 Terminal B4a6 已完成。
+状态：B7a1 方案经两名独立 reviewer 放行；纯 Rust 基础实现已通过完整验证并提交 `4039f0f0`。B7a2–a4 尚未实施；Project 保持现状。前置 Terminal B4a6 已完成。
 
 ## 1. 最终体验与本批依赖
 
@@ -74,3 +74,5 @@ contribution 必须同时在 `ModuleFactory.contributions` 声明（runtime 目�
 官方资料复核日期：2026-09-06。实际布局仍需本机 GUI 证据；文档不是“完全对齐”的完成证明。
 
 B7a1 的精确请求/响应和兼容边界见 [project-tools-metadata.md](../../shared/contracts/project-tools-metadata.md)。
+
+B7a1 验收记录：[第十四批](goland-parity-iteration14-acceptance.md)。
