@@ -45,6 +45,6 @@ spawn 后 5 秒为确认截止，与文件探测 deadline 分开。超时表示 
 
 ## 已验证范围与兼容边界
 
-完整 1032 项测试、8 项新增用例、42 个真实 shell 场景和额外 3 次立即 deactivate 场景通过。GUI 使用实际 ARM64 产品代码，验证目录设置、开关、新建、`sys.executable/sys.prefix`、deactivate、Restart、删除/恢复环境、已有终端 PID 隔离、bash 未确认、编辑器焦点与关闭初始化中的进程。详细证据见后续批次验收记录。
+完整 1032 项测试、8 项新增用例、42 个真实 shell 场景和额外 3 次立即 deactivate 场景通过。GUI 使用实际 ARM64 产品代码，验证目录设置、开关、新建、`sys.executable/sys.prefix`、deactivate、Restart、删除/恢复环境、已有终端 PID 隔离、bash 未确认、编辑器焦点与关闭初始化中的进程。详细证据见 [B4a6 验收记录](goland-parity-iteration13-acceptance.md)。
 
 保留两项明确边界：任意 bash rc 的覆盖行为不保证自动激活；zsh 全局 rc 执行期间会看到转发 ZDOTDIR，因此 macOS 全局 `.zkbd` 查找等任意全局脚本逻辑未完整转发，不重复 source 全局 rc。Python 标准 activate 自身对空/未设置的旧 PATH/PYTHONHOME 使用非空判断，跨第三方脚本后的精确空值恢复不由 Lithe 保证；产品自身 deactivate 则已验证 set/unset/export 恢复。
