@@ -153,6 +153,10 @@ import RustProbe
     await fs.mkdir(bin);
     await fs.copyFile(path.join(repository, "scripts/test-macos.sh"), path.join(scripts, "test-macos.sh"));
     await fs.copyFile(prepareScript, path.join(scripts, "prepare-rust-core-link.sh"));
+    // The real wrapper verifies its adjacent SwiftTerm inputs before forwarding
+    // arguments. Keep that preflight real inside this fixture's owned tree.
+    await fs.copyFile(path.join(repository, "scripts/verify-swiftterm-source.mjs"), path.join(scripts, "verify-swiftterm-source.mjs"));
+    await fs.cp(path.join(repository, "third_party/SwiftTerm"), path.join(wrapperRoot, "third_party/SwiftTerm"), { recursive: true });
     await fs.chmod(path.join(scripts, "test-macos.sh"), 0o755);
     await fs.chmod(path.join(scripts, "prepare-rust-core-link.sh"), 0o755);
     const swiftStub = path.join(bin, "swift");
@@ -161,6 +165,7 @@ import RustProbe
     const wrapper = path.join(scripts, "test-macos.sh");
     const other = ["-Xlinker", "-force_load", "-Xlinker", "third-party.a", "--filter", "Example test"];
     let result = await run(wrapper, other, { env });
+    assert.match(result.stdout, /upstream files verified after reversing local patch\./);
     assert.deepEqual(result.stdout.trim().split("\n").slice(-other.length), other);
     const missing = path.join(root, "never-built/liblithe_core.a");
     const skipped = ["--skip-build", "-Xlinker", "-force_load", "-Xlinker", missing];
