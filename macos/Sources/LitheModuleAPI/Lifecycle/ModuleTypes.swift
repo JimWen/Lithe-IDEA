@@ -296,6 +296,10 @@ public extension ModuleCapabilityID {
         ModuleCapabilityID("dev.lithe.capability.language.\(languageID).language-server")
     }
 
+    static func languageProjectTools(_ languageID: String) -> ModuleCapabilityID {
+        ModuleCapabilityID("dev.lithe.capability.language.\(languageID).project-tools")
+    }
+
     static func languageExecutionExtension(_ languageID: String) -> ModuleCapabilityID {
         ModuleCapabilityID("dev.lithe.capability.language.\(languageID).execution")
     }

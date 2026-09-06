@@ -11,6 +11,26 @@ final class ManagedProcessRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private var entries: [ManagedProcessCategory: Set<Int32>] = [:]
     private var moduleEntries: [ModuleID: Set<Int32>] = [:]
+    private struct OwnedProcess {
+        let pid: Int32
+        let category: ManagedProcessCategory
+        let moduleID: ModuleID
+    }
+    private var ownedProcesses: [UUID: OwnedProcess] = [:]
+
+    /// Capture monitoring uses an owner token so an old root's delayed removal
+    /// cannot unregister another session after the operating system reuses a PID.
+    func registerOwnedProcess(pid: Int32, category: ManagedProcessCategory, moduleID: ModuleID) -> UUID {
+        lock.withLock {
+            let token = UUID()
+            ownedProcesses[token] = OwnedProcess(pid: pid, category: category, moduleID: moduleID)
+            return token
+        }
+    }
+
+    func unregisterOwnedProcess(_ token: UUID) {
+        _ = lock.withLock { ownedProcesses.removeValue(forKey: token) }
+    }
 
     func register(pid: Int32, category: ManagedProcessCategory) {
         register(pid: pid, category: category, moduleID: nil)
@@ -39,12 +59,12 @@ final class ManagedProcessRegistry: @unchecked Sendable {
 
     func processIDs(for category: ManagedProcessCategory) -> Set<Int32> {
         lock.lock(); defer { lock.unlock() }
-        return entries[category] ?? []
+        return (entries[category] ?? []).union(ownedProcesses.values.filter { $0.category == category }.map(\.pid))
     }
 
     func processIDs(for moduleID: ModuleID) -> Set<Int32> {
         lock.lock(); defer { lock.unlock() }
-        return moduleEntries[moduleID] ?? []
+        return (moduleEntries[moduleID] ?? []).union(ownedProcesses.values.filter { $0.moduleID == moduleID }.map(\.pid))
     }
 
     func processCount(for moduleID: ModuleID) -> Int {
