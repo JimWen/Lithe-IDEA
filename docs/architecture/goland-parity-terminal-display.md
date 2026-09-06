@@ -1,6 +1,6 @@
 # Terminal 显示设置与字体更新
 
-状态：B4a5a 依赖前置修正已实现并验收，提交 `68d51977`，见 [本批验收](goland-parity-iteration10-acceptance.md)；B4a5b 产品显示配置待实施。B4a4 启动配置已验收；Project 保持不变。两个显示批次全部验收后才标记 B4a5 完成。
+状态：B4a5a 依赖前置修正已实现并验收，提交 `68d51977`，见 [本批验收](goland-parity-iteration10-acceptance.md)；B4a5b1 字体设置已实现并验收，提交 `4f74218a`，见 [字体设置验收](goland-parity-iteration11-acceptance.md)；B4a5b2 其余显示/输入配置待实施。B4a4 启动配置已验收；Project 保持不变。全部显示批次验收后才标记 B4a5 完成。
 
 ## 字体更新的前置修正
 
@@ -31,13 +31,13 @@
 
 设置含字体/字号、有序回退、行高、scrollback、光标形状/闪烁、Option Meta、滚动倍率、选择复制策略与链接行为。保留当前默认外观与输入语义，设置值必须有真实消费者。数值需要有限范围及非有限值检查；字体不存在时显示明确诊断，不将无效名称伪装成已应用。缩小 scrollback 会裁剪旧历史，UI 明示。
 
-`TerminalFeatureModel` 持有当前有效显示配置，新普通和 managed session 启动前应用；设置更新通过同一入口 diff 后更新所有保留会话。`TerminalTransport` 接收纯值配置；NSFont/CoreText、SwiftTerm 和原生输入策略由 macOS adapter 实现。SwiftUI 不直接反复写原生 font，设置变化不触发 session/native surface 重建，不引入父 View 拖动高频更新。
+`TerminalFeatureModel` 持有当前请求的显示配置，新普通和 managed session 启动前应用；设置更新通过同一入口 diff 后更新所有保留会话。`TerminalTransport` 接收纯值配置；NSFont/CoreText、SwiftTerm 和原生输入策略由 macOS adapter 实现。SwiftUI 不直接反复写原生 font，设置变化不触发 session/native surface 重建，不引入父 View 拖动高频更新。
 
 光标设置定义为用户默认，允许 TUI 的 DECSCUSR 随后覆盖。复制粘贴继续使用 SwiftTerm 原生 API、bracketed paste 和现有链接解析；copy-on-select 只在实际选择变化后触发，避免旧选择、鼠标报告或链接点击误复制。恢复默认只更新显示和以后启动配置，保留运行中的 shell 快照。
 
 UI 沿用现有 TerminalSettingsView 分组、原生控件和双语资源。产品配置实施前补齐实际字段边界及单一订阅所有者的代码审查，不加入只有 UI 的占位选项。
 
-### 产品批细化契约（独立审查通过，待实现）
+### 产品批细化契约（b1 已验收，b2 待实现）
 
 产品批继续分为 B4a5b1（字体/字号/有序回退/行高、目录、持久化与现有会话热更新）和 B4a5b2（历史、光标、输入、复制、链接）。`terminal_review` 独立核对接线并放行 b1；b2 的 selection/link 缺口单独补齐，整体目标不缩减。字体组采取原子应用：其中任一字体缺失时整组保留原 font/size/spacing，新会话保留默认值，并明确显示未应用诊断；其他显示/输入组不被它阻塞。requested 与最后成功配置分开，失败不能写入成功缓存。目录以 PostScript ID 持久化，原生字体解析核对实际 ID，拒绝 CoreText 静默替代；显示名仅用于 UI。
 
@@ -54,11 +54,13 @@ UI 沿用现有 TerminalSettingsView 分组、原生控件和双语资源。产�
 
 配置持久化错误使用独立诊断，保留损坏载荷，默认显示仍可运行；不得写入会话启动错误卡。单一订阅归属于 `AppModel.activateTerminalModule` 的 capability binding：激活后先复核同一 capability 是否已绑定；通过 `observeModuleFeature(.terminal, ...)` 管理取消。订阅 `$terminalDisplayConfiguration.removeDuplicates()` 的发射值，不读取 willSet 时尚未更新的属性，也不 `dropFirst`。未激活/休眠模块不被设置强制唤醒；每个项目 AppModel 在实际激活时收到最新共享设置。
 
-`TerminalFeatureModel` 保存有效配置并同时覆盖普通/managed session 创建入口；transport 做 diff，SwiftUI body 不更新 native font。字体目录经 Settings 所需 port 注入，不在 View body 枚举，也不为显示字体清单激活 Terminal。显示字段错误互不阻塞合法字段。
+`TerminalFeatureModel` 保存请求配置并同时覆盖普通/managed session 创建入口；transport 做 diff，SwiftUI body 不更新 native font。字体目录经 Settings 所需 port 注入，不在 View body 枚举，也不为显示字体清单激活 Terminal。显示字段错误互不阻塞合法字段。
 
-选择即复制在 native mouseDown/mouseUp 两端比较本地 selection revision；revision 在现有 `selectionChanged` 的 `super` 后递增。只有实际选区变化且非空才复制，排除链接手势、TUI mouse reporting（遵循 Shift capture），覆盖双/三击、Shift 扩选、不同位置同文本。无需新增 published 高速鼠标状态。
+B4a5b2 经 `terminal_review` 独立复核后修订：`selectionChanged` 可重复通知，不能以通知次数代替实际选区变化。SwiftTerm 仅补只读 selection range 值快照，不暴露 SelectionService。第一方 native view 在 `super.mouseDown` 前和 `super.mouseUp` 后比较端点，保留 Buffer 引用核对同一 buffer；进程重置、buffer 切换、窗口移除或历史裁剪时中止手势。只有实际选区改变且非空才取文本并复制，排除已处理链接、TUI mouse reporting（遵循 Shift capture）。自动复制始终保留选区；手动复制调用原生 copy 后才按偏好清除。覆盖重复通知、不同位置同文本、双/三击和 Shift 扩选，无需新增 published 高速鼠标状态。
 
-当前 SwiftTerm `linkForClick` 与 `updateHoverLink` 固定使用 `explicitAndImplicit`，仅写 `linkReporting = .none` 不能关闭链接。产品批需追加 hover/click 共用 lookup mode 的窄补丁并验证 `.none` 清理旧 hover/拒绝激活；不将原生内部 `always` 模式直接暴露为用户选项。上述链接修正尚未进入本批 typography 补丁。
+原生 adapter 为 typography 与其他显示/输入组分别校验、diff 和保存成功值；不能沿用 b1 整个配置的早返回和缓存，否则缺失字体会阻塞合法其他字段，或改链接会重新设置字体并清选择。持久化保留 b1 缺字段时的默认值兼容。减少历史容量前清除选区并中止选择手势，避免原绝对行指向裁剪后的错误内容；增加容量无需清选。光标默认仅在其字段变化或新进程 reset/setup 后应用，其他设置与 Retry 不覆盖 TUI 的 DECSCUSR。
+
+当前 SwiftTerm `linkForClick` 与 `updateHoverLink` 固定使用 `explicitAndImplicit`，仅写 `linkReporting = .none` 不能关闭链接。b2 需追加 click/hover/report/preview 共用 lookup mode 的窄补丁：none 不解析，explicit 仅 OSC8，implicit 允许自动识别；覆盖 flagsChanged/mouseMoved 中的直接 preview 路径。策略变化立即清理旧 hover、URL preview、lastReportedLink，不能因此关闭 TUI 鼠标追踪。链接激活只允许未拖动的单击，排除双/三击及 Shift 扩选，mouseDown 重置、mouseUp defer 清理手势状态；鼠标报告优先交给 TUI，Shift capture 仍按原生规则。两种可选修饰键为 Command/无，不将内部 `always` 模式直接暴露。链接回调先标记本次手势已处理，再交给外部打开，避免同一手势自动复制。上述 selection/link 修正尚未进入 typography 补丁，实施后仍需更新可逆补丁/来源校验和真实 GUI 验收。
 
 ## 审查与验收
 
