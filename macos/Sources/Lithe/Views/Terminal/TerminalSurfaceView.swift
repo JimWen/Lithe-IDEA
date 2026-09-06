@@ -8,7 +8,27 @@ struct TerminalSurfaceView: View {
     @State private var focusRequestID = 0
 
     var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 0) {
+            if let error = session.lastError {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label {
+                        if let code = session.lastExitCode {
+                            Text("The terminal exited with code \(Int(code)). Check the shell program and arguments.")
+                                .textSelection(.enabled)
+                        } else {
+                            Text(LocalizedStringKey(error)).textSelection(.enabled)
+                        }
+                    } icon: { Image(systemName: "exclamationmark.triangle") }
+                        .foregroundStyle(LitheTheme.warning)
+                    HStack {
+                        Button("Retry original launch", action: session.restart)
+                            .disabled(session.isManagedProcess)
+                        Button("Terminal Settings") { model.showSettings(category: .terminal) }
+                    }.buttonStyle(LitheSecondaryButtonStyle())
+                    Text("Retry uses this session's original configuration. Open a new terminal to use changed settings.")
+                        .font(LitheTheme.smallFont).foregroundStyle(LitheTheme.secondaryText)
+                }.padding(12)
+            }
             if let nativeView = session.nativeView as? NSView {
                 TerminalNativeSurface(
                     nativeView: nativeView,

@@ -39,10 +39,7 @@ extension AppModel {
         isRunVisible = false
         isDebugVisible = false
         if terminalCapability == nil || activeTerminalSession == nil {
-            Task { @MainActor [weak self] in
-                guard let self, await self.activateTerminalModule() else { return }
-                _ = self.createTerminalSession()
-            }
+            _ = createTerminalSession()
         }
     }
 
@@ -72,14 +69,39 @@ extension AppModel {
     @discardableResult
     func createTerminalSession(shellPath: String? = nil) -> TerminalSession? {
         guard let workspaceURL else { return nil }
+        if let error = settings.terminalConfigurationLoadError {
+            showNotification(error)
+            showSettings(category: .terminal)
+            return nil
+        }
+        let identity = currentWorkspaceIdentity
+        var configuration = settings.terminalConfiguration
+        if let shellPath {
+            configuration.shell = .custom
+            configuration.customProgram = shellPath
+        }
+        let context = TerminalLaunchContext(
+            projectURL: workspaceURL, firstProjectURL: workspaceURL,
+            currentFileURL: activeEditorTerminalSession == nil && activeMediaDocument == nil ? activeDocument?.url : nil
+        )
         guard let feature = terminalFeature else {
             Task { @MainActor [weak self] in
-                guard let self, await self.activateTerminalModule() else { return }
-                _ = self.createTerminalSession(shellPath: shellPath)
+                guard let self, await self.activateTerminalModule(),
+                      self.currentWorkspaceIdentity == identity,
+                      let feature = self.terminalFeature else { return }
+                _ = self.createTerminalSession(feature: feature, configuration: configuration, context: context)
             }
             return nil
         }
-        let session = feature.createSession(in: workspaceURL, shellPath: shellPath ?? settings.terminalShellPath)
+        return createTerminalSession(feature: feature, configuration: configuration, context: context)
+    }
+
+    private func createTerminalSession(
+        feature: TerminalFeatureModel,
+        configuration: TerminalShellConfiguration,
+        context: TerminalLaunchContext
+    ) -> TerminalSession {
+        let session = feature.createSession(configuration: configuration, context: context)
         configureTerminalSession(session)
         terminalPlacementFeature.registerSession(session.id)
         isTerminalVisible = true

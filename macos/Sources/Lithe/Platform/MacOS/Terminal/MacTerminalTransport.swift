@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import SwiftTerm
 import LitheTerminalModule
@@ -211,6 +212,30 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         ProcessInfo.processInfo.environment
     }
 
+    func prepareShellLaunch(
+        _ configuration: TerminalShellConfiguration,
+        context: TerminalLaunchContext
+    ) throws -> TerminalShellLaunch {
+        let plan = try configuration.launchPlan(
+            context: context, systemShell: defaultShellPath(),
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+            inheritedEnvironment: defaultEnvironment()
+        )
+        try validateWorkingDirectory(plan.process.workingDirectory)
+        let executable = try resolveExecutablePath(
+            plan.process.executablePath,
+            workingDirectory: plan.process.workingDirectory,
+            environment: plan.environment
+        )
+        return TerminalShellLaunch(
+            process: TerminalProcessLaunch(
+                title: nil, executablePath: executable, arguments: plan.process.arguments,
+                workingDirectory: plan.process.workingDirectory
+            ),
+            environment: plan.environment
+        )
+    }
+
     func start(
         workingDirectory: String,
         shellPath: String,
@@ -231,19 +256,13 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         _ launch: TerminalProcessLaunch,
         environment: [String: String]
     ) throws -> Int32 {
-        stop()
         let executablePath = try resolveExecutablePath(
             launch.executablePath,
             workingDirectory: launch.workingDirectory,
             environment: environment
         )
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(
-            atPath: launch.workingDirectory,
-            isDirectory: &isDirectory
-        ), isDirectory.boolValue else {
-            throw terminalError("The terminal working directory does not exist: \(launch.workingDirectory)")
-        }
+        try validateWorkingDirectory(launch.workingDirectory)
+        stop()
         selectedShellPath = executablePath
 
         view.terminal.resetToInitialState()
@@ -354,7 +373,7 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     func scrolled(source: SwiftTerm.TerminalView, position: Double) {}
     func rangeChanged(source: SwiftTerm.TerminalView, startY: Int, endY: Int) {}
 
-    private func resolveExecutablePath(
+    func resolveExecutablePath(
         _ executablePath: String,
         workingDirectory: String,
         environment: [String: String]
@@ -372,16 +391,39 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
                 .split(separator: ":", omittingEmptySubsequences: false)
                 .map(String.init)
                 .map { directory in
-                    URL(fileURLWithPath: directory, isDirectory: true)
+                    (directory.hasPrefix("/")
+                        ? URL(fileURLWithPath: directory, isDirectory: true)
+                        : URL(fileURLWithPath: workingDirectory, isDirectory: true).appendingPathComponent(directory, isDirectory: true))
                         .appendingPathComponent(executablePath)
                         .standardizedFileURL.path
                 }
-                .first { fileManager.isExecutableFile(atPath: $0) }
+                .first { isExecutableFile($0, fileManager: fileManager) }
         }
-        guard let candidate, fileManager.isExecutableFile(atPath: candidate) else {
+        guard let candidate, isExecutableFile(candidate, fileManager: fileManager) else {
             throw terminalError("The terminal executable is unavailable: \(executablePath)")
         }
         return candidate
+    }
+
+    private func isExecutableFile(_ path: String, fileManager: FileManager) -> Bool {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard let attributes = try? fileManager.attributesOfItem(atPath: resolved),
+              attributes[.type] as? FileAttributeType == .typeRegular else { return false }
+        return fileManager.isExecutableFile(atPath: resolved)
+    }
+
+    private func validateWorkingDirectory(_ path: String) throws {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw terminalError("The terminal working directory does not exist: \(path)")
+        }
+        // SwiftTerm does not report child-side chdir failures. Reject known
+        // inaccessible directories before forkpty instead of executing in the
+        // app's directory. A concurrent permission/path change remains a
+        // limitation until the transport has a child startup error channel.
+        guard Darwin.access(path, X_OK) == 0 else {
+            throw terminalError("The terminal working directory is inaccessible: \(path)")
+        }
     }
 
     private func terminalError(_ message: String) -> NSError {

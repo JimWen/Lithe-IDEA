@@ -230,7 +230,7 @@ struct SettingsView: View {
                     case .general: generalSettings
                     case .editor: editorSettings
                     case .keymap: EmptyView()
-                    case .terminal: terminalSettings
+                    case .terminal: TerminalSettingsView(settings: settings)
                     case .lsp, .go, .rust, .python: EmptyView()
                     case .ai: aiSettings
                     case .updates: updatesSettings
@@ -562,23 +562,6 @@ struct SettingsView: View {
                     )
                 }
             }
-        }
-    }
-
-    private var terminalSettings: some View {
-        group("Shell") {
-            row("Default shell") {
-                LitheSettingsSelect(
-                    selection: $settings.terminalShell,
-                    options: TerminalShell.allCases,
-                    width: 180,
-                    accessibilityLabel: "Default shell",
-                    title: \TerminalShell.title
-                )
-            }
-            Text("Used for new terminal sessions.")
-                .font(LitheTheme.smallFont)
-                .foregroundStyle(LitheTheme.secondaryText)
         }
     }
 

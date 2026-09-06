@@ -43,6 +43,15 @@ public final class TerminalFeatureModel: ObservableObject {
     }
 
     @discardableResult
+    public func createSession(configuration: TerminalShellConfiguration, context: TerminalLaunchContext) -> TerminalSession {
+        let session = TerminalSession(transport: terminalFactory())
+        session.start(configuration: configuration, context: context)
+        terminalSessions.append(session)
+        activeTerminalSessionID = session.id
+        return session
+    }
+
+    @discardableResult
     public func createProcessSession(
         _ launch: TerminalProcessLaunch,
         onOutput: ((String) -> Void)? = nil

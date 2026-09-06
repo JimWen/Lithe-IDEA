@@ -2,6 +2,7 @@ import Combine
 import Foundation
 import LitheCoreContracts
 import LitheGitModule
+import LitheTerminalModule
 
 @MainActor
 final class AppSettings: ObservableObject {
@@ -17,6 +18,7 @@ final class AppSettings: ObservableObject {
         static let autoSave = "settings.autoSave"
         static let autoSaveDelay = "settings.autoSaveDelay"
         static let terminalShell = "settings.terminalShell"
+        static let terminalConfiguration = "settings.terminalConfiguration"
         static let hiddenDirectories = "settings.hiddenDirectories"
         static let hiddenFilePatterns = "settings.hiddenFilePatterns"
         static let gitSaveChangesPolicy = "settings.gitSaveChangesPolicy"
@@ -32,6 +34,11 @@ final class AppSettings: ObservableObject {
 
         let version: Int
         let commands: [String: [KeyboardShortcutBinding]]
+    }
+
+    private struct TerminalConfigurationPayload: Codable {
+        let version: Int
+        let configuration: TerminalShellConfiguration
     }
 
     private let defaults: any KeyValueStore
@@ -58,7 +65,10 @@ final class AppSettings: ObservableObject {
     @Published var showCodeVision: Bool { didSet { defaults.set(showCodeVision, forKey: Key.showCodeVision) } }
     @Published var autoSave: Bool { didSet { defaults.set(autoSave, forKey: Key.autoSave) } }
     @Published var autoSaveDelay: Double { didSet { defaults.set(autoSaveDelay, forKey: Key.autoSaveDelay) } }
-    @Published var terminalShell: TerminalShell { didSet { defaults.set(terminalShell.rawValue, forKey: Key.terminalShell) } }
+    @Published var terminalConfiguration: TerminalShellConfiguration {
+        didSet { saveTerminalConfiguration() }
+    }
+    @Published private(set) var terminalConfigurationLoadError: String?
     @Published var hiddenDirectoryNames: [String] {
         didSet {
             defaults.set(hiddenDirectoryNames, forKey: Key.hiddenDirectories)
@@ -121,7 +131,9 @@ final class AppSettings: ObservableObject {
         showCodeVision = defaults.object(forKey: Key.showCodeVision) as? Bool ?? true
         autoSave = defaults.object(forKey: Key.autoSave) as? Bool ?? true
         autoSaveDelay = defaults.object(forKey: Key.autoSaveDelay) as? Double ?? 1.5
-        terminalShell = TerminalShell(rawValue: defaults.string(forKey: Key.terminalShell) ?? "") ?? .system
+        let terminal = Self.loadTerminalConfiguration(from: defaults)
+        terminalConfiguration = terminal.configuration
+        terminalConfigurationLoadError = terminal.error
         hiddenDirectoryNames = defaults.stringArray(forKey: Key.hiddenDirectories)
             ?? FileVisibilityRules.default.hiddenDirectoryNames
         hiddenFilePatterns = defaults.stringArray(forKey: Key.hiddenFilePatterns)
@@ -149,7 +161,37 @@ final class AppSettings: ObservableObject {
         AppThemeRuntime.shared.activate(colorTheme)
     }
 
-    var terminalShellPath: String? { terminalShell.path }
+    var terminalShell: TerminalShell {
+        get { terminalConfiguration.shell }
+        set { terminalConfiguration.shell = newValue }
+    }
+
+    var terminalShellPath: String? { terminalConfiguration.specifiedShellPath }
+
+    private func saveTerminalConfiguration() {
+        do {
+            let data = try JSONEncoder().encode(TerminalConfigurationPayload(version: 1, configuration: terminalConfiguration))
+            defaults.set(data, forKey: Key.terminalConfiguration)
+            defaults.set(terminalConfiguration.shell.rawValue, forKey: Key.terminalShell)
+            terminalConfigurationLoadError = nil
+        } catch {
+            terminalConfigurationLoadError = "Terminal settings could not be saved."
+        }
+    }
+
+    private static func loadTerminalConfiguration(from store: any KeyValueStore) -> (configuration: TerminalShellConfiguration, error: String?) {
+        var legacy = TerminalShellConfiguration()
+        legacy.shell = TerminalShellSelection(rawValue: store.string(forKey: Key.terminalShell) ?? "") ?? .system
+        guard let stored = store.object(forKey: Key.terminalConfiguration) else { return (legacy, nil) }
+        guard let data = stored as? Data,
+              let payload = try? JSONDecoder().decode(TerminalConfigurationPayload.self, from: data),
+              payload.version == 1 else {
+            // Preserve unreadable/future data. Only a deliberate edit or reset
+            // replaces it; new launches remain blocked while this is shown.
+            return (legacy, "Terminal settings could not be read. Edit them or restore defaults before opening a new terminal.")
+        }
+        return (payload.configuration, nil)
+    }
 
     var defaultLogDirectory: URL {
         logDirectoryProvider.defaultLogDirectory
@@ -234,7 +276,7 @@ final class AppSettings: ObservableObject {
         showCodeVision = true
         autoSave = true
         autoSaveDelay = 1.5
-        terminalShell = .system
+        terminalConfiguration = TerminalShellConfiguration()
         hiddenDirectoryNames = FileVisibilityRules.default.hiddenDirectoryNames
         hiddenFilePatterns = FileVisibilityRules.default.hiddenFilePatterns
         gitSaveChangesPolicy = .stash
@@ -617,18 +659,15 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     }
 }
 
-enum TerminalShell: String, CaseIterable, Identifiable {
-    case system
-    case zsh
-    case bash
+typealias TerminalShell = TerminalShellSelection
 
-    var id: String { rawValue }
-
+extension TerminalShellSelection {
     var title: String {
         switch self {
         case .system: "System default"
         case .zsh: "zsh"
         case .bash: "bash"
+        case .custom: "Custom program"
         }
     }
 
@@ -637,6 +676,7 @@ enum TerminalShell: String, CaseIterable, Identifiable {
         case .system: nil
         case .zsh: "/bin/zsh"
         case .bash: "/bin/bash"
+        case .custom: nil
         }
     }
 }

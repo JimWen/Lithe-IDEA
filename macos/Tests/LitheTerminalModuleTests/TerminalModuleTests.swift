@@ -144,6 +144,12 @@ private final class TestTransport: TerminalTransport {
     var outputOnStart: String?
     func defaultShellPath() -> String { "/bin/zsh" }
     func defaultEnvironment() -> [String: String] { ["REMOVE_ME": "old"] }
+    func prepareShellLaunch(_ configuration: TerminalShellConfiguration, context: TerminalLaunchContext) throws -> TerminalShellLaunch {
+        try configuration.launchPlan(context: context, systemShell: defaultShellPath(), homeDirectory: URL(fileURLWithPath: "/fixture/home"), inheritedEnvironment: defaultEnvironment())
+    }
+    func resolveExecutablePath(_ executablePath: String, workingDirectory: String, environment: [String: String]) throws -> String {
+        executablePath
+    }
     func start(workingDirectory: String, shellPath: String, environment: [String: String]) throws { isRunning = true }
     func startProcess(
         _ launch: TerminalProcessLaunch,

@@ -1,8 +1,8 @@
 import Foundation
 
-public struct TerminalEnvironmentChange: Equatable, Sendable {
-    public let name: String
-    public let value: String?
+public struct TerminalEnvironmentChange: Codable, Equatable, Sendable {
+    public var name: String
+    public var value: String?
 
     public init(name: String, value: String?) {
         self.name = name
@@ -51,6 +51,8 @@ public protocol TerminalTransport: AnyObject {
 
     func defaultShellPath() -> String
     func defaultEnvironment() -> [String: String]
+    func prepareShellLaunch(_ configuration: TerminalShellConfiguration, context: TerminalLaunchContext) throws -> TerminalShellLaunch
+    func resolveExecutablePath(_ executablePath: String, workingDirectory: String, environment: [String: String]) throws -> String
     func start(workingDirectory: String, shellPath: String, environment: [String: String]) throws
     func startProcess(_ launch: TerminalProcessLaunch, environment: [String: String]) throws -> Int32
     func send(_ input: Data) throws

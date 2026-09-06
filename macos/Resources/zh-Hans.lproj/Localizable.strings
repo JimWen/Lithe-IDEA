@@ -1453,3 +1453,44 @@
 "Show or hide the Find tool window" = "显示或隐藏查找工具窗口";
 
 "Tests" = "测试";
+
+"Launch settings apply to new terminals. Restart keeps the original session configuration." = "启动设置用于新终端；重启沿用原会话的配置。";
+"Custom program" = "自定义程序";
+"Shell program" = "Shell 程序";
+"Run as login shell" = "以登录 Shell 启动";
+"Login adds -l before the arguments. Explicit -l or --login arguments are preserved." = "登录模式会在参数前加入 -l；保留手动填写的 -l 或 --login。";
+"Argument" = "参数";
+"Remove argument" = "删除参数";
+"Add argument" = "添加参数";
+"One argument per row. Spaces, quotes and empty arguments are passed literally." = "每行一个参数，空格、引号和空参数均原样传入。";
+"Start in" = "起始位置";
+"Terminal directory" = "终端目录";
+"Use an absolute path, ~/ or a path relative to this project." = "支持绝对路径、~/ 或相对于当前项目的路径。";
+"Unset" = "取消定义";
+"Remove environment variable" = "删除环境变量";
+"Add environment variable" = "添加环境变量";
+"Values are literal. Unset removes an inherited variable; an empty value keeps it defined." = "值按字面传入。取消定义会移除继承的变量；空值则保留变量。";
+"Current project directory" = "当前项目目录";
+"Current file directory" = "当前文件目录";
+"First project directory" = "工作区首个项目目录";
+"Home directory" = "用户主目录";
+"Custom directory" = "自定义目录";
+"Retry original launch" = "按原配置重试";
+"Terminal Settings" = "终端设置";
+"Retry uses this session's original configuration. Open a new terminal to use changed settings." = "重试沿用此会话的原配置。修改设置后，请新建终端。";
+"Choose a terminal shell program." = "请选择终端 Shell 程序。";
+"Choose a terminal working directory." = "请选择终端工作目录。";
+"Environment names must start with a letter or underscore and contain only letters, digits and underscores." = "环境变量名须以英文字母或下划线开头，仅包含英文字母、数字和下划线。";
+"Each terminal environment name must be unique." = "终端环境变量名不能重复。";
+"Terminal settings cannot contain a NUL character." = "终端设置不能包含 NUL 字符。";
+"Terminal settings allow at most 128 arguments and 128 environment variables." = "终端设置最多允许 128 个参数和 128 个环境变量。";
+"Terminal settings exceed the 256 KiB text limit." = "终端设置超过 256 KiB 文本限制。";
+"Terminal settings could not be saved." = "无法保存终端设置。";
+"Terminal settings could not be read. Edit them or restore defaults before opening a new terminal." = "无法读取终端设置。请编辑设置或恢复默认值后再新建终端。";
+
+"The terminal exited with code %lld. Check the shell program and arguments." = "终端已退出，退出码为 %lld。请检查 Shell 程序和参数。";
+"The terminal process ended unexpectedly." = "终端进程意外结束。";
+
+"Program" = "程序";
+"Value" = "值";
+"Environment variables" = "环境变量";

@@ -301,3 +301,44 @@
 "Show or hide the Find tool window" = "Show or hide the Find tool window";
 
 "Tests" = "Tests";
+
+"Launch settings apply to new terminals. Restart keeps the original session configuration." = "Launch settings apply to new terminals. Restart keeps the original session configuration.";
+"Custom program" = "Custom program";
+"Shell program" = "Shell program";
+"Run as login shell" = "Run as login shell";
+"Login adds -l before the arguments. Explicit -l or --login arguments are preserved." = "Login adds -l before the arguments. Explicit -l or --login arguments are preserved.";
+"Argument" = "Argument";
+"Remove argument" = "Remove argument";
+"Add argument" = "Add argument";
+"One argument per row. Spaces, quotes and empty arguments are passed literally." = "One argument per row. Spaces, quotes and empty arguments are passed literally.";
+"Start in" = "Start in";
+"Terminal directory" = "Terminal directory";
+"Use an absolute path, ~/ or a path relative to this project." = "Use an absolute path, ~/ or a path relative to this project.";
+"Unset" = "Unset";
+"Remove environment variable" = "Remove environment variable";
+"Add environment variable" = "Add environment variable";
+"Values are literal. Unset removes an inherited variable; an empty value keeps it defined." = "Values are literal. Unset removes an inherited variable; an empty value keeps it defined.";
+"Current project directory" = "Current project directory";
+"Current file directory" = "Current file directory";
+"First project directory" = "First project directory";
+"Home directory" = "Home directory";
+"Custom directory" = "Custom directory";
+"Retry original launch" = "Retry original launch";
+"Terminal Settings" = "Terminal Settings";
+"Retry uses this session's original configuration. Open a new terminal to use changed settings." = "Retry uses this session's original configuration. Open a new terminal to use changed settings.";
+"Choose a terminal shell program." = "Choose a terminal shell program.";
+"Choose a terminal working directory." = "Choose a terminal working directory.";
+"Environment names must start with a letter or underscore and contain only letters, digits and underscores." = "Environment names must start with a letter or underscore and contain only letters, digits and underscores.";
+"Each terminal environment name must be unique." = "Each terminal environment name must be unique.";
+"Terminal settings cannot contain a NUL character." = "Terminal settings cannot contain a NUL character.";
+"Terminal settings allow at most 128 arguments and 128 environment variables." = "Terminal settings allow at most 128 arguments and 128 environment variables.";
+"Terminal settings exceed the 256 KiB text limit." = "Terminal settings exceed the 256 KiB text limit.";
+"Terminal settings could not be saved." = "Terminal settings could not be saved.";
+"Terminal settings could not be read. Edit them or restore defaults before opening a new terminal." = "Terminal settings could not be read. Edit them or restore defaults before opening a new terminal.";
+
+"The terminal exited with code %lld. Check the shell program and arguments." = "The terminal exited with code %lld. Check the shell program and arguments.";
+"The terminal process ended unexpectedly." = "The terminal process ended unexpectedly.";
+
+"Program" = "Program";
+"Value" = "Value";
+"Environment variables" = "Environment variables";

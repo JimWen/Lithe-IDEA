@@ -176,6 +176,12 @@ private final class PlacementTestTerminalTransport: TerminalTransport {
     func defaultShellPath() -> String { "/bin/zsh" }
     func defaultEnvironment() -> [String: String] { [:] }
 
+    func prepareShellLaunch(_ configuration: TerminalShellConfiguration, context: TerminalLaunchContext) throws -> TerminalShellLaunch {
+        try configuration.launchPlan(context: context, systemShell: defaultShellPath(), homeDirectory: URL(fileURLWithPath: "/fake-home"), inheritedEnvironment: defaultEnvironment())
+    }
+
+    func resolveExecutablePath(_ executablePath: String, workingDirectory: String, environment: [String: String]) throws -> String { executablePath }
+
     func start(
         workingDirectory: String,
         shellPath: String,

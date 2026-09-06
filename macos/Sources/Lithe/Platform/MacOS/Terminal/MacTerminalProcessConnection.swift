@@ -28,7 +28,9 @@ final class MacTerminalProcessConnection: @preconcurrency LocalProcessDelegate {
     func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
         guard isActive, source === process, !reportedTermination else { return }
         reportedTermination = true
-        onTermination?(self, exitCode)
+        // The pinned SwiftTerm forkpty implementation forwards waitpid status,
+        // not a normalized exit code. Its alternative Subprocess path is off.
+        onTermination?(self, exitCode.flatMap(Self.exitCode(fromWaitStatus:)))
         // EOF and queued output may follow the exit event. Keep accepting the
         // final bytes until explicit stop or the next launch invalidates us.
     }
@@ -40,5 +42,13 @@ final class MacTerminalProcessConnection: @preconcurrency LocalProcessDelegate {
 
     func getWindowSize() -> winsize {
         view?.terminalWindowSize() ?? winsize()
+    }
+
+    static func exitCode(fromWaitStatus status: Int32) -> Int32? {
+        guard status >= 0 else { return nil }
+        let signal = status & 0x7f
+        if signal == 0 { return (status >> 8) & 0xff }
+        if signal == 0x7f { return nil }
+        return 128 + signal
     }
 }
