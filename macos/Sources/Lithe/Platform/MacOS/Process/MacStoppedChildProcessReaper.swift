@@ -26,33 +26,33 @@ final class MacStoppedChildProcessReaper: @unchecked Sendable {
             return
         }
 
-        var waitStatus: Int32 = 0
-        errno = 0
-        let immediateResult = Darwin.waitpid(processID, &waitStatus, WNOHANG)
-        if immediateResult == processID || (immediateResult == -1 && errno == ECHILD) {
-            completion()
-            return
-        }
+        let alreadyExited = lock.withLock { () -> Bool in
+            // A duplicate stop shares the active source. Creating a second
+            // inactive source and discarding it traps inside libdispatch.
+            if sources[processID] != nil {
+                completions[processID, default: []].append(completion)
+                return false
+            }
 
-        let processSource = DispatchSource.makeProcessSource(
-            identifier: processID,
-            eventMask: .exit,
-            queue: queue
-        )
-        let shouldActivate = lock.withLock { () -> Bool in
-            completions[processID, default: []].append(completion)
-            guard sources[processID] == nil else { return false }
-            sources[processID] = processSource
-            return true
-        }
-        guard shouldActivate else { return }
+            var waitStatus: Int32 = 0
+            errno = 0
+            let result = Darwin.waitpid(processID, &waitStatus, WNOHANG)
+            if result == processID || (result == -1 && errno == ECHILD) {
+                return true
+            }
 
-        // Retaining self until the event fires keeps reaping alive even when a
-        // terminal session is closed immediately after stop().
-        processSource.setEventHandler { [self] in
-            reap(processID)
+            let source = DispatchSource.makeProcessSource(
+                identifier: processID, eventMask: .exit, queue: queue
+            )
+            completions[processID] = [completion]
+            sources[processID] = source
+            // Retain the reaper until the child exits even if its terminal
+            // session has already closed. The handler never runs under this lock.
+            source.setEventHandler { [self] in reap(processID) }
+            source.activate()
+            return false
         }
-        processSource.activate()
+        if alreadyExited { completion() }
     }
 
     private func reap(_ processID: pid_t) {

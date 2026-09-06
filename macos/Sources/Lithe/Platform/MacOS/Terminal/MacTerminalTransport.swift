@@ -3,11 +3,8 @@ import Foundation
 import SwiftTerm
 import LitheTerminalModule
 
-/// SwiftTerm's default link handler opens URLs in the system. Lithe needs the
-/// link event so workspace-relative paths can open in its own editor instead.
-final class LitheTerminalView: LocalProcessTerminalView {
-    var onOpenLink: ((String, [String: String]) -> Void)?
-    var onProcessOutput: ((Data) -> Void)?
+/// Persistent renderer; each process launch is owned by a separate connection.
+final class LitheTerminalView: SwiftTerm.TerminalView {
     private var showsWorkbenchBackground = false
     private weak var metalActivationFailedWindow: NSWindow?
 
@@ -107,13 +104,13 @@ final class LitheTerminalView: LocalProcessTerminalView {
         applyThemeColors()
     }
 
-    override func requestOpenLink(source: SwiftTerm.TerminalView, link: String, params: [String: String]) {
-        onOpenLink?(link, params)
-    }
-
-    override func dataReceived(slice: ArraySlice<UInt8>) {
-        onProcessOutput?(Data(slice))
-        super.dataReceived(slice: slice)
+    func terminalWindowSize() -> winsize {
+        let cell = cellSizeInPixels(source: terminal)
+        return winsize(
+            ws_row: UInt16(clamping: terminal.rows), ws_col: UInt16(clamping: terminal.cols),
+            ws_xpixel: UInt16(clamping: (cell?.width ?? 0) * terminal.cols),
+            ws_ypixel: UInt16(clamping: (cell?.height ?? 0) * terminal.rows)
+        )
     }
 }
 
@@ -123,7 +120,7 @@ extension LitheTerminalView: WorkbenchBackgroundRendering {}
 /// The surface intentionally lives with the session instead of the SwiftUI view so
 /// switching terminal tabs or hiding the tool window does not reset a TUI screen.
 @MainActor
-final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency LocalProcessTerminalViewDelegate {
+final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency TerminalViewDelegate {
     static func availableShells(fileManager: FileManager = .default) -> [String] {
         let environment = ProcessInfo.processInfo.environment
         var candidates: [String] = []
@@ -148,15 +145,16 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency L
     var onLink: ((String, [String: String]) -> Void)?
 
     private var selectedShellPath: String?
-    private var suppressNextTermination = false
     private let stoppedChildProcessReaper = MacStoppedChildProcessReaper()
+    private var processSession: MacTerminalProcessSession?
+    private var connection: MacTerminalProcessConnection?
 
     var isRunning: Bool {
-        view.process.running
+        connection?.process.running ?? false
     }
 
     var processID: Int32? {
-        let processID = view.process.shellPid
+        let processID = connection?.process.shellPid ?? 0
         return processID > 0 ? processID : nil
     }
 
@@ -171,13 +169,7 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency L
         view = LitheTerminalView(frame: .zero)
         super.init()
 
-        view.processDelegate = self
-        view.onOpenLink = { [weak self] link, params in
-            self?.onLink?(link, params)
-        }
-        view.onProcessOutput = { [weak self] data in
-            self?.onOutput?(data)
-        }
+        view.terminalDelegate = self
         view.font = Self.preferredTerminalFont()
         view.applyThemeColors()
         view.allowMouseReporting = true
@@ -240,7 +232,6 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency L
         environment: [String: String]
     ) throws -> Int32 {
         stop()
-        suppressNextTermination = false
         let executablePath = try resolveExecutablePath(
             launch.executablePath,
             workingDirectory: launch.workingDirectory,
@@ -265,27 +256,42 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency L
             "\(key)=\(environment[key] ?? "")"
         }
 
-        view.startProcess(
+        let connection = MacTerminalProcessConnection(view: view)
+        self.connection = connection
+        connection.onOutput = { [weak self] source, data in
+            guard let self, self.connection === source else { return }
+            self.onOutput?(Data(data))
+            // Client callbacks may synchronously restart the terminal.
+            guard self.connection === source else { return }
+            self.view.feed(byteArray: data)
+        }
+        connection.onTermination = { [weak self] source, exitCode in
+            guard let self, self.connection === source else { return }
+            self.onTermination?(exitCode)
+        }
+        connection.process.startProcess(
             executable: executablePath,
             args: launch.arguments,
             environment: environmentArray,
             currentDirectory: launch.workingDirectory
         )
 
-        guard view.process.running, let processID else {
+        guard connection.process.running, let processID else {
+            stop()
             throw terminalError("Unable to start \(executablePath)")
         }
+        processSession = MacTerminalProcessSession(processID: processID)
         return processID
     }
 
     func send(_ input: Data) throws {
-        guard view.process.running else { return }
-        view.process.send(data: Array(input)[...])
+        guard isRunning else { return }
+        connection?.process.send(data: Array(input)[...])
     }
 
     func interrupt() throws {
-        guard view.process.running else { return }
-        view.process.send(data: [UInt8(0x03)][...])
+        guard isRunning else { return }
+        connection?.process.send(data: [UInt8(0x03)][...])
     }
 
     func focus() {
@@ -298,17 +304,27 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency L
     }
 
     func stop() {
-        guard let processID else { return }
-        suppressNextTermination = true
-        if view.process.running {
-            view.terminate()
+        guard let connection else { return }
+        let processID = connection.process.shellPid
+        let ownedSession = processSession
+        self.connection = nil
+        processSession = nil
+        connection.invalidate()
+        if let ownedSession {
+            ownedSession.terminate { connection.process.terminate() }
+        } else if connection.process.running {
+            connection.process.terminate()
         }
-        stoppedChildProcessReaper.reapWhenExited(processID)
+        if processID > 0 { stoppedChildProcessReaper.reapWhenExited(processID) }
     }
 
-    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+    func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {
+        guard isRunning, let process = connection?.process, process.childfd >= 0 else { return }
+        var size = view.terminalWindowSize()
+        _ = PseudoTerminalHelpers.setWinSize(masterPtyDescriptor: process.childfd, windowSize: &size)
+    }
 
-    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+    func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {
         onTitle?(title)
     }
 
@@ -316,13 +332,27 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency L
         onDirectoryUpdate?(directory)
     }
 
-    func processTerminated(source: SwiftTerm.TerminalView, exitCode: Int32?) {
-        if suppressNextTermination {
-            suppressNextTermination = false
-            return
-        }
-        onTermination?(exitCode)
+    func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
+        guard isRunning else { return }
+        connection?.process.send(data: data)
     }
+
+    func requestOpenLink(source: SwiftTerm.TerminalView, link: String, params: [String: String]) {
+        onLink?(link, params)
+    }
+
+    func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {
+        guard let string = String(data: content, encoding: .utf8) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([string as NSString])
+    }
+
+    func clipboardRead(source: SwiftTerm.TerminalView) -> Data? {
+        NSPasteboard.general.string(forType: .string)?.data(using: .utf8)
+    }
+
+    func scrolled(source: SwiftTerm.TerminalView, position: Double) {}
+    func rangeChanged(source: SwiftTerm.TerminalView, startY: Int, endY: Int) {}
 
     private func resolveExecutablePath(
         _ executablePath: String,

@@ -144,6 +144,7 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 await projectWindows.stopAllSessions()
             }
+            await MacTerminalProcessSession.waitForPendingStops()
             guard let self, self.terminationCleanupState == .cleaning else { return }
             self.terminationCleanupTask = nil
             self.terminationCleanupState = .approved
