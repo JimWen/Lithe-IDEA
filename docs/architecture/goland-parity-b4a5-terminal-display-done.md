@@ -1,6 +1,6 @@
-# Terminal 显示设置与字体更新
+# B4a5：Terminal 显示与输入（已完成）
 
-状态：B4a5a 依赖前置修正已实现并验收，提交 `68d51977`，见 [本批验收](goland-parity-iteration10-acceptance.md)；B4a5b1 字体设置已实现并验收，提交 `4f74218a`，见 [字体设置验收](goland-parity-iteration11-acceptance.md)；B4a5b2 历史/输入/复制/链接及非焦点悬浮已实现并验收，提交 `266c0c52`，见 [输入与交互验收](goland-parity-iteration12-acceptance.md)。B4a5 显示批完成，B4a4 启动配置已验收；Project 保持不变，venv 另见 [后续方案](goland-parity-terminal-venv.md)。
+状态：B4a5a 依赖前置修正已实现并验收，提交 `68d51977`，见 [本批验收](#b4a5a-acceptance)；B4a5b1 字体设置已实现并验收，提交 `4f74218a`，见 [字体设置验收](#b4a5b1-acceptance)；B4a5b2 历史/输入/复制/链接及非焦点悬浮已实现并验收，提交 `266c0c52`，见 [输入与交互验收](#b4a5b2-acceptance)。B4a5 显示批完成，B4a4 启动配置已验收；Project 保持不变，venv 另见 [已完成的 B4a6](goland-parity-b4a6-terminal-venv-done.md)。
 
 ## 字体更新的前置修正
 
@@ -70,4 +70,53 @@ b2 同时修复 Metal 绘制子视图转发点击时未交接键盘焦点的问�
 
 每批运行 stable-tests 静态门禁、相关 Swift timing harness、完整 macOS 测试、service boundaries、ARM64 完整构建、资源/签名核对与 `git diff --check`。前置依赖批至少执行一次 Metal 实际启用及字体变化后持续绘制的 smoke，排除静默 fallback；完整字体与 Settings 验收仍在产品批。极小/隐藏 surface 保持正常缩放契约，Lithe 已通过 terminalWindowSize 读取实际 clamp 后网格发送 PTY，不拓宽上游 resize 补丁。
 
-GUI 用自有 QA 项目操作，不改用户 Project；保存截图和实际协议/进程证据。关闭测试 app、清理全部自有进程后分批 commit。字体回退和显示设置已验收；venv 与其他未完成批次继续保留在总计划中。
+GUI 用自有 QA 项目操作，不改用户 Project；保存截图和实际协议/进程证据。关闭测试 app、清理全部自有进程后分批 commit。字体回退和显示设置已验收；venv 已在 B4a6 完成，其他未完成批次继续保留在总计划中。
+
+## B4a5 已完成验收
+
+以下均为 2026-09-06 的历史验收，覆盖原生字体前置修正、设置与输入交互；
+各批完成独立方案/代码审查、完整 Swift 测试、稳定性/服务边界/diff 检查和 ARM64
+构建，未将 ARM64 结果作为 universal/DMG 验收。原始日志与计时报告保留在对应产物目录。
+
+<a id="b4a5a-acceptance"></a>
+
+### B4a5a 原生字体与同步绘制
+
+实现 `68d51977`；Swift 1006 项 / 107 suites（30.498 秒）通过，ARM64 UUID
+`50858866-97FA-34C1-876F-316FC0737A17`。SwiftTerm 固定 1.15.0，66 份上游文件
+反向补丁/来源校验通过。真实 PTY 验证模式、PID、view 与 Terminal 身份保持。
+原生图形 QA 使用同一 Release 对象及资源，验证 Metal/CoreGraphics 同步输出期间
+画面不变、提交后应用新字体，以及同步期间移动窗口的 rebind；产品实际终端输入、
+隐藏恢复和菜单通过。此子批没有字体 Settings UI，其验收由 B4a5b1 补齐。
+证据：`.artifacts/goland-parity/iteration10-terminal/` 中的 `native-visual-result.json`、
+`native-move-result.json`、`product-terminal-input.png`、`cleanup-final.json`。
+
+<a id="b4a5b1-acceptance"></a>
+
+### B4a5b1 字体设置与热更新
+
+实现 `4f74218a`；Swift 1012 项 / 108 suites（30.304 秒）通过，ARM64 UUID
+`CDE2B042-D1EF-3E18-9950-9755093E8F66`。GUI 覆盖未失焦直接保存、原生字体下拉、
+有序回退、持续输出热更新、缺失字体原子保留与恢复、新旧会话和隐藏恢复。
+同缓冲区切 PingFangSC-Regular / STSongti-SC-Regular，Latin 区域像素差 0、
+CJK 区域差 27262，证明回退字形实际生效。
+证据：`.artifacts/goland-parity/iteration11-terminal/` 中的 `font-input-lifecycle-debug.json`、
+`hot-update-debug.json`、`fallback-pixel-comparison.json`、`release-qa-result.json`、
+`cleanup-final.json` 与 `install-result.json`。
+
+<a id="b4a5b2-acceptance"></a>
+
+### B4a5b2 历史、输入、复制与链接
+
+实现 `266c0c52`；Swift 1024 项 / 110 suites（31.296 秒）通过，ARM64 UUID
+`FA730AA0-497D-3B72-BC3E-A3608FC533ED`。GUI 覆盖编辑器持焦点时的普通/Command
+悬浮、修饰键按下/松开、Settings 返回、resize、隐藏恢复、双击选中不打开链接、
+单击打开、同文本不同选区复制、手动复制清选区、Option as Meta、TUI 鼠标归属、
+程序光标样式保持、历史 0/500、滚动倍率与拖选取消。没有新增 SwiftUI 高频状态或 splitter。
+证据：`.artifacts/goland-parity/iteration12-terminal/` 中的 `release-routing-hover-results.json`、
+`verified-release-selection-results.json`、`verified-reporting-result.json`、
+`verified-history-results.json`、`verified-drag-results.json` 与 `verified-cleanup.json`。
+
+三批 QA、PTY、自有输出任务与 helper 均已退出，LaunchServices/saved state、报告浏览器
+及临时 HTTP 服务已清理。隔离 QA 与产品包通过去签名代码身份核验；完整结果以各目录
+最终报告为准，早期失败报告不计入通过结果。

@@ -1,6 +1,6 @@
-# Terminal 核心设置：启动、显示与虚拟环境
+# B4a4：Terminal 启动设置（已完成）
 
-状态：基于 `5d4a45c6`，B4a4 已通过方案/代码独立审查、997 项完整测试与 ARM64 点击验收，实现提交 `db44d036`，见 [本批验收](goland-parity-iteration9-acceptance.md)。用户最新优先级为 Terminal、重构、Go/Cargo 与语言/插件；已验收 B4a0–B4a3 跳过，Project 暂停。本文细化 [B4 Terminal 方案](goland-parity-b4-terminal.md)，不缩减总目标。
+状态：基于 `5d4a45c6`，B4a4 已通过方案/代码独立审查、997 项完整测试与 ARM64 点击验收，实现提交 `db44d036`，见 [本批验收](#b4a4-acceptance)。用户最新优先级为 Terminal、重构、Go/Cargo 与语言/插件；已验收 B4a0–B4a3 跳过，Project 暂停。本文细化 [B4 Terminal 方案](goland-parity-b4a-terminal-done.md)，不缩减总目标。
 
 ## 现状与实施顺序
 
@@ -53,3 +53,23 @@ venv 不能在 shell 任意时间发送 `source`，也不能仅注入启动前 P
 独立 agent 先审本方案的 B4a4 放行边界，再实施与代码审查；B4a5/6 再细化。自动回归覆盖旧值迁移/未知版本/恢复默认、参数字面保真、全部 cwd/fallback、env set/unset/空值/重复/NUL/限额、Restart 快照、失败 Retry、managed process 隔离和激活期间项目变化。真实平台测试只用自有临时目录与系统 shell，观察输出事件，有 deadline 和失败清理。
 
 运行 stable-tests 静态门禁和 Swift timing harness、完整 macOS 测试、service boundaries、ARM64 包、git diff --check。逐项查看 HTML/JUnit 时间；GUI 操作 Settings、现有长任务、新建/Restart、错误与恢复默认，截图并读取 fixture 的实际 argv/env/cwd。所有测试 app/子进程清理后，按用户授权分批 commit、更新 ARM64 安装，不 push。
+
+<a id="b4a4-acceptance"></a>
+
+## B4a4 已完成验收
+
+2026-09-06，方案 `71756d9e`、实现 `db44d036`，`terminal_settings_review` 与
+`workbench_audit` 独立审查通过。定向 28 项、完整 Swift 997 项 / 106 suites
+（35.152 秒）通过；服务边界、稳定性扫描、双语资源、diff 和 ARM64 Release 检查通过。
+产物 UUID：`780E24C8-3B1D-38D3-98C2-994F5DEAA0FB`；未验收 universal/DMG。
+
+GUI 验证设置行增删、未失效编辑、保存重开、逐项 argv/env/cwd、空参数与特殊字符、
+修改设置保留活动进程、Restart 使用原快照而 New 使用新配置。缺目录 Retry 保留
+原配置，恢复原目录后可启动；坏解释器明确退出 127；Restore Defaults 不重启活动会话。
+证据在 `.artifacts/goland-parity/iteration9-terminal/`：`gui-launch-proof.json`、
+`gui-running-proof.json`、`gui-retry-proof.json`、`gui-defaults-proof.json`、
+`release-chinese-labels-final.png` 与计时/资源检查报告。
+最终 `cleanup-final.json`、`install-result.json` 记录 QA/PTY 清理与安装身份。
+
+保留限制：SwiftTerm 不回报 child chdir 失败；父进程预检后到实际 chdir 之间的
+路径/权限变化仍需后续启动错误通道。本批完成的是既定启动配置范围。

@@ -1,11 +1,10 @@
-# B7a2：项目工具捕获与只读刷新
+# B7a2b：项目工具捕获与插件资源（已完成）
 
-状态：B7a2a 已完成（`d6fb2d1f`），两名独立 reviewer GO，1047 项 Swift 测试和
-ARM64 调试构建通过；B7a2b 已完成（`daf43b7f`、`0003c624`），独立审查 GO，
-1090 项 Swift 测试、真实新旧插件加载及 ARM64 完整构建通过；B7a2c1 的 Swift 消费边界
-已完成（`8b8e7fe9`、`0b5dfcaa`），只读原生刷新仍待接入。
-B7a1 元数据契约已完成（`4039f0f0`），本方案不改变
-原 B7 的 Go Tools/Cargo 右栏、独立任务、配置和实际 GUI 验收目标。
+状态：已完成。本文只覆盖 B7a2a 原生进程清理（`d6fb2d1f`）与 B7a2b
+双流捕获/插件资源（`daf43b7f`、`0003c624`），均通过独立方案与代码审查、完整
+Swift 测试和 ARM64 构建。后续只读工作流见
+[B7a2c 项目元数据刷新](goland-parity-b7a2c-project-metadata-refresh.md)，
+工具任务与右栏最终验收见 [B7a 总方案](goland-parity-b7a-go-cargo.md)。
 
 ## 1. 进程所有权前置修复（B7a2a）
 
@@ -131,29 +130,13 @@ executionModuleID 定位新 capability，不向 LanguageSupportDeclaration 追�
 旧版 Go 动态插件在新宿主的 Run/LSP、旧宿主加载新插件前拒绝，以及两个 workspace
 共享两个并发槽；单纯比较 mock manifest 不足以证明 dynamic_lookup 兼容性。
 
-## 5. 只读读取策略（B7a2c，仍需最终审查）
+## 5. 下游读取边界
 
-后续细化以[项目元数据读取](goland-parity-project-metadata-refresh.md)为准，包含已完成
-的 c1、Cargo 真实探测、Go 缓存/vendor 分支及待审的资源接线；以下保留原前置边界。
-
-Cargo 使用已安装实体工具链执行 metadata version 1/no-deps/frozen，不能触发
-rustup 自动安装；Cargo 配置与环境的外部 helper/网络行为逐项校验。
-
-Go 官方实现及隔离探测证实：readonly 下仍可能写 go.work.sum；-find 仍会写且
-清空 Imports/TestImports/XTestImports。因此保留正常 go list，复制原始 go.work
-到会话临时目录，调整其中 use 和本地 replace 的相对路径，并隔离临时 work.sum。
-原始工作区 go.mod/go.sum/go.work/source 只读；普通 module、workspace、多 module、
-cached/missing dependencies 和 build tags 保留真实包级诊断。
-
-不能直接从 go work edit -json 重建 work：已装 Go 的 JSON 可能遗漏 Toolchain/
-Godebug 指令。原始文本改路径必须使用可靠 Go 语法处理或保留全部指令的受控编辑；
-`-replace` flag 的 @/尾空白解析不能改变目录语义。具体路径投影、私有临时别名、
-sum 生命周期、telemetry helper 禁止机制待独立审查和完整零写 fixture 证明。
-
-清理继承 GOFLAGS/GOCACHEPROG/GOAUTH、代理与私有模块策略、自动 toolchain、VCS
-和 telemetry 行为。GOCACHEPROG 即使字段限定 list 也可启动 helper，不能只清
-GOFLAGS。不得把 QA 专用内部环境开关冒充稳定生产 API。无兼容工具链/无缓存
-时显示真实失败或 Incomplete，不擅自安装/下载、改 manifest 或生成假树。
+捕获层只返回完整双流和清理结果，不负责元数据读取策略。
+Cargo 实体工具链、Go work/sum 隔离、特殊路径、vendor、telemetry 与零写验证
+由 [B7a2c 项目元数据刷新](goland-parity-b7a2c-project-metadata-refresh.md) 和
+[B7a2c3 Go 读取隔离](goland-parity-b7a2c3-go-metadata-isolation.md) 管理。
+这些下游范围不因捕获层完成而结项。
 
 ## 6. 验证门槛
 
@@ -167,15 +150,44 @@ root 退出后 TERM-resistant 后代分别持有 stdout/stderr 或关闭双流�
 reaped/后代退出；缺 executable/cwd 的 FD 清理。所有失败路径也 await 自有清理，
 不能仅 defer 发 kill 或用包含 ready 的旧测试代表双 EOF 完整性。
 
-只读 fixture 必须覆盖缺 sum 的 cached dependencies、已有 sum、本地/远端 replace、
-外部 module、Unicode/空格/@/尾空白路径、build tags、too-new toolchain、缺缓存、
-外部 helper 哨兵；前后源码/manifest/lock/sum 内容与目录清单都比较。临时目录
-在取消、失败和进程未清理完时按 owner 生命周期保留/回收。
-
 各子批先独立方案/代码审查，再 focused/full timing、边界、ARM64 构建、分批 commit。
 B7a4 按完整方案实际打开应用、点击/右键/配置/取消/窄窗口/对照并截图；纯后台
 基础验证不能代替用户要求的最终 GUI 验收。
 
-B7a2a 的逐项证据见[第十五批验收](goland-parity-iteration15-acceptance.md)。
+B7a2a 的逐项证据见[B7a2a 清理验收](#b7a2a-acceptance)。
 
-B7a2b 的逐项证据见[第十六批验收](goland-parity-iteration16-acceptance.md)。
+B7a2b 的逐项证据见[B7a2b 捕获验收](#b7a2b-acceptance)。
+
+## 已完成验收
+
+<a id="b7a2a-acceptance"></a>
+
+### B7a2a 原生进程所有权与清理
+
+2026-09-06，方案 `d34c109f`、实现 `d6fb2d1f`；`workbench_audit` 与
+`terminal_exit_review` 独立审查通过。定向 28 项、Swift 全量 1047 项 / 113 suites
+（33.098 秒）通过，含 15 项新增测试；Core、服务边界、共享契约、稳定性、diff 与
+ARM64 调试构建通过。真实后代清理与受控失败重试、三路合并、等待者超时/取消、
+回调重入、首次结果冻结、编号复用、查询恢复均验证。
+
+证据在 `.artifacts/goland-parity/iteration15-tools/`：`focused-fixed/`、`full/`、
+`verify-core.log`、`build.json` 与 `cleanup.json`。
+没有替换安装或新 UI 点击验收；报告浏览器/HTTP 服务及测试进程已退出。
+身份检查与信号仍有系统调用间隙；旧 execution v1 wrapper 的 registry 限制保持，
+新 capture 使用独立 owner/lease，不能以旧 isRunning 证明清理完成。
+
+<a id="b7a2b-acceptance"></a>
+
+### B7a2b 双流捕获与插件资源
+
+2026-09-06，native 捕获 `daf43b7f`、模块/插件接线 `0003c624`；独立方案、
+代码、插件兼容和跨模块审查均通过。定向 65 项、Swift 全量 1090 项 / 119 suites
+（33.897 秒）通过；真实 native 双流/EOF/后代清理、生命周期/共享两槽/lease 门禁、
+Core/服务与模块边界/共享契约/CI 分类/稳定性/diff 及 ARM64 完整构建通过。
+
+真实新 Go Bundle 的 Run/LSP/capture/停用与旧 0.3.0 Bundle 在新 verifier 的 Run/LSP/
+停用通过。动态插件验证使用无进程内存宿主，native 捕获另由集成测试验证；
+旧宿主拒绝新包来自版本契约与生产加载前拒绝路径，未实际启动旧版 App。
+证据在 `.artifacts/goland-parity/iteration16-capture/`：`focused/`、`full/`、
+`compat/verify.log`、`arm64-build.log`、`build.json` 与 `cleanup.json`。
+报告与测试进程已清理，未新增 UI 或替换安装；不将本批后台验证当作右栏点击验收。

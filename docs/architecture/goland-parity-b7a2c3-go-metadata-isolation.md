@@ -1,6 +1,6 @@
-# Go 元数据只读读取：workspace 零写的验证与方案
+# B7a2c3：Go 元数据读取隔离
 
-状态：基于 `feb1114e`。这是 [B7 Go/Cargo 方案](goland-parity-go-cargo.md) 中
+状态：基于 `feb1114e`。这是 [B7 Go/Cargo 方案](goland-parity-b7a-go-cargo.md) 中
 B7a2 明确要求先证明、否则不得接自动刷新的那一项的验证记录与结论。方案待独立审查，未实施。
 
 B7a2 原文：「以上 Go flags 只是候选读取策略，尚未证明 workspace 零写：Go modload 即使

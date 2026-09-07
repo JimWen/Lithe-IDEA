@@ -1,6 +1,6 @@
 # macOS Rust 静态库的增量链接
 
-状态：方案和代码均经 `workbench_audit` 独立审查通过；7 项原生链接回归、985 项完整 Swift 测试、ARM64 包及真实点击验收已通过，见 [验收记录](goland-parity-iteration8-acceptance.md)。触发批次为 [B3b1a Unicode 搜索修复](goland-parity-b3b-replacement.md)，不改变 C ABI 或第三方依赖。
+状态：方案和代码均经 `workbench_audit` 独立审查通过；7 项原生链接回归、985 项完整 Swift 测试、ARM64 包及真实点击验收已通过，见 [验收摘要](#linking-acceptance)。触发批次为 [B3b1a Unicode 搜索修复](goland-parity-b3b-replacement.md)，不改变 C ABI 或第三方依赖。
 
 ## 已复现的问题
 
@@ -27,3 +27,21 @@ SwiftPM 的 `.build/release.yaml` 中，Lithe executable 与 LithePackageTests �
 回归接入 Rust verifier 和 CI 变更分类；运行 Swift 全量测试、ARM64 打包，再实际点击原始 Unicode 崩溃场景。验收必须记录 App 的新 UUID、源库摘要和画面，不能只凭 cargo test 或独立 dylib 探针放行。构建修复和 matcher 修复按各自文件边界提交。
 
 本次完整测试构建还暴露了既有全局 `-force_load` 的副作用：`TestingMacros-tool` 的最低 macOS 版本为 11，继承了最低版本为 13 的 Rust archive，因此产生 517 条 linker 版本警告。产品 Lithe 和 LithePackageTests 均以 macOS 13 为最低版本，实际测试通过。独立审查确认该警告不阻塞本次交付；后续将链接参数限定到真实 Rust 消费目标时单独处理，不修改第三方代码或全局部署版本来压制诊断。
+
+<a id="linking-acceptance"></a>
+
+## 已完成验收
+
+2026-09-06，链接修复提交 `00a9f9c1`，独立方案与代码审查通过。
+7 项原生链接回归（23.817 秒）验证：仅改变 Rust archive 内容并保留 mtime 后，
+应用和真实 Swift Testing 包均从值 1 更新为值 2；相同内容不重链接，含空格路径、
+并发发布、损坏缓存、失败清理与 wrapper 参数语义均通过。
+Rust 331 项、Swift 985 项及 ARM64 Release 实际 Unicode 点击验收通过。
+
+最终应用 UUID `FC152C09-9E42-37B3-86B3-3DA484E47B14`，Rust archive SHA-256
+`965c3218de3bb31018aadaf1c1554ceea73f24778ba52dc40c83ee47f8a91da4`。
+证据在 `.artifacts/goland-parity/iteration8-replacement/`：
+`verify-rust-core-link-fixed.log`、`full-swift-tests-link-fixed.log`、`arm64-package-link-fixed.log`、
+`test-stability/`、`stale-linked-app-crash.log` 与 `install-result.json`。
+旧包实际仍崩溃的失败记录已保留，失败包未替换安装；最终 QA 与子进程已清理。
+全局 `-force_load` 的作用域问题仍按上文单独处理。

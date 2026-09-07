@@ -144,4 +144,4 @@ The executable fixture is
 Current implementation supplies the shared topology foundation. Native capture,
 independent tasks, configuration planning and the Go/Cargo right toolbar are
 separate pending deliveries in
-[`goland-parity-go-cargo.md`](../../docs/architecture/goland-parity-go-cargo.md).
+[`goland-parity-b7a-go-cargo.md`](../../docs/architecture/goland-parity-b7a-go-cargo.md).

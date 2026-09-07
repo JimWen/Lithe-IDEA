@@ -1,6 +1,6 @@
 # GoLand 对齐 B1：菜单生命周期、命令与工具窗口入口
 
-状态：2026-09-06 B1a 已在 `8b8f21be` 提交并安装；B1b/B1c 已通过独立代码审查、976 项测试及 ARM64 发布包实际点击验收。方案复核见 [审查记录](goland-parity-plan-review.md)。B1 是完整 GoLand/Zed 对齐目标的首批，Structure、TODO、Pull Requests、搜索、设置、语言工具等后续批次仍须实现。
+状态：2026-09-06 B1a 已在 `8b8f21be` 提交并安装；B1b/B1c 已通过独立代码审查、976 项测试及 ARM64 发布包实际点击验收。方案复核见 [审查记录](goland-parity-implementation.md#plan-review)。B1 是完整 GoLand/Zed 对齐目标的首批，Structure、TODO、Pull Requests、搜索、设置、语言工具等后续批次仍须实现。
 
 ## 实现记录与方案调整
 

@@ -14,6 +14,13 @@ If a task prepares, validates, or publishes a stable Lithe release,
 additionally load `.agents/skills/release-lithe/SKILL.md` before changing
 release notes, version metadata, tags, or release workflows.
 
+## Architecture Documentation
+
+Follow the "Maintain architecture documents by feature" section of
+[develop-lithe](.agents/skills/develop-lithe/SKILL.md#maintain-architecture-documents-by-feature)
+when creating, updating, renaming, or completing architecture documents. It owns
+the feature naming, `-done` status, acceptance summary, and reference-update rules.
+
 ## Test Process Lifecycle and Cleanup
 
 Unless the user gives a specific instruction to keep a process running, any

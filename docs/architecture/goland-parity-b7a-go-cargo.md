@@ -1,10 +1,10 @@
-# Go Tools / Cargo 工具窗口实施方案
+# B7a：Go Tools / Cargo 工具窗口
 
 状态：B7a1 方案经两名独立 reviewer 放行；纯 Rust 基础实现已通过完整验证并提交 `4039f0f0`。B7a2a 原生进程清理亦已完成（`d6fb2d1f`）；B7a2b capture/插件资源完成（`daf43b7f`、`0003c624`）；B7a2c1 Swift 元数据消费/Unicode feature 完成（`8b8e7fe9`、`0b5dfcaa`）。B7a2c2 Cargo 只读刷新与右侧工具窗口代码完成（`4f41da49`），自动检查通过；2026-09-07 的首次 GUI 点击验收发现嵌套包工作区必然失败的元数据校验缺陷，**已当日修复并通过 GUI 复验**（见下），但树形展开/选择/失败重试/隐藏恢复的完整点击验收、RustRover 对照与 ARM64 包验收仍未完成，B7a2c2 不得结项。a3–a4 尚未实施；Go Tools 窗口尚未实施；Project 保持现状。前置 Terminal B4a6 已完成。
 
 B7a2c2 已完成部分：Rust execution module 的静态 Cargo contribution（catalog/factory/instance/renderer 四处一致）、`CargoProjectFeatureModel` 的单轮刷新所有权（期限、输出预算、取消与迟到清理）、`MacCargoMetadataPreparer` 的被动原生准备（拒绝脚本 shim、尊重显式 Cargo 选择、rustup proxy 经语言 capture 解析、环境白名单构造、按 typed metadata 授权 root）、`LanguageProjectToolResource.retire()` 的同步 retirement 事件，以及 execution graph 把刷新计入执行工作并在停止前关闭刷新闸门。
 
-B7a2c2 **未完成**部分，不得视为该子批结项：树形展开/选择/失败重试/隐藏恢复的完整点击验收与 RustRover 对照截图；刷新前后源码/manifest/lock 零改动的实测；ARM64 产品包验收；以及下述嵌套包校验缺陷的修复与回归测试。
+B7a2c2 **未完成**部分，不得视为该子批结项：树形展开/选择/失败重试/隐藏恢复的完整点击验收与 RustRover 对照截图；刷新前后源码/manifest/lock 零改动的实测；ARM64 产品包验收。嵌套包校验缺陷及其回归已完成，见下方修复记录。
 
 ## B7a2c2 首次 GUI 点击验收记录（2026-09-07）
 
@@ -67,7 +67,7 @@ Go 支持多个拼接 JSON 对象，按 `Main` module 定位 package，不把依
 
 保留现有公开 `LanguageExecutionSession`/`LanguageRunExtensionProviding` v1；新增独立 `LanguageProjectToolsProviding` capability 与版本化 host service。Go/Rust 原 execution module 导出新能力，其资源实际持有 capture/action sessions；Execution 只拥有项目 feature 和任务状态。provider 发现步骤有顺序与数量上限，不建立任务 DAG。新宿主加载旧插件缺能力时提示更新，不破坏旧 Run/LSP，也不允许宿主 fallback。
 
-首次读取禁止静默下载工具链、改源码/manifest/lock/module 文件。Cargo 用 `metadata --format-version 1 --no-deps --frozen`，防 rustup 首次自动安装须由解析器选择已安装实体工具链并验证。Go 从 `go env -json GOWORK GOMOD` 与 `go work edit -json` 只读定位，再以 `GOTOOLCHAIN=local`、`GOPROXY=off`、`GOSUMDB=off`、只读 module 模式读取 `go list -m -json` 和逐 module `go list -e -json ./...`；go.work 根不能简单执行 `./...`。以上 Go flags 只是候选读取策略，尚未证明 workspace 零写：Go modload 即使 readonly 仍可能写 go.work.sum。B7a2 实施前必须以官方源码及缺 sum/有缓存依赖 fixture 验证隔离 sum/work 文件的方案，或使用已证明不触发写入的元数据命令组合；未通过前不得接自动刷新。**该验证已完成**：go1.24.4 上候选策略确实会写 `go.work.sum`，可行的隔离做法只有一种，结论与实施约束见[Go 元数据只读读取](goland-parity-go-metadata-isolation.md)。捕获层明确禁用 -modfile/-test/-compiled；审查 GOFLAGS、GOPRIVATE/GONOPROXY、GOCACHEPROG/GOAUTH 等会改变下载或外部命令行为的继承配置。清理/覆盖策略须在代码审查中落实，不用项目脚本启动工具。缓存缺失/不兼容显示可操作失败，不擅自执行 go mod tidy、cargo fetch 或安装工具。显式依赖更新/下载另有用户动作。
+首次读取禁止静默下载工具链、改源码/manifest/lock/module 文件。Cargo 用 `metadata --format-version 1 --no-deps --frozen`，防 rustup 首次自动安装须由解析器选择已安装实体工具链并验证。Go 从 `go env -json GOWORK GOMOD` 与 `go work edit -json` 只读定位，再以 `GOTOOLCHAIN=local`、`GOPROXY=off`、`GOSUMDB=off`、只读 module 模式读取 `go list -m -json` 和逐 module `go list -e -json ./...`；go.work 根不能简单执行 `./...`。以上 Go flags 只是候选读取策略，尚未证明 workspace 零写：Go modload 即使 readonly 仍可能写 go.work.sum。B7a2 实施前必须以官方源码及缺 sum/有缓存依赖 fixture 验证隔离 sum/work 文件的方案，或使用已证明不触发写入的元数据命令组合；未通过前不得接自动刷新。**该验证已完成**：go1.24.4 上候选策略确实会写 `go.work.sum`，可行的隔离做法只有一种，结论与实施约束见[Go 元数据只读读取](goland-parity-b7a2c3-go-metadata-isolation.md)。捕获层明确禁用 -modfile/-test/-compiled；审查 GOFLAGS、GOPRIVATE/GONOPROXY、GOCACHEPROG/GOAUTH 等会改变下载或外部命令行为的继承配置。清理/覆盖策略须在代码审查中落实，不用项目脚本启动工具。缓存缺失/不兼容显示可操作失败，不擅自执行 go mod tidy、cargo fetch 或安装工具。显式依赖更新/下载另有用户动作。
 
 ### B7a3：独立工具任务和配置
 
@@ -102,11 +102,29 @@ contribution 必须同时在 `ModuleFactory.contributions` 声明（runtime 目�
 
 B7a1 的精确请求/响应和兼容边界见 [project-tools-metadata.md](../../shared/contracts/project-tools-metadata.md)。
 
-B7a1 验收记录：[第十四批](goland-parity-iteration14-acceptance.md)。
+B7a1 验收记录：[B7a1 元数据验收](#b7a1-acceptance)。
 
-B7a2a 验收记录：[第十五批](goland-parity-iteration15-acceptance.md)。后续细化见[捕获方案](goland-parity-project-tool-capture.md)。
+B7a2a 验收记录：[B7a2a 清理验收](goland-parity-b7a2b-project-tool-capture-done.md#b7a2a-acceptance)。后续细化见[捕获方案](goland-parity-b7a2b-project-tool-capture-done.md)。
 
-B7a2b 验收记录：[第十六批](goland-parity-iteration16-acceptance.md)。
+B7a2b 验收记录：[B7a2b 捕获验收](goland-parity-b7a2b-project-tool-capture-done.md#b7a2b-acceptance)。
 
-B7a2c1 验收记录：[第十七批](goland-parity-iteration17-acceptance.md)。后续读取与工作流
-细化见[项目元数据读取](goland-parity-project-metadata-refresh.md)。
+B7a2c1 验收记录：[B7a2c1 消费边界验收](goland-parity-b7a2c-project-metadata-refresh.md#b7a2c1-acceptance)。后续读取与工作流
+细化见[项目元数据读取](goland-parity-b7a2c-project-metadata-refresh.md)。
+
+<a id="b7a1-acceptance"></a>
+
+## B7a1 元数据基础已完成验收
+
+2026-09-06，方案 `ca7b43af`、Rust 实现 `4039f0f0`，原生链接 fixture 修复
+`3411e755`；独立方案、代码与测试设计审查通过。
+交付 `execution.normalizeProjectMetadata` v1：Cargo workspace/member/target/features/
+声明依赖和 Go 多 module/package/source/imports/diagnostics，稳定 ID、外部 root 映射、
+预算和取消校验；精确契约见 [project-tools-metadata.md](../../shared/contracts/project-tools-metadata.md)。
+
+Rust 344 项（23.072 秒）、13 项新增场景及 7 项原生链接回归通过；真实 Go 双 module
+与 Cargo workspace 的 stdout 经 native C ABI 得到正确拓扑。Rust Core、Swift bridge/
+符号、ARM64 调试构建、Core/服务边界/共享契约/稳定性/diff 检查通过。
+证据在 `.artifacts/goland-parity/iteration14-tools/`：`rust-timing/`、`link-report/`、
+`real-metadata-normalized.json`、`verify-rust-core-final.log` 与 `cleanup-and-build.json`。
+测试与报告进程已清理，本基础批没有启动或替换 Lithe，也没有产品 UI 验收。
+无依赖探测不足以证明通用 Go workspace 零写，捕获与刷新仍分别按 B7a2 契约交付。

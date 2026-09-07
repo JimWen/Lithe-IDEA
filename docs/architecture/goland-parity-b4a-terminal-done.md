@@ -1,6 +1,8 @@
-# B4 Terminal 设置分批方案
+# B4a：Terminal 设置与生命周期（已完成）
 
-状态：B4a0–B4a3 已完成独立方案/代码审查、985 项完整 Swift 测试及 ARM64 实际点击验收，见 [本批验收记录](goland-parity-iteration7-acceptance.md)。其余 B4 核心设置仍未完成。Project 保持当前实现，B1 已完成项跳过。
+状态：B4a0–B4a6 Terminal 范围已完成独立审查、自动检查与 ARM64 实际验收。
+本文保留基础设置/重启/进程隔离的实现与验收，启动、显示和 venv 分别见下方功能文档。
+`done` 仅表示 Terminal 范围完成；其余 B4 设置与 B5 资源插件仍按总方案推进。
 
 ## 首批 B4a0：设置不得中断活动终端
 
@@ -47,8 +49,31 @@
 
 回归必须在旧清理完成后验证新连接 isRunning、实际输入/输出标记、nativeView 身份、另一会话状态；实际 UI 还需点击 Restart 后输入命令，核对 resize/stty、标题和终端右键行为。该设计再次经 terminal_review 审查后实施。
 
-## 后续 B4a 核心设置
+## 已完成的 Terminal 功能分批
 
-在已有 PTY/SwiftTerm 上补 shell 参数/login、cwd 策略、env、venv、字体/字号/回退/行距、scrollback、光标和选择行为。启动配置只影响新会话，显示配置按 transport 能力应用；配置快照、路径失效、env 不入日志和恢复默认逐项验证。Zed 为核心设置参考，具体参数方案需再次独立审查后实施。
+- [B4a4 启动设置](goland-parity-b4a4-terminal-startup-done.md)：shell 参数/login、cwd、env、Restart 快照与失败恢复。
+- [B4a5 显示与输入](goland-parity-b4a5-terminal-display-done.md)：字体/回退/行高、历史、光标、Option as Meta、复制与链接。
+- [B4a6 虚拟环境](goland-parity-b4a6-terminal-venv-done.md)：环境检测、初始化确认、Restart 与退出恢复。
 
-Keymap 预设/导入、Editor 核心行为、Plugins 设置入口及资源主题分开推进，仍按总计划 B4/B5 验收，不在修复默认 shell 副作用后勾选完成。
+Keymap 预设/导入、Editor 核心行为、Plugins 设置入口与主题资源不属于本文完成范围。
+
+<a id="b4a0-b4a3-acceptance"></a>
+
+## B4a0–B4a3 已完成验收
+
+2026-09-06，`terminal_review` 独立方案与代码审查通过。与 B3a 一起完成
+Swift 985 项 / 103 suites（32.133 秒）、服务边界、稳定性门禁、diff 检查及 ARM64
+Release 构建。最终修复覆盖重复 PID 回收、进程组身份、清理失败、回调重入、
+应用退出等待和旧 PTY 回调隔离；此基础批没有修改第三方源码。
+
+真实设置点击确认修改默认 shell/Restore Defaults 保持原 PID 与持续输出，
+新会话采用新配置；Restart 后旧 bash 退出、新 shell 可输入，其他会话保持。
+同时验证 PTY resize/stty、OSC 标题/cwd、粘贴与 OSC52、文件链接、右键菜单及
+带 TERM-resistant 作业的退出清理。证据在 `.artifacts/goland-parity/iteration7-search/`：
+`terminal-release-restart-working.png`、`terminal-release-resize-title-cwd.png`、
+`terminal-release-clipboard.png`、`terminal-release-link-opened.png`、
+`terminal-release-shutdown.json`；完整测试与构建日志同目录。
+QA 与自有子进程均退出，LaunchServices 登记已移除；剪贴板已恢复。
+
+身份核验与发送信号仍有系统调用竞争窗口；主动脱离 PTY session 的 daemon
+不在此停止范围。身份不明时不向任意 PID/进程组兜底发信号，截止失败写入诊断。

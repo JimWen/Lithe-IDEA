@@ -1,10 +1,11 @@
-# B7a2c：项目元数据读取
+# B7a2c：项目元数据读取与刷新
 
 状态：c1 已完成（`8b8e7fe9`、`0b5dfcaa`），独立方案/代码审查 GO；Rust 346、
 Swift 1108、真实 C ABI 和 ARM64 构建通过。读取策略已完成 Go/Cargo 隔离探测；
-c2/c3/接线须分别细化再审，不能据此视为整个刷新实现获批。
+c2 的 Cargo 刷新与右栏实现已提交，完整验收尚未结项，见
+[B7a2c2 Cargo 工具窗口](goland-parity-b7a2c2-cargo-tool-window.md)；c3 Go 工作流仍待实施。
 本批承接已提交的 Rust normalizer 和插件 capture；Go Tools/Cargo 右栏、工具任务、
-运行配置和 GUI 对照仍按 [B7 总方案](goland-parity-go-cargo.md) 交付。
+运行配置和 GUI 对照仍按 [B7 总方案](goland-parity-b7a-go-cargo.md) 交付。
 Project 不改；已有三份语言方案的工作区修改保持原样。
 
 ## 1. 先接完整数据边界（c1）
@@ -131,6 +132,11 @@ manifest/config/工具链选择变更和 workspace/provider 切换产生新 gene
 
 ## 5. 证据与交付门槛
 
+只读 fixture 必须覆盖缺 sum 的 cached dependencies、已有 sum、本地/远端 replace、
+外部 module、Unicode/空格/@/尾空白路径、build tags、too-new toolchain、缺缓存与
+外部 helper 哨兵；前后源码/manifest/lock/sum 内容与目录清单都比较。临时目录
+在取消、失败和进程未清理完时按 owner 生命周期保留/回收。
+
 隔离探测位于 `.artifacts/goland-parity/iteration17-metadata/{cargo-policy,go-policy}`。
 Cargo 21 场景，493.18 ms；Go 48 次调用（37 次读取、11 次 fixture 生成/版本检查），
 最慢 108.9 ms，涵盖缓存/缺 sum/vendor/相对 replace/特殊路径。读取检查均符合预期；
@@ -153,4 +159,24 @@ Cargo 两项故意开启副作用的正控单独记录，不能算零写。这�
 - [Go toolchain 选择](https://go.dev/doc/toolchain)
 - [Go telemetry](https://go.dev/doc/telemetry)
 
-逐项证据见[第十七批验收](goland-parity-iteration17-acceptance.md)。
+逐项证据见[B7a2c1 消费边界验收](#b7a2c1-acceptance)。
+
+<a id="b7a2c1-acceptance"></a>
+
+## B7a2c1 Swift 消费边界已完成验收
+
+2026-09-06，Core 无损 featureEntries `8b8e7fe9`、Swift typed consumer/期限/真实链接
+CI `0b5dfcaa`；两名独立 reviewer 完成方案与代码审查，均 GO。
+交付完整 capture 成功/EOF/cleanup 校验、共享字节预算、严格 UTF-8、portable DTO、
+nullable defaults、按原始 UTF-8 区分的 feature 名和保留 Core code/message/details 的错误。
+发现清单覆盖率与刷新整体期限由 c2/c3 工作流负责，c1 本身不创建 Task 或进程。
+
+Rust 346 项（19.806 秒）、新 Swift/真实 C ABI 18 项、Swift 全量 1108 项 / 120 suites
+（35.395 秒）通过；Rust Core、7 项原生链接、Swift bridge/符号、ARM64 调试构建、
+Core/服务与模块边界/共享契约/稳定性/CI 分类/diff 检查通过。
+保留既有 12 项 Swift 性能预警及 1 项 Rust 输出上限测试预警，无硬预算失败。
+
+证据在 `.artifacts/goland-parity/iteration17-metadata/`：`rust/`、`focused/`、`full/`、
+`reports/index.html`、`rust-core-verification.log`、`arm64-build.log`、`build.json` 与
+`cleanup.json`。Cargo/Go 策略实验在 `cargo-policy/`、`go-policy/`，范围见第 5 节；
+不作为生产 collector 或 GUI 验收。报告与测试进程已清理，没有启动或替换 Lithe。

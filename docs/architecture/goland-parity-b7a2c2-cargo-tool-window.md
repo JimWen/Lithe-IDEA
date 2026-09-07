@@ -1,8 +1,9 @@
 # B7a2c2：Cargo 读取与右侧工具窗口
 
-状态：native、workflow 和工作台接线方案已分别独立预审；实现与最终验收进行中。
-承接 [读取策略](goland-parity-project-metadata-refresh.md) 与
-[B7 总方案](goland-parity-go-cargo.md)。本批交付真实 Cargo 工作区树、manifest 选择、
+状态：刷新与右栏实现已提交（`4f41da49`），后续修复与交互对齐见 B7 总方案中的
+GUI 记录；完整点击、零写入、对照、ARM64 产品包验收及独立代码审查尚未全部完成。
+承接 [读取策略](goland-parity-b7a2c-project-metadata-refresh.md) 与
+[B7 总方案](goland-parity-b7a-go-cargo.md)。本批交付真实 Cargo 工作区树、manifest 选择、
 刷新、取消和错误重试；Build/Test/Run/Clippy 等独立任务仍属于 B7a3。
 Project 和用户已有三份语言方案的修改保持原样。
 

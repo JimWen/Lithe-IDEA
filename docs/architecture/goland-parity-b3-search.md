@@ -1,6 +1,6 @@
 # B3 搜索与替换分批方案
 
-状态：B3a 已验收，见 [输入与生命周期验收](goland-parity-iteration7-acceptance.md)；B3b1a Unicode 搜索/替换崩溃修复也已通过独立审查、完整测试及 ARM64 点击验收，见 [Unicode 验收](goland-parity-iteration8-acceptance.md)。B3b 其余项与 B3c/B3d 仍待实施。基线 `cb892c85`；Project 按用户最新要求暂停。已验收的 B1 提示/快捷键、最近项目菜单、基础 View 入口跳过，不重复实现。
+状态：B3a 已验收，见 [输入与生命周期验收](#b3a-acceptance)；B3b1a Unicode 搜索/替换崩溃修复也已通过独立审查、完整测试及 ARM64 点击验收，见 [Unicode 验收](goland-parity-b3b-replacement.md#b3b1a-acceptance)。B3b 其余项与 B3c/B3d 仍待实施。基线 `cb892c85`；Project 按用户最新要求暂停。已验收的 B1 提示/快捷键、最近项目菜单、基础 View 入口跳过，不重复实现。
 
 ## 优先级与现状
 
@@ -32,3 +32,20 @@ apply 单独持有 busy，旧 isLoadingProjectReplacement 兼容为 preview/appl
 3. B3d：统一 Find/Replace 弹窗与底部 Find 工具窗口，复用 LitheSplitPaneView，键盘/IME、预览/导航、替换取消/undo、中文 emoji/零长度 regex 与大项目验收。
 
 每批独立方案审查后实施，按 stable-tests 运行行为测试与完整 macOS 检查，完成边界/diff 检查、真实构建与点击截图、独立代码审查后 commit。B4 设置、B6 重构、B7 运行与工具集成、语言方案 L0–L7 和最终 Git G1 保留在总计划，不随本批完成而勾选。
+
+<a id="b3a-acceptance"></a>
+
+## B3a 已完成验收
+
+2026-09-06，代码 `010d4d57`，`search_review` 独立方案与代码审查通过。
+交付请求代际/工作区校验、preview/apply busy 分离、所属窗口键盘路由与 IME 保护。
+与 Terminal 基础修复一起完成 Swift 985 项 / 103 suites（32.133 秒）、服务边界、
+稳定性门禁、diff 检查和 ARM64 Release 构建。
+
+真实点击验证双 Shift、查询内光标编辑（`abcd` → `abcXd`）、Tab 切换 Classes、
+Esc 关闭；Find 查询 `package` 返回 9 个文件并可用 Down 切换预览。
+IME、其他窗口、嵌套 sheet 和请求倒序使用原生/受控回归验证，未声称人工输入法验收。
+证据在 `.artifacts/goland-parity/iteration7-search/`：`search-release-caret.png`、
+`search-release-category.png`、`find-release-results.png`、`find-release-keyboard-next.png`
+及 `test-stability/`。QA、子进程与 LaunchServices 登记已清理。
+跨文件 Apply、scope 与整体 Undo 仍按 B3b–B3d 交付。

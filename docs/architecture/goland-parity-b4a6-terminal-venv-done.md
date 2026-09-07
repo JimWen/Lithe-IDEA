@@ -1,4 +1,4 @@
-# Terminal 虚拟环境支持（B4a6）
+# B4a6：Terminal 虚拟环境（已完成）
 
 状态：已实现，通过 `terminal_review` 和 `workbench_audit` 的方案、脚本及代码/测试独立审查，并完成完整 macOS 测试、ARM64 构建与实际 GUI 验收。Project 保持不变；此批只覆盖普通交互终端，不扩展 Python 包管理器或 managed Run/Debug。
 
@@ -45,6 +45,27 @@ spawn 后 5 秒为确认截止，与文件探测 deadline 分开。超时表示 
 
 ## 已验证范围与兼容边界
 
-完整 1032 项测试、8 项新增用例、42 个真实 shell 场景和额外 3 次立即 deactivate 场景通过。GUI 使用实际 ARM64 产品代码，验证目录设置、开关、新建、`sys.executable/sys.prefix`、deactivate、Restart、删除/恢复环境、已有终端 PID 隔离、bash 未确认、编辑器焦点与关闭初始化中的进程。详细证据见 [B4a6 验收记录](goland-parity-iteration13-acceptance.md)。
+完整 1032 项测试、8 项新增用例、42 个真实 shell 场景和额外 3 次立即 deactivate 场景通过。GUI 使用实际 ARM64 产品代码，验证目录设置、开关、新建、`sys.executable/sys.prefix`、deactivate、Restart、删除/恢复环境、已有终端 PID 隔离、bash 未确认、编辑器焦点与关闭初始化中的进程。详细证据见 [B4a6 验收记录](#b4a6-acceptance)。
 
 保留两项明确边界：任意 bash rc 的覆盖行为不保证自动激活；zsh 全局 rc 执行期间会看到转发 ZDOTDIR，因此 macOS 全局 `.zkbd` 查找等任意全局脚本逻辑未完整转发，不重复 source 全局 rc。Python 标准 activate 自身对空/未设置的旧 PATH/PYTHONHOME 使用非空判断，跨第三方脚本后的精确空值恢复不由 Lithe 保证；产品自身 deactivate 则已验证 set/unset/export 恢复。
+
+<a id="b4a6-acceptance"></a>
+
+## B4a6 已完成验收
+
+2026-09-06，代码 `3724ea20`，独立审查通过。Swift 1032 项 / 111 suites
+（32.811 秒）、42 个真实 shell 场景及 3 个立即 deactivate 场景通过；ARM64 Release、
+服务边界、共享契约、稳定性门禁、资源与 diff 检查通过。
+产物 UUID：`BE6F22D2-9CA9-3F7C-80AB-646037F82D93`。
+
+GUI 验证候选目录/开关持久化、实际 Python executable/prefix、deactivate、Restart
+原快照、已有终端隔离、环境缺失/恢复、bash login 与未确认状态、迟到 ACK 不夺取
+编辑器焦点，以及初始化期间 Close 的子进程清理。
+修复异步启动失败残留“检测中”、标准 venv 切换旧 PATH、export 恢复及 zsh 历史目录问题。
+未确认不代表回滚；任意用户 rc 覆盖、zsh `.zkbd` 与第三方 activate 的兼容限制仍以本文契约为准。
+
+证据在 `.artifacts/goland-parity/iteration13-venv/`：`release-active.json`、
+`release-restarted.json`、`release-missing.json`、`release-restored.json`、
+`gui-focus-result.json`、`gui-cancel-result.json`、`resource-validation.json` 与 `full-test-report/`。
+`cleanup-result.json`、`install-result.json` 记录 QA/PTY/helper 清理与安装身份；
+7 个 shell 资源与源码一致，无新增历史文件，QA/产品去签名代码 SHA 相同。

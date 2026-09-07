@@ -1,6 +1,38 @@
 # GoLand 工作台与可扩展语言能力实施方案
 
-状态：B1 菜单、工具窗口命令和基础 View 已实现并验收，跳过重复实现。用户 2026-09-06 明确 Project 当前够用，B2 的 Project 部分暂停。B3a 搜索正确性与 B4a0–B4a3 终端设置/重启修复已验收，见 [输入与终端验收](goland-parity-iteration7-acceptance.md)。B3b1a Unicode 搜索崩溃与 Rust 增量链接也已通过独立审查、完整测试和 ARM64 实际验收，见 [Unicode 与链接验收](goland-parity-iteration8-acceptance.md)。B4a4 Terminal 启动配置亦已完成，见 [Terminal 设置验收](goland-parity-iteration9-acceptance.md)。B4a5a 字体/同步绘制前置修正也已验收，见 [Terminal 字体验收](goland-parity-iteration10-acceptance.md)；字体设置 B4a5b1 也已完成，见 [字体设置验收](goland-parity-iteration11-acceptance.md)，历史/输入/复制/链接及非焦点悬浮 B4a5b2 也已验收，提交 `266c0c52`，见 [Terminal 交互验收](goland-parity-iteration12-acceptance.md)。虚拟环境 B4a6 已完成，代码 `3724ea20`，见 [方案](goland-parity-terminal-venv.md) 和 [验收](goland-parity-iteration13-acceptance.md)。其余批次仍待实施。现状审计与独立方案复核见 [审查记录](goland-parity-plan-review.md)。基线提交 `c09f2cc4`，目标分支 `dev/aiide`。
+状态：B1 命令入口、B3a 搜索正确性、B3b1a Unicode 修复和 B4a0–B4a6 Terminal
+已完成。Project 按用户 2026-09-06 要求暂停。B7a1、B7a2a/b/c1 已完成；
+Cargo 刷新与右栏已有实现，完整验收尚未结项；其余功能按第 6 节状态表继续推进。
+基线 `c09f2cc4`，目标分支 `dev/aiide`。总体方案复核见
+[审查记录](#plan-review)。
+
+## 功能文档导航
+
+功能文档统一命名为 `goland-parity-<批次号>-<功能块>[-done].md`。
+整份文档覆盖的功能已完成实现、审查及相应验收时才加 `-done`；部分完成或暂停的
+功能不加。总方案保留职责名称，跨批方案审查摘要并入本文，不单独保留过程文档。
+验收摘要并入各功能文档，原始日志、截图和计时报告沿用已有 `.artifacts/` 路径；
+摘要中的通过结果均为注明日期的历史记录。
+
+| 批次 / 范围 | 功能文档 | 状态 |
+| --- | --- | --- |
+| B1 | [菜单、命令与工具窗口](goland-parity-b1-commands-done.md) | 已完成 |
+| B2 | [Project](goland-parity-b2-project.md) | 暂停；Commit / PR 范围见本总方案 |
+| B3 | [搜索与替换](goland-parity-b3-search.md) | B3a 完成，其他待实施 |
+| B3b | [替换事务](goland-parity-b3b-replacement.md) | B3b1a 完成，scope / 事务待实施 |
+| B4a | [Terminal 设置与生命周期](goland-parity-b4a-terminal-done.md) | 已完成 |
+| B4a4 | [Terminal 启动配置](goland-parity-b4a4-terminal-startup-done.md) | 已完成 |
+| B4a5 | [Terminal 显示与输入](goland-parity-b4a5-terminal-display-done.md) | 已完成 |
+| B4a6 | [Terminal 虚拟环境](goland-parity-b4a6-terminal-venv-done.md) | 已完成 |
+| B6 | [语义编辑事务与重构](goland-parity-b6-refactor.md) | 第二版待重审，未实施 |
+| B7a | [Go Tools / Cargo](goland-parity-b7a-go-cargo.md) | 部分完成 |
+| B7a2a / B7a2b | [进程清理、工具捕获与插件资源](goland-parity-b7a2b-project-tool-capture-done.md) | 已完成 |
+| B7a2c | [项目元数据读取与刷新](goland-parity-b7a2c-project-metadata-refresh.md) | c1 完成，整个刷新未结项 |
+| B7a2c2 | [Cargo 工具窗口](goland-parity-b7a2c2-cargo-tool-window.md) | 已有实现，完整验收及审查待完成 |
+| B7a2c3 | [Go 元数据读取隔离](goland-parity-b7a2c3-go-metadata-isolation.md) | 实验完成，方案待审、未实施 |
+
+B4 其他设置、B5 资源插件和 G1 Git 对照范围见本文；语言引擎以
+[L0–L8 分批方案](syntax-and-completion.md) 为准。
 
 ## 1. 目标与完成规则
 
@@ -57,7 +89,7 @@ Commands 观察稳定、可等值比较的命令状态，不订阅整个 AppMode
 投影只包含菜单可见性、enabled/check/title、快捷键、最近项目等字段。AppKit menu tracking 状态在 macOS 层管理；展开期间缓存新投影，结束后提交一次。
 项目焦点与命令所属项目明确绑定；保存、搜索、运行、Git 动作不能因全局广播落到另一个项目。
 源对象 `objectWillChange` 发生在写入前，投影采样须在变更完成后合并；“删掉观察”导致菜单永不更新不是修复。
-详细的首批契约和验证见 [goland-parity-b1-commands.md](goland-parity-b1-commands.md)。
+详细的首批契约和验证见 [goland-parity-b1-commands-done.md](goland-parity-b1-commands-done.md)。
 
 ### 4.3 统一编辑事务
 
@@ -163,7 +195,7 @@ Go Tools 与 Cargo 通过现有 rightSidebar contribution 注册，按 workspace
 Go 核心 build/test/fmt/vet/mod 与工具链/包信息；Cargo 核心 build/test/check/clippy/fmt/run 与 workspace/member/target 树、features/profile/package 参数。
 拓扑读取 `go list` / `cargo metadata`，进程由已有平台 adapter 管理；刷新有取消/超时/失败状态；工具输出进入 Run/Problems，可点击文件行号，终止操作有界清理。
 
-### L0–L7：语言引擎、完整补全与可安装新语言
+### L0–L8：语言引擎、完整补全与可安装新语言
 
 以 [syntax-and-completion.md](syntax-and-completion.md) 的独立批次为准：离线语法与 LSP 两层、共享增量树、角色映射、语法结构、完整补全 popup/snippet/参数提示、格式化以及插件 worker。
 B5 的资源注册与 L7 共用 manifest；B6 的语义编辑事务与 LSP UI 共用；B7 的 Structure、runnable 与 TODO 复用语法/LSP 产物。
@@ -178,7 +210,7 @@ B5 的资源注册与 L7 共用 manifest；B6 的语义编辑事务与 LSP UI �
 
 ## 6. 顺序、审查和验收记录
 
-基础顺序：B1 → B2/B3 → B4 → B5 → B6 → B7；语言 L0–L7 依赖完整方案审查，可与独立工作台批次交错，但每批仍顺序执行其依赖。
+基础顺序：B1 → B2/B3 → B4 → B5 → B6 → B7；语言 L0–L8 依赖完整方案审查，可与独立工作台批次交错，但每批仍顺序执行其依赖。
 Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/L7；不能以依赖尚未实现为理由永久缩减目标。
 源文件交叠时不得并发修改；多个 agent 可审查独立方案，实施阶段按拥有文件划分。
 
@@ -197,9 +229,9 @@ Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/
 | B3 | B3a、B3b1a 通过；其余逐批细化 | B3a、Unicode matcher/候选修复完成；scope/事务与 B3c/B3d 待实施 | Rust 331、Swift 985、原生链接 7 项及 ARM64 包通过 | 输入/键盘和 Find 预览已验收；新包 Unicode 查找与替换预览通过 | B3a、B3b1a 通过 | B3a `010d4d57`；B3b1a `b0dac7e2`，构建依赖 `00a9f9c1` |
 | B4 | B4a0–B4a6 通过 | Terminal 启动、显示/输入、venv 完成；其他设置待实施 | 1032 项完整测试、42+3 个 shell 场景、边界、ARM64 包通过 | 真实设置、Python prefix、Restart、环境缺失/恢复、迟到确认焦点及清理通过 | B4a0–B4a6 通过 | 启动 `db44d036`；字体 `4f74218a`；输入 `266c0c52`；venv `3724ea20` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
-| B6 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
-| B7 | B7a1/B7a2a–b/c1 通过；c2 方案已记录，其余待细化 | 共享元数据、原生清理、capture/插件、Swift 消费、Cargo 只读刷新与右栏工具窗口完成；嵌套包校验与 GUI 启动 Cargo 发现缺陷已修复；Cargo 窗口按 GoLand 参考重构（targets 组节点、工具栏行、右键菜单、双击 target 运行并打开带时间戳输出的 Run 控制台）；Go Tools 窗口/任务/gutter/Structure/TODO 待实施 | Rust 347、Swift 1119、边界、契约与 test-stability 门禁通过 | 安装版 GUI 实测：净化 PATH 启动后三层树形正确、双击 target 弹出 Run 控制台真实运行 cargo run；lib/test/bench/example 双击无动作（明确保留）；亮色对照/RustRover 并排/ARM64 包验收待做 | c2 待独立代码审查 | 新增 `4f41da49`；[第十七批](goland-parity-iteration17-acceptance.md) |
-| L0–L7 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 11.png 已核对 | 未开始 | — |
+| B6 | 第二版细案待重审 | 未开始 | 未开始 | 未开始 | 未开始 | — |
+| B7 | B7a1/B7a2a–b/c1 通过；c2 方案已记录，其余待细化 | 共享元数据、原生清理、capture/插件、Swift 消费、Cargo 只读刷新与右栏工具窗口完成；嵌套包校验与 GUI 启动 Cargo 发现缺陷已修复；Cargo 窗口按 GoLand 参考重构（targets 组节点、工具栏行、右键菜单、双击 target 运行并打开带时间戳输出的 Run 控制台）；Go Tools 窗口/任务/gutter/Structure/TODO 待实施 | Rust 347、Swift 1119、边界、契约与 test-stability 门禁通过 | 安装版 GUI 实测：净化 PATH 启动后三层树形正确、双击 target 弹出 Run 控制台真实运行 cargo run；lib/test/bench/example 双击无动作（明确保留）；亮色对照/RustRover 并排/ARM64 包验收待做 | c2 待独立代码审查 | 新增 `4f41da49`；[B7a2c1 消费边界验收](goland-parity-b7a2c-project-metadata-refresh.md#b7a2c1-acceptance) |
+| L0–L8 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 11.png 已核对 | 未开始 | — |
 | G1 | 设计基线复核通过 | 已有首轮基线 | 待最终复验 | 待 GoLand 对照 | 未开始 | — |
 
 整体完成需要上表每一项的证据，不能用 B1 或局部测试替代完整目标。
@@ -213,3 +245,25 @@ Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/
 - [Keymap 配置](https://www.jetbrains.com/help/idea/configuring-keyboard-and-mouse-shortcuts.html)：自定义与冲突处理参考。
 
 这些来源用于行为核对；本项目设计、限制、批次与实现责任由上述方案定义。
+
+<a id="plan-review"></a>
+
+## 总体方案审查摘要
+
+2026-09-06，独立 `parity_plan_review` 审查总体、B1 与语言方案；6 项问题修订后
+复核通过。此结论只确认设计基线，不能作为所有批次的实现、代码审查或运行验收。
+B1 后续完成情况见其功能文档；B6 第二版仍按独立状态待重审。
+
+| 项目 | 修订后保留的要求 |
+| --- | --- |
+| R1 焦点与事件消费 | 原生实时窗口资格独立于最近项目；消费前和异步执行前校验上下文，不抢 Settings / modal / IME 的输入 |
+| R2 应用级动作承载 | 非创建的 registry lookup；Open 取消不建会话，Clone / Settings 请求由可见 host 承载，不能落到隐形后台模型 |
+| R3 独立插件安装 | 正式签名策略保持；本地主动安装 worker / formatter 的授权绑定内容摘要与版本，探测在授权之后，升级重新授权，实际安装验收 |
+| R4 新语言完整能力 | Lua 独立安装需同时证明高亮、补全、Structure / 同文件 definition、StyLua 格式化、版本 / 取消 / Undo 与卸载清理；主包不内置 Lua grammar |
+| R5 增量与取消 | 区分 accepted / parsed 版本，保留有序编辑与幂等确认；有界 resync / parse waiter，不丢中间 delta，超时 / 取消 / close 释放等待者 |
+| R6 最近项后台 I/O | 异步窄 port，真实并发 1 / 最新待办 1，1 秒响应预算；超时 unknown，不可取消 stat 保留 busy，菜单主线程不执行同步 stat |
+| RustRover / G1 | Rust 使用真实参考版本；底部 Git 与分支图保留最终对照门槛，不能用已有基线或隐藏拓扑替代验收 |
+
+B1 还须区分可唤醒的 Git / Commit 入口与要求 ready repository 的 Git 写操作，
+避免因模块休眠将入口永久置灰。后续各批仍执行本文规定的接口审查、实现、测试、
+真实点击与独立代码审查；不因总体方案曾复核通过而自动放行新的细案。

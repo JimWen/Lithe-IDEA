@@ -189,6 +189,40 @@ unexecuted check passed.
   compatibility surface changes. Do not rewrite docs for an implementation-only
   refactor that leaves the documented behavior intact.
 
+## Maintain architecture documents by feature
+
+- Maintain one owning feature document for the current scope, design, status,
+  remaining work, and acceptance summary. Update its overview/index entry when
+  that scope or status changes; distinguish planned, implemented, and verified
+  behavior using the current source and actual evidence.
+- For numbered initiatives under `docs/architecture/`, use the existing batch
+  number plus a descriptive feature name, such as
+  `goland-parity-b6-refactor.md`. Overviews and general architecture references
+  retain their responsibility-based names; do not invent batch numbers for them.
+- Add `-done` immediately before `.md` only when the document's entire feature
+  scope has completed implementation, required review, and applicable validation.
+  Partially complete, paused, or verification-pending documents keep their normal
+  names. Record completed sub-batches inside an unfinished parent without marking
+  the parent done. If that same scope is reopened, update its status and filename.
+- Put acceptance and review summaries in the owning feature document, or in the
+  overview for a review spanning features. Do not create separate iteration,
+  dated progress, or acceptance-report documents in `docs/architecture/`.
+  When consolidating existing records, preserve the useful conclusions and
+  evidence references before removing the redundant documents.
+- Summaries retain the date, relevant commits, verified scope, actual check/UI
+  results, remaining limitations, and artifact locations. Label historical
+  results as historical; a plan or a past test run is not new verification.
+  Keep raw logs, screenshots, timing reports, and local inspection records in
+  `.artifacts/`, outside committed documentation.
+- Rename or remove a document together with every affected repository reference,
+  navigation entry, and acceptance anchor. Remove obsolete pending-work claims
+  when newer evidence resolves them, while retaining genuinely unfinished work.
+- For documentation-only changes, check local links and moved anchors, search for
+  stale filenames, and run `git diff --check`, including new documents in the
+  whitespace review. Do not run product builds or tests solely for prose, link,
+  or filename changes; behavioral and contract changes still use the validation
+  matrix above.
+
 ## Complete the work honestly
 
 Before reporting completion, confirm that the change is in the owning layer,

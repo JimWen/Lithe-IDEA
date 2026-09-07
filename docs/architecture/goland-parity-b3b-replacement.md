@@ -1,6 +1,6 @@
 # B3b 搜索范围与跨文件替换事务
 
-状态：基于 `517b4584`。B3b1a Unicode matcher/候选修复已完成，方案与代码经 `workbench_audit` 独立审查通过，自动检查和 ARM64 真实点击见 [验收记录](goland-parity-iteration8-acceptance.md)。下述 scope 与事务为后续实施设计，原生 undo 仍须专项审查；本次审查未放行新的 Apply 事务。B3a 和 B4a0–B4a3 已验收，跳过；Project 按用户要求暂停。本批是 [B3 搜索方案](goland-parity-b3-search.md) 的细化，后续 B3c/B3d、设置、语言和 Git 批次仍保留。
+状态：基于 `517b4584`。B3b1a Unicode matcher/候选修复已完成，方案与代码经 `workbench_audit` 独立审查通过，自动检查和 ARM64 真实点击见 [验收记录](#b3b1a-acceptance)。下述 scope 与事务为后续实施设计，原生 undo 仍须专项审查；本次审查未放行新的 Apply 事务。B3a 和 B4a0–B4a3 已验收，跳过；Project 按用户要求暂停。本批是 [B3 搜索方案](goland-parity-b3-search.md) 的细化，后续 B3c/B3d、设置、语言和 Git 批次仍保留。
 
 ## 1. 先解决什么
 
@@ -116,4 +116,27 @@ B3b1–B3b2 可以作为准备性代码提交，但不能将总体状态标为�
 
 并发测试使用可控 gate 和事件，不用 sleep 等待；gate/任务/worker 均有本地 deadline 与失败清理。文件故障通过注入端口稳定复现，不能依赖宿主磁盘恰好满或个人权限。真实 UI 只修改临时 fixture，不写用户项目。
 
-验证按技能执行：Rust comments/fmt、stable-tests 静态门禁、Rust/Swift 计时 harness、shared contracts、Rust Core、service boundaries、完整 macOS 测试、ARM64 包与 `git diff --check`；检查每个新增用例的 HTML/JUnit 耗时。实际启动的 Lithe/子进程在验收后全部关闭并核实。审查记录、截图、测试报告与安装信息放本批 `.artifacts`，通过后另写验收记录。
+验证按技能执行：Rust comments/fmt、stable-tests 静态门禁、Rust/Swift 计时 harness、shared contracts、Rust Core、service boundaries、完整 macOS 测试、ARM64 包与 `git diff --check`；检查每个新增用例的 HTML/JUnit 耗时。实际启动的 Lithe/子进程在验收后全部关闭并核实。审查记录、截图、测试报告与安装信息放本批 `.artifacts`，通过后更新本文的验收摘要。
+
+<a id="b3b1a-acceptance"></a>
+
+## B3b1a 已完成验收
+
+2026-09-06，Unicode 搜索提交 `b0dac7e2`，配套增量链接修复 `00a9f9c1`；
+`workbench_audit` 独立方案与代码审查通过。matcher 在原始 UTF-8 文本上匹配，
+索引补入非 ASCII 候选以避免 Unicode simple folding 漏项；literal `$1` 不展开。
+23 个共享场景、Rust 331 项（17.744 秒）、Swift 985 项（34.806 秒）、7 项原生
+链接回归及 Core/契约/边界/CI 分类检查通过，完成 ARM64 Release 实际验收。
+
+GUI 预览确认 `İ needle KNEEDLE😀` → `İ $1 K$1😀`、`ſxſ SxS sxs` → `$1 $1 $1`，
+切换 case-sensitive 后仅最后一项匹配；Find 正确定位并高亮。未点击 Apply，
+fixture 原始字节不变，QA 与子进程、临时文件和 LaunchServices 登记已清理。
+Find 当时仍按匹配行计数，跨文件写入与 Undo 未在此批验收。
+
+证据在 `.artifacts/goland-parity/iteration8-replacement/`，包含
+`unicode-replacement-release-expanded.png`、`unicode-replacement-release-folding.png`、
+`unicode-find-release-full-mask.png`、`release-unicode-probes.json`、
+`unicode-release-shutdown.json` 与 `test-stability/`。
+1,500 个约 4 KB 文件的暖缓存测量：ASCII 查询中位数 0.174–0.274 ms，半数含中文时
+10.052–11.607 ms，最大 12.370 ms；候选扩展有成本，不作为真实大项目性能保证。
+链接产物身份与全局 force_load 的保留问题见 [链接方案](macos-rust-linking.md)。
