@@ -61,7 +61,13 @@ pub(super) fn normalize(
 ) -> Result<ProjectMetadata, CoreError> {
     let data: CargoMetadata = serde_json::from_str(raw).map_err(|_| parse_error())?;
     cancellation::check()?;
-    if data.version != 1 || paths::absolute(&data.workspace_root)? != workspace_path {
+    // Cargo reports its own workspace root, which nests inside the host
+    // workspace whenever the selected manifest is a package in a
+    // subdirectory. Requiring equality would reject every such project, so
+    // only containment is enforced; every referenced path below is still
+    // authorized through the host roots independently.
+    let root = paths::absolute(&data.workspace_root)?;
+    if data.version != 1 || !paths::contains(&workspace_path, &root) {
         return Err(parse_error());
     }
     if data.packages.len() > MAX_MEMBERS {

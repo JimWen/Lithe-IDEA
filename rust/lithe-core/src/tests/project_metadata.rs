@@ -304,6 +304,29 @@ fn cargo_rejects_dangling_defaults_duplicates_and_malformed_items_atomically() {
     }
 }
 
+/// A package in a subdirectory makes cargo report a nested workspace root.
+/// The root must be accepted inside the host workspace and rejected outside
+/// it, including the sibling-prefix spelling that a raw string prefix check
+/// would wrongly accept.
+#[test]
+fn cargo_workspace_root_must_stay_inside_the_workspace_directory() {
+    let mut nested = fixture();
+    nested["cargo"]["workspace_root"] = json!("/fixture/workspace/tools/scrap_url");
+    let result = success(payload("rust", &nested));
+    // The reported workspace stays the opened directory, not cargo's root.
+    assert_eq!(result["workspace"]["rootID"], "workspace");
+    assert_eq!(result["workspace"]["relativePath"], ".");
+    assert_eq!(result["members"].as_array().unwrap().len(), 2);
+
+    let mut outside = fixture();
+    outside["cargo"]["workspace_root"] = json!("/fixture/external");
+    failure(payload("rust", &outside), "parse_failed");
+
+    let mut sibling = fixture();
+    sibling["cargo"]["workspace_root"] = json!("/fixture/workspace-sibling");
+    failure(payload("rust", &sibling), "parse_failed");
+}
+
 #[test]
 fn go_rejects_stale_or_ambiguous_ownership_and_preserves_error_only_streams() {
     let original = fixture();

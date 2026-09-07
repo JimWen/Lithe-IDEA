@@ -39,6 +39,12 @@ workspace incarnation. Adding a more specific root requires a new incarnation.
 Mapping uses the longest component prefix and performs no symlink resolution.
 It is a portability mapping, not proof of filesystem containment or permission.
 
+`workspaceDirectory` names the opened workspace and anchors the result's
+`workspace` location. Cargo's own `workspace_root` may nest anywhere inside it
+(a selected manifest that is a package in a subdirectory) but must never leave
+it; a cargo root outside `workspaceDirectory` fails the whole request. Go
+module directories follow the same containment rule.
+
 ## Result
 
 The ordinary Core envelope contains `version: 1`, `language`, `workspace`,

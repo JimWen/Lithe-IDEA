@@ -91,6 +91,16 @@ struct MacRuntimeToolDiscovery: RuntimeToolDiscovery {
             }
         }
 
+        if shouldSearchRustUserBin(for: command) {
+            for directory in rustUserBinDirectories(environment: environment) {
+                add(
+                    directory.appendingPathComponent(command),
+                    source: .environment,
+                    detail: "Cargo user bin: \(directory.path)"
+                )
+            }
+        }
+
         let homebrewRoots = [
             "/opt/homebrew/bin",
             "/usr/local/bin",
@@ -238,5 +248,26 @@ struct MacRuntimeToolDiscovery: RuntimeToolDiscovery {
         default:
             return false
         }
+    }
+
+    private func shouldSearchRustUserBin(for command: String) -> Bool {
+        switch command {
+        case "cargo", "rustc", "rustup":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// rustup installs its proxies into `$CARGO_HOME/bin`, which defaults to
+    /// `~/.cargo/bin`. GUI applications inherit launchd's PATH, which does not
+    /// include that directory even when the user's interactive shell does.
+    private func rustUserBinDirectories(environment: [String: String]) -> [URL] {
+        var directories: [URL] = []
+        if let cargoHome = configuredURL(environment["CARGO_HOME"] ?? "", projectURL: nil) {
+            directories.append(cargoHome.appendingPathComponent("bin"))
+        }
+        directories.append(homeDirectoryURL.appendingPathComponent(".cargo/bin"))
+        return directories
     }
 }

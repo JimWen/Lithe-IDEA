@@ -690,6 +690,37 @@ struct RunConfigurationIntegrationTests {
         #expect(candidates.first?.source == .environment)
     }
 
+    /// A GUI application inherits launchd's PATH, which typically lacks
+    /// `~/.cargo/bin`, so the rustup proxies must be discovered in the user
+    /// bin directly. An explicit PATH entry still wins over the user bin.
+    @Test
+    func macToolDiscoveryFindsRustupProxiesInCargoUserBin() {
+        let discovery = MacRuntimeToolDiscovery(
+            homeDirectoryURL: URL(fileURLWithPath: "/tmp/home", isDirectory: true),
+            isExecutable: { $0.path == "/tmp/home/.cargo/bin/cargo" }
+        )
+
+        let candidates = discovery.candidates(
+            for: "cargo",
+            projectURL: nil,
+            environment: ["PATH": "/usr/bin"]
+        )
+
+        #expect(candidates.first?.executableURL.path == "/tmp/home/.cargo/bin/cargo")
+        #expect(candidates.first?.source == .environment)
+
+        let withCustomHome = MacRuntimeToolDiscovery(
+            homeDirectoryURL: URL(fileURLWithPath: "/tmp/home", isDirectory: true),
+            isExecutable: { $0.path == "/tmp/toolchains/cargo/bin/rustup" }
+        )
+        let proxies = withCustomHome.candidates(
+            for: "rustup",
+            projectURL: nil,
+            environment: ["PATH": "/usr/bin", "CARGO_HOME": "/tmp/toolchains/cargo"]
+        )
+        #expect(proxies.first?.executableURL.path == "/tmp/toolchains/cargo/bin/rustup")
+    }
+
     @Test
     func macToolDiscoveryPrefersBundledJDTLS() {
         let resources = URL(fileURLWithPath: "/Applications/Lithe.app/Contents/Resources", isDirectory: true)
