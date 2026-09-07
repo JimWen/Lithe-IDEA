@@ -257,6 +257,11 @@ extension AppModel {
             snapshotID: snapshotID
         )
         guard isCurrentWorkspace(identity) else { return }
+        // Cargo metadata is a project service too, and recognizing its manifests
+        // needs an applied scan. Warming it here keeps the first open of the
+        // tool window free of toolchain probes. It is a no-op unless Rust
+        // support is present and nothing has been loaded or failed yet.
+        prewarmCargoProject()
         guard resumesDeferredRunAction else { return }
         resumeDeferredRunAction(
             execution.runFeature,

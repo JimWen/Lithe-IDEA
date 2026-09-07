@@ -109,7 +109,7 @@ enum WorkbenchModuleUIComposition {
         contributions: BundledLanguagePluginCatalog.executionContributions(languageID: "rust"),
         actions: [.init(id: "cargo.toggle", commandID: "toggle-cargo")],
         renderers: [.init(
-            id: "cargo.project", ideaAssetPath: nil,
+            id: "cargo.project", ideaAssetPath: "toolwindows/toolWindowCargo.svg",
             isVisible: { $0.isCargoAvailable },
             isSelected: { $0.isCargoToolWindowSelected },
             content: { _ in AnyView(CargoToolWindowView()) },

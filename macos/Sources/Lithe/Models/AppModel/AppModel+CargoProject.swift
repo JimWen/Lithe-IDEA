@@ -1,4 +1,5 @@
 import Foundation
+import LitheCoreContracts
 import LitheExecutionModule
 import LitheModuleAPI
 
@@ -7,15 +8,44 @@ extension AppModel {
     /// Recognition reads the applied inventory; missing tools remain a visible
     /// error inside Cargo instead of making the entry disappear.
     var isCargoAvailable: Bool {
-        !cargoManifestURLs.isEmpty
-            && rightSidebarContributions.contains { $0.id == "language.rust.cargo" }
+        // The contribution lookup is a small in-memory list, so it is asked
+        // first and keeps the manifest scan off the path entirely for projects
+        // that never loaded Rust support.
+        rightSidebarContributions.contains { $0.id == "language.rust.cargo" }
+            && !cargoManifestURLs.isEmpty
     }
 
+    /// Resolves a metadata location to a project file URL. Only the workspace
+    /// root is project-resolvable; external dependency roots carry no host
+    /// mapping the tree may hand to the editor.
+    func cargoFileURL(for location: ProjectMetadataLocation) -> URL? {
+        guard let workspaceURL, location.rootID == "workspace" else { return nil }
+        guard location.relativePath != "." else { return workspaceURL }
+        return workspaceURL
+            .appendingPathComponent(location.relativePath)
+            .standardizedFileURL
+    }
+
+    /// Memoized against the applied scan that produced it. Recognition is read
+    /// during view updates, and the underlying candidate scan is linear in the
+    /// size of the workspace, so recomputing it per render puts the whole file
+    /// list on the main actor several times per frame.
     var cargoManifestURLs: [URL] {
         guard let workspaceURL else { return [] }
-        return CargoManifestSelection.candidates(
-            workspace: workspaceURL, files: workspaceFeature.appliedSnapshot?.files ?? []
+        let workspace = workspaceURL.standardizedFileURL
+        let snapshot = workspaceFeature.appliedSnapshot
+        if let cache = cargoTreePresentation.manifestCache,
+           cache.workspace == workspace,
+           cache.snapshotID == snapshot?.id {
+            return cache.urls
+        }
+        let urls = CargoManifestSelection.candidates(
+            workspace: workspace, files: snapshot?.files ?? []
         )
+        cargoTreePresentation.manifestCache = CargoManifestCache(
+            workspace: workspace, snapshotID: snapshot?.id, urls: urls
+        )
+        return urls
     }
     var cargoManifestURL: URL? {
         if let selectedCargoManifestURL, cargoManifestURLs.contains(selectedCargoManifestURL) {
@@ -27,6 +57,16 @@ extension AppModel {
     func selectCargoManifest(_ url: URL) {
         guard canRefreshCargoProject, cargoManifestURLs.contains(url), cargoManifestURL != url else { return }
         selectedCargoManifestURL = url
+        cargoTreePresentation.reset()
+        cargoProjectFeatureIfActive?.invalidateWorkspace()
+        refreshCargoProject()
+    }
+
+    /// Detaches an explicitly chosen manifest and returns to the default one,
+    /// mirroring RustRover's detach action for the Lithe manifest model.
+    func resetCargoManifestSelection() {
+        guard canRefreshCargoProject, selectedCargoManifestURL != nil else { return }
+        selectedCargoManifestURL = nil
         cargoTreePresentation.reset()
         cargoProjectFeatureIfActive?.invalidateWorkspace()
         refreshCargoProject()
@@ -49,10 +89,32 @@ extension AppModel {
         if cargoProjectFeatureIfActive?.snapshot == nil { refreshCargoProject() }
     }
 
+    /// Loads Cargo metadata in the background once a workspace scan is applied,
+    /// so opening the tool window renders from memory instead of paying for two
+    /// toolchain probes and `cargo metadata` at click time.
+    ///
+    /// Only a feature that has loaded nothing and failed at nothing is warmed:
+    /// a failure stays on screen for the user to retry from Refresh rather than
+    /// being re-attempted on every rescan.
+    func prewarmCargoProject() {
+        guard isCargoAvailable, canRefreshCargoProject else { return }
+        if let feature = cargoProjectFeatureIfActive {
+            guard feature.snapshot == nil, feature.state == .idle else { return }
+        }
+        startCargoRefresh(revealsToolWindow: false)
+    }
+
     func refreshCargoProject() {
+        startCargoRefresh(revealsToolWindow: true)
+    }
+
+    /// `revealsToolWindow` separates the user's Refresh, which is expected to
+    /// bring the tool window forward, from the background warm-up, which must
+    /// never open a panel the user did not ask for.
+    private func startCargoRefresh(revealsToolWindow: Bool) {
         guard canRefreshCargoProject, let identity = currentWorkspaceIdentity,
               let manifestURL = cargoManifestURL else { return }
-        isCargoVisible = true
+        if revealsToolWindow { isCargoVisible = true }
         cargoActivationError = nil
         isCargoActivating = true
         let generation = cargoRequestGeneration
@@ -75,6 +137,56 @@ extension AppModel {
             await feature.refresh(
                 workspaceURL: identity.url, workspaceGeneration: identity.generation, manifestURL: manifestURL
             )
+        }
+    }
+
+    /// Runs a Cargo binary target through its generated run configuration.
+    ///
+    /// Resolution happens here rather than in the tree because the execution
+    /// module is activated asynchronously and its generated entries only exist
+    /// once it has consumed the applied workspace scan. A synchronous lookup
+    /// during a double-click finds nothing whenever either step is still
+    /// pending, which is what made a runnable binary appear inert.
+    ///
+    /// A binary that still cannot be resolved is reported rather than ignored:
+    /// unlike a library or a build script, the tree offered it as runnable, so
+    /// silence there would hide a real defect instead of matching RustRover's
+    /// "no launch command for this kind" case.
+    func startCargoTarget(configurationID: String, name: String) {
+        Task { @MainActor [weak self] in
+            guard let self, let identity = currentWorkspaceIdentity else { return }
+            guard let runFeature = await activateExecutionModule()?.runFeature else {
+                showNotification(
+                    String(localized: "Rust execution support is unavailable."),
+                    severity: .error, title: name
+                )
+                return
+            }
+            guard currentWorkspaceIdentity == identity else { return }
+            if runFeature.configurations.first(where: { $0.id == configurationID }) == nil {
+                // A module woken by this click has not necessarily applied the
+                // current scan yet, and generated entries arrive with it.
+                await loadProjectServicesForAppliedSnapshot(at: identity.url)
+                guard currentWorkspaceIdentity == identity else { return }
+            }
+            guard let configuration = runFeature.configurations
+                .first(where: { $0.id == configurationID }) else {
+                showNotification(
+                    String(localized: """
+                        No run configuration was generated for this target. \
+                        Regenerate run configurations and try again.
+                        """),
+                    severity: .error, title: name
+                )
+                return
+            }
+            showNotification(String(localized: "Running \(configuration.name)"))
+            selectRunConfiguration(configuration)
+            // RustRover opens its Run tool window on a double-click; without
+            // this the process runs headless and the click reads as if
+            // nothing happened.
+            isRunVisible = true
+            startRunConfiguration(configuration)
         }
     }
 
@@ -119,15 +231,29 @@ extension AppModel {
     }
 }
 
+/// The result of one candidate scan, keyed by the scan it was derived from.
+struct CargoManifestCache {
+    let workspace: URL
+    /// nil when no scan has been applied yet, which is a cacheable answer too.
+    let snapshotID: UUID?
+    let urls: [URL]
+}
+
 /// Uses only the applied inventory, so recognition never probes a toolchain or
 /// opens files while a toolbar/menu is being rendered.
 enum CargoManifestSelection {
     static func candidates(workspace: URL, files: [URL]) -> [URL] {
         let root = workspace.standardizedFileURL.path
         let prefix = root.hasSuffix("/") ? root : root + "/"
-        return files.map(\.standardizedFileURL).filter {
-            $0.lastPathComponent == "Cargo.toml" && $0.path.hasPrefix(prefix)
-        }.sorted {
+        // Names are matched before standardizing. Workspace inventories are
+        // built by appending normalized relative paths to the root, so
+        // standardizing cannot change a last path component of `Cargo.toml`,
+        // and doing it first would resolve every file in the project to find a
+        // handful of manifests.
+        return files.filter { $0.lastPathComponent == "Cargo.toml" }
+            .map(\.standardizedFileURL)
+            .filter { $0.path.hasPrefix(prefix) }
+            .sorted {
             let left = String($0.path.dropFirst(prefix.count))
             let right = String($1.path.dropFirst(prefix.count))
             let leftDepth = left.split(separator: "/").count

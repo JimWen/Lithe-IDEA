@@ -493,6 +493,111 @@ fn detectors_extend_a_java_project_without_disturbing_its_configurations() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// `src/bin/*.rs` is Cargo's conventional layout for a package with several
+/// binaries, and nothing in the manifest mentions those targets. Missing them
+/// leaves the Cargo tree showing binaries that have no way to run.
+#[test]
+fn cargo_detector_finds_binaries_under_src_bin() {
+    let root = temporary_root("detect-cargo-src-bin");
+    fs::create_dir_all(root.join("src/bin/packer")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"tools\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("src/bin/scanner.rs"), "fn main() {}\n").unwrap();
+    // A directory binary is named after the directory, not after `main.rs`.
+    fs::write(root.join("src/bin/packer/main.rs"), "fn main() {}\n").unwrap();
+    // Non-Rust files in the same directory are not targets.
+    fs::write(root.join("src/bin/notes.txt"), "ignored\n").unwrap();
+
+    let configurations = generated_configurations(&root);
+    let ids: Vec<_> = configurations
+        .iter()
+        .filter(|item| item["provider"] == "cargo.binary")
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "cargo.binary:packer",
+            "cargo.binary:scanner",
+            "cargo.binary:tools"
+        ]
+    );
+
+    let scanner = configurations
+        .iter()
+        .find(|item| item["id"] == "cargo.binary:scanner")
+        .unwrap();
+    assert_eq!(scanner["command"], "cargo");
+    assert_eq!(
+        scanner["args"],
+        serde_json::json!(["run", "--package", "tools", "--bin", "scanner"])
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Cargo keeps discovering `src/bin` after a `[[bin]]` section appears, so
+/// treating a declaration as an opt-out would drop the conventional targets of
+/// any package that declares one custom path.
+#[test]
+fn cargo_detector_unions_declared_and_discovered_binaries() {
+    let root = temporary_root("detect-cargo-union");
+    fs::create_dir_all(root.join("src/bin")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n\
+         [[bin]]\nname = \"custom\"\npath = \"other/entry.rs\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("src/bin/helper.rs"), "fn main() {}\n").unwrap();
+
+    let ids: Vec<_> = generated_configurations(&root)
+        .into_iter()
+        .filter(|item| item["provider"] == "cargo.binary")
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "cargo.binary:app",
+            "cargo.binary:custom",
+            "cargo.binary:helper"
+        ]
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// `autobins = false` is the manifest's explicit statement that only declared
+/// targets exist. Discovering anyway would offer binaries Cargo will not build.
+#[test]
+fn cargo_detector_honours_autobins_opt_out() {
+    let root = temporary_root("detect-cargo-autobins");
+    fs::create_dir_all(root.join("src/bin")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nautobins = false\n\n\
+         [[bin]]\nname = \"custom\"\npath = \"other/entry.rs\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("src/bin/helper.rs"), "fn main() {}\n").unwrap();
+
+    let ids: Vec<_> = generated_configurations(&root)
+        .into_iter()
+        .filter(|item| item["provider"] == "cargo.binary")
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, vec!["cargo.binary:custom"]);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// A Gradle application is runnable through its declared application plugin.
 #[test]
 fn gradle_detector_finds_an_application() {

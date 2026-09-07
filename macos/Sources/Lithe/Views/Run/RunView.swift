@@ -82,6 +82,16 @@ struct RunView: View {
                 self.selectedSessionID = nil
             }
         }
+        .onChange(of: feature.moduleSessions) { sessions in
+            // A run started outside this window (Cargo tree double-click,
+            // toolbar play) creates its session after the window opens.
+            // Following the selected configuration's session keeps its output
+            // visible without a manual pick, like RustRover's run tab focus.
+            guard selectedSessionID == nil,
+                  let configuration = feature.selectedConfiguration,
+                  sessions.contains(where: { $0.id == configuration.id }) else { return }
+            selectedSessionID = configuration.id
+        }
     }
 
     private var configurationSetupView: some View {
