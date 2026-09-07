@@ -1,6 +1,10 @@
 # Go Tools / Cargo 工具窗口实施方案
 
-状态：B7a1 方案经两名独立 reviewer 放行；纯 Rust 基础实现已通过完整验证并提交 `4039f0f0`。B7a2a 原生进程清理亦已完成（`d6fb2d1f`）；B7a2b capture/插件资源完成（`daf43b7f`、`0003c624`）；B7a2c1 Swift 元数据消费/Unicode feature 完成（`8b8e7fe9`、`0b5dfcaa`）。只读原生刷新、a3–a4 尚未实施；Project 保持现状。前置 Terminal B4a6 已完成。
+状态：B7a1 方案经两名独立 reviewer 放行；纯 Rust 基础实现已通过完整验证并提交 `4039f0f0`。B7a2a 原生进程清理亦已完成（`d6fb2d1f`）；B7a2b capture/插件资源完成（`daf43b7f`、`0003c624`）；B7a2c1 Swift 元数据消费/Unicode feature 完成（`8b8e7fe9`、`0b5dfcaa`）。B7a2c2 Cargo 只读刷新与右侧工具窗口代码完成（`4f41da49`），**自动检查通过但 GUI 点击验收未做**，见下。a3–a4 尚未实施；Go Tools 窗口尚未实施；Project 保持现状。前置 Terminal B4a6 已完成。
+
+B7a2c2 已完成部分：Rust execution module 的静态 Cargo contribution（catalog/factory/instance/renderer 四处一致）、`CargoProjectFeatureModel` 的单轮刷新所有权（期限、输出预算、取消与迟到清理）、`MacCargoMetadataPreparer` 的被动原生准备（拒绝脚本 shim、尊重显式 Cargo 选择、rustup proxy 经语言 capture 解析、环境白名单构造、按 typed metadata 授权 root）、`LanguageProjectToolResource.retire()` 的同步 retirement 事件，以及 execution graph 把刷新计入执行工作并在停止前关闭刷新闸门。
+
+B7a2c2 **未完成**部分，不得视为该子批结项：真实 Cargo 工作区的实际打开/选择 manifest/展开/刷新/失败重试/隐藏恢复的点击验收与 RustRover 对照截图；刷新前后源码/manifest/lock 零改动的实测；ARM64 产品包验收。已执行的证据只有 1108 项 Swift 测试、service/module 边界门禁、test-stability 门禁与 `git diff --check`。
 
 ## 1. 最终体验与本批依赖
 
