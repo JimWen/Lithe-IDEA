@@ -198,7 +198,7 @@ Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/
 | B4 | B4a0–B4a6 通过 | Terminal 启动、显示/输入、venv 完成；其他设置待实施 | 1032 项完整测试、42+3 个 shell 场景、边界、ARM64 包通过 | 真实设置、Python prefix、Restart、环境缺失/恢复、迟到确认焦点及清理通过 | B4a0–B4a6 通过 | 启动 `db44d036`；字体 `4f74218a`；输入 `266c0c52`；venv `3724ea20` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
 | B6 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
-| B7 | B7a1/B7a2a–b/c1 通过；c2 方案已记录，其余待细化 | 共享元数据、原生清理、capture/插件、Swift 消费、Cargo 只读刷新与右栏工具窗口完成；Go Tools 窗口/任务/gutter/Structure/TODO 待实施 | Rust 346、Swift 1108、边界与 test-stability 门禁通过 | 元数据/进程/插件集成通过；**Cargo 工具窗口的 GUI 点击验收与 ARM64 包未做** | c2 待独立代码审查 | 新增 `4f41da49`；[第十七批](goland-parity-iteration17-acceptance.md) |
+| B7 | B7a1/B7a2a–b/c1 通过；c2 方案已记录，其余待细化 | 共享元数据、原生清理、capture/插件、Swift 消费、Cargo 只读刷新与右栏工具窗口完成；嵌套包校验与 GUI 启动 Cargo 发现缺陷已修复；Cargo 窗口按 GoLand 参考重构（targets 组节点、工具栏行、右键菜单、双击 target 运行并打开带时间戳输出的 Run 控制台）；Go Tools 窗口/任务/gutter/Structure/TODO 待实施 | Rust 347、Swift 1119、边界、契约与 test-stability 门禁通过 | 安装版 GUI 实测：净化 PATH 启动后三层树形正确、双击 target 弹出 Run 控制台真实运行 cargo run；lib/test/bench/example 双击无动作（明确保留）；亮色对照/RustRover 并排/ARM64 包验收待做 | c2 待独立代码审查 | 新增 `4f41da49`；[第十七批](goland-parity-iteration17-acceptance.md) |
 | L0–L7 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 11.png 已核对 | 未开始 | — |
 | G1 | 设计基线复核通过 | 已有首轮基线 | 待最终复验 | 待 GoLand 对照 | 未开始 | — |
 
