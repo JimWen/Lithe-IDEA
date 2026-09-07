@@ -4,7 +4,7 @@
 
 目标是在当前原生编辑器和 Rust Core 上，逐批对齐 GoLand 的编辑、高亮、补全、提示与常规文件体验，并让语言包扩展这些能力。本文保留“**不启动 LSP 也可用的语法层**”定位；跨文件类型分析、精确成员、导入、重构仍由完整 LSP 链路提供。Tree-sitter 不替代类型系统或 formatter。
 
-配套文档：[总体语言路线](rust-language-intelligence-roadmap.md)、[LSP 契约](language-tooling.md)、[插件实现](../../macos/Sources/LitheModuleAPI/Plugins/PluginTypes.swift)、[仓库边界](repository-layout.md)。本地另有 `language-support.md` / `plugin-architecture.md` 草稿，本次不改动其内容。实施前需独立评审各批次，修订结论后再编码、运行验收、按批提交；未通过的批次保持未完成。
+配套文档：[总体语言路线](rust-language-intelligence-roadmap.md)、[LSP 契约](language-tooling.md)、[多语言适配](language-support.md)、[插件架构](plugin-architecture.md)、[插件实现](../../macos/Sources/LitheModuleAPI/Plugins/PluginTypes.swift)、[仓库边界](repository-layout.md)。`language-support.md` / `plugin-architecture.md` 已随 `953c84da` 提交，描述的是**当前已实现的分层**；本文描述的是**尚未实现的语言引擎**，两者冲突时以源码为准（见第 1 节末）。实施前需独立评审各批次，修订结论后再编码、运行验收、按批提交；未通过的批次保持未完成。
 
 ## 1. 当前实现与明确缺口
 
@@ -37,11 +37,17 @@
 | 用户操作 | 离线语法层 | LSP/其他能力 | GoLand 对标的可观察结果 |
 | --- | --- | --- | --- |
 | 打开/编辑源码 | Tree-sitter token、括号、折叠、文档符号 | 就绪后叠加 semantic tokens | 打开即着色；未闭合字符串、注释、连续输入不污染后续文本；光标不跳 |
+| 换行、缩进与括号 | 声明驱动的缩进增减判定、括号对与包围/展开选区 | on-type/range formatting、LSP 提供的缩进结果 | 回车按语言缩进；配对与包围不吞用户输入；无声明的语言保持现有行为而不是猜测 |
 | 输入/手动补全 | 当前作用域、文件内符号、关键词、snippet | 类型成员、跨文件符号、导入、resolve | 光标旁列表，方向键/接受/取消/文档一致；保持编辑焦点 |
 | hover/参数提示 | 高置信同文件声明与注释 | 精确类型、依赖文档、活动签名 | 可读签名、代码块、参数定位；不把猜测标成类型分析结果 |
 | 格式化 | 有正式 formatter 才提供 | LSP formatting 或所属工具模块 | 保留编码/换行；变更可预览，一次 Undo；未支持格式明确不可用 |
 | Structure/TODO/运行入口 | 通用符号、注释范围、候选入口 | LSP symbols/code lens、Run/Test provider 验证 | 工具窗消费统一结果；点击定位，运行配置使用真实工作目录/参数 |
 | 重构 | 语法选区、包围/展开等可证明局部操作 | prepareRename、rename、code actions、workspace edit | 跨文件编辑有预览与版本校验；语法 rename 不冒充安全语义重构 |
+
+重构行所列的 LSP 侧能力（prepareRename、selectionRange、workspace edit 的顺序/版本/资源操作）
+当前**均不存在于客户端**，由 [B6 重构方案](goland-parity-b6-refactor.md) 的 B6a 交付；本文的 L8
+只提供语法选区与包围/展开，不覆盖语义重构。两份方案共用同一 workspace edit 契约与编辑事务：
+第 7 节的格式化事务与 B6b 的 `WorkspaceTextEditCoordinator` 是同一个实现，不做两份。
 | 更换主题/语言包 | role 重映射、声明驱动识别与语法 | 模块按能力启停 | 无须改编辑器即可扩展已支持契约；设置项实际生效 |
 
 截图使用同一示例、字体大小和窗口尺寸，分别记录外观和交互。Go/Rust/Python 语义能力分别以 GoLand/RustRover/PyCharm 的常用操作为参照，保留 GoLand 风格的统一交互；不能用“看起来接近”代替补全正确性。
@@ -73,6 +79,33 @@ flowchart TD
 Views 不构造 parser、进程、Rust C ABI 或平台适配器。Rust 负责确定性解析、坐标、校验与候选；Application 负责状态、取消与结果适用性；平台层负责原生呈现、资源读取、工具发现和插件 worker 启停。已有 Rust LSP runtime 继续拥有语言服务器进程与协议会话，不创建第二套 LSP 运行时。
 
 建议 `rust/lithe-core/src/languages/syntax/` 拆分 registry、document、coordinates、highlight、locals、completion、structure；资源放 `rust/lithe-core/resources/languages/<id>/`。保留旧 Java 命令作为兼容路径，**不把 Java 查询迁移当作三语言上线前置条件**。将来迁移按语义 fixture 验证差异，不能保证手工 walker 与查询输出逐字节相同。
+
+### 3.1 与 Zed / Lapce 的栈对比
+
+下表用于说明选型理由与可复用范围。Zed/Lapce 的实现细节与授权条款以各自上游仓库当时的 revision 为准，**实施前逐项核对，不能把本表当作授权结论或兼容性证明**。
+
+| 维度 | Lithe 现状/本方案决策 | Zed | Lapce | 本方案结论 |
+| --- | --- | --- | --- | --- |
+| UI 与文本渲染 | SwiftUI + AppKit `NSTextView`（TextKit 1），折叠与装饰自研 | 自研 GPU UI 框架，自绘文本 | Rust 响应式 UI，自绘文本 | 不采用。更换渲染栈等于重写编辑器，并放弃输入法、无障碍与系统集成 |
+| 文本模型 | `NSTextStorage` + 第 4 节版本化 edit 协议 | rope + CRDT（服务协同编辑） | rope 衍生实现 | 不引入 CRDT；保留“增量 edit 是一等公民”的协议形状 |
+| 语法引擎 | Tree-sitter 0.25，当前仅 Java 且为手写 walker | Tree-sitter，query 驱动 | Tree-sitter，query 驱动 | 底座相同，差距在 query 化与文档 Tree 缓存，即第 3–4 节内容 |
+| grammar 分发 | 编译期 crate 并在 Cargo.lock 固定；新 grammar 走 6.3 原生 worker | 安装时按 git revision 获取并本地编译 | 获取预编译动态库 | 保持现方案。运行时下载/编译不满足确定性构建与签名公证约束 |
+| 插件隔离 | 原生 Bundle（进程内）+ 每语言包独立 syntax worker 进程 | WASM 沙箱 | WASI 沙箱 | 保持 6.3 决策；沙箱强度差异与授权路径见 3.2 |
+| 语言声明 | 6.1 的 `languageResources`（识别/grammar/query/editor 分离） | 扩展清单 + 每语言配置 + query 目录 | 插件清单 + 注册表 | 形状已一致，继续对齐字段集合 |
+| 语言服务器获取 | catalog 声明 Homebrew formula 或官方页面 | 扩展内的适配层决定二进制与参数 | 插件负责获取并启动语言服务器 | 缺口。安装路径仍是短板，纳入插件批次评估，不在本文件承诺 |
+| 补全 UI 与排序 | 手动 `NSMenu`，无模糊排序 | 自绘列表、文档面板、模糊排序 | 同类交互 | 交互模型由 L3 对齐；模糊排序先用项目已有能力，基准证明收益再引入 crate |
+
+**可复用且风险较低的三项**，均为公开设计约定或上游共享资源，不涉及复制 Zed/Lapce 代码：
+
+1. **上游 grammar 与其自带 query**。来源是 Tree-sitter 官方或 grammar 维护仓库，与 Zed/Lapce 无从属关系；按第 3 节要求固定 revision、分别审查 grammar 与 query 许可证并记录 NOTICE。
+2. **query 职责划分的命名约定**：`highlights` / `locals` / `injections` / `brackets` / `indents` / `outline` / `overrides` / `runnables`。槽位在 6.1 一次定义，批次归属与缺省语义同样以 6.1 为准；仅声明槽位不构成能力交付。
+3. **每语言编辑行为配置的字段集合**：行注释、块注释、括号对与其换行行为、构成单词的字符集、缩进增减判定。这类字段一旦发布再补需要提升资源 schema，因此在资源 schema 1 一次占位。
+
+### 3.2 明确不采用的部分及理由
+
+- **不引入 WASM/WASI runtime**。6.3 已选择签名校验的独立 worker 进程，同样获得崩溃隔离，且避免 C scanner 移植与额外 runtime 的体积、启动与调试成本。代价必须如实记录：**worker 具备普通进程权限，签名与 receipt 不是沙箱**，第三方来源仍走 6.3 的显式授权路径。
+- **不复制 Zed 代码**。其主仓库授权与本仓库 Apache-2.0 的兼容性需要法务级确认，因此只参考公开文档描述的分层与字段设计。Lapce 的授权与本仓库一致的部分可作为实现参考，但仍需逐文件记录来源、revision 与 NOTICE，不因“同许可证”跳过审查。
+- **不因跨进程可能性重写现有能力面**，但**新增宿主服务优先定义可序列化的 JSON 请求/响应契约**而不是 Swift 协议对象。现有 `LanguageRunExtensionPlan` 一类值类型是正确示范；`PluginHostContext` 返回对象引用的既有服务保持不变，不在本方案批次内改动。
 
 ## 4. 版本化语法契约
 
@@ -219,10 +252,22 @@ Go 复用 gopls，Rust 复用 rust-analyzer，Python 延续当前默认 provider
   "grammar": { "id": "tree-sitter-rust", "delivery": "bundled" },
   "queries": {
     "highlights": "languages/rust/highlights.scm",
-    "locals": "languages/rust/locals.scm"
+    "locals": "languages/rust/locals.scm",
+    "injections": null,
+    "brackets": null,
+    "indents": null,
+    "overrides": null,
+    "runnables": null
   },
   "editor": {
     "lineComment": "//",
+    "blockComment": ["/*", "*/"],
+    "brackets": [
+      { "open": "{", "close": "}", "newline": true },
+      { "open": "(", "close": ")" },
+      { "open": "\"", "close": "\"", "notIn": ["string", "comment"] }
+    ],
+    "wordCharacters": ["_"],
     "indentSize": 4,
     "useTabs": false,
     "keywords": "languages/rust/keywords.json",
@@ -230,6 +275,10 @@ Go 复用 gopls，Rust 复用 rust-analyzer，Python 延续当前默认 provider
   }
 }
 ```
+
+`queries` 的七个槽位与 `editor` 字段在资源 schema 1 一次定义，避免为补字段提升 schema。除 `highlights` 外全部可缺省，**缺省语义是该能力不可用，而不是回退到猜测规则**：无 `indents` 不启用自动缩进，无 `brackets` 保持编辑器现有配对行为，无 `overrides` 时注释/字符串抑制沿用 5.2 的默认判定，无 `runnables` 时该语言不产出语法级运行候选。`injections` 缺省时不做嵌套语言解析，其预算见 4.3。
+
+批次归属：`highlights` 与 `locals` 属 L2/L4，`injections` 随 6.2 的 Markdown/HTML 验收在 L6 落地，`indents`/`brackets`/`overrides`/`runnables` 属 L8。声明存在不等于能力已交付。运行候选与上下文抑制以 query 表达而非在 Rust 内按语言分支实现，否则每新增一门语言都要改引擎代码，与“新增语言即新增声明与资源”的目标冲突。
 
 包索引记录 revision、grammar ABI、大小、SHA-256、来源 revision/许可证。query 与固定 grammar 成对验证，不能把 Zed/Helix predicates/captures 默认视为全部兼容。
 
@@ -316,8 +365,9 @@ Tree-sitter 不负责风格格式化。复用 LSP formatting/workspace edit，�
 | L5 / P3 | manifest/resource schema、设置/识别、安装/回滚；依赖插件机制 | v1/v2、路径/散列/query、禁用清理、惰性识别 | 安装已内置 grammar 的资源包，无编辑器改动，坏包局部失败 |
 | L6 | 常规格式矩阵、JS/TS、格式化事务；依赖 L2/L5 | 各格式保真、识别/注入预算、格式化取消/过期/undo | 每行固定样例、编辑/高亮截图；可用 formatter 的前后 diff |
 | L7 | 6.3 的原生 syntax worker、Lua grammar/本地导航与独立 StyLua adapter、本地执行授权；依赖 L1/L4/L5 及 L6 格式化事务 | wire/ABI、签名/receipt、取消/篡改/升级、符号导航、格式化版本/Undo、进程清理 | 不重编宿主完成 Lua 安装、高亮/补全/Structure/definition/格式化；升级重新授权，卸载无进程/receipt |
+| L8 | 3.1 预留槽位的语法驱动编辑行为：`indents` 自动缩进、`brackets` 配对与包围/展开选区、`overrides` 上下文抑制、`runnables` 运行候选；依赖 L2/L4/L5 | 缺省槽位不改变现有行为、缩进不破坏 Make recipe 与已有缩进设置、配对不吞选区/IME 输入、包围与展开可一次 Undo、运行候选与真实 Run/Test provider 一致 | 三语言回车缩进、括号配对与包围操作、注释与字符串内不弹代码补全、gutter 运行入口点击可运行；无声明语言行为不变 |
 
-L0/L1 分别提交，L2/L6 可按语言再拆；L3 不只换 UI，L5 不只加 manifest，L7 必须实际安装。每批提交说明附实际测试、截图和缺口，不推送；尚未交付的后续批次保持未完成。
+L0/L1 分别提交，L2/L6 可按语言再拆；L3 不只换 UI，L5 不只加 manifest，L7 必须实际安装。L8 与 L7 无相互依赖，可按资源就绪顺序单独提交，但**不能只提交 6.1 的槽位声明**：每项能力需连同 query 资源、引擎消费与验收一起交付，未交付项在设置与 UI 中保持不可用而不是静默无效果。每批提交说明附实际测试、截图和缺口，不推送；尚未交付的后续批次保持未完成。
 
 ## 9. 验证与完成审计
 
@@ -337,6 +387,20 @@ git diff --check
 ```
 
 改测试还需 Swift/Rust timing harness HTML/JUnit；新官方包运行 official plugin 验证。构建、测试、UI 分别记录，编译通过不证明补全焦点正确。
+
+**工具链与调用方式（2026-09-07 复核）**：本机没有安装 Xcode，`/usr/bin/swift` 是 Command Line
+Tools 的 6.0.3，**不满足** `Package.swift` 的 tools version 6.2。实际使用的是仓库内解包的
+swift.org 工具链，运行 Swift 检查前必须先置于 PATH：
+
+```bash
+export PATH="$PWD/.artifacts/toolchains/swift-6.2.4/swift-6.2.4-RELEASE-osx-package.pkg/Payload/usr/bin:$PATH"
+./scripts/test-macos.sh -Xlinker -force_load \
+  -Xlinker "$PWD/rust/target/macos/aarch64-apple-darwin/debug/liblithe_core.a"
+```
+
+不传 `-force_load` 时 `RustCoreBridge().isAvailable` 为 false，约 50 项测试会以
+"Rust Core is unavailable" 失败；这是调用方式问题，不是回归。第 9 节其余脚本同此前提。
+（`ai-ide-phase-one.md` 记录的 `.n/swift-6.2.4/…` 路径已过期，实际在 `.artifacts/toolchains/`。）
 
 性能语料固定为约 1k/10k/100k 行三语言、长字符串/单行、密集注入/大量 tab；分别测普通编辑、结构变化、大粘贴/Undo。初始目标：新增主线程工作 p95 <8 ms，10k 行普通局部编辑解析 p95 <20 ms，本地补全 p95 <30 ms；长任务以预算降级/可取消为标准。最坏解析仍可能整文工作，**不得承诺亚线性复杂度**。记录机器/构建模式、冷/热 p50/p95/max、RSS、包体/冷编译增量；超预算先修实现复测，不只抬阈值。
 
