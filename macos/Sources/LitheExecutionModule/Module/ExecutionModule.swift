@@ -6,6 +6,7 @@ package protocol ExecutionServiceGraph: AnyObject {
     var runFeature: RunFeatureModel { get }
     var tests: LanguageTestService { get }
     var projectDevelopment: ProjectDevelopmentFeatureModel { get }
+    var cargoProject: CargoProjectFeatureModel { get }
     var hasActiveExecutionWork: Bool { get }
     func activate(context: ModuleContext)
     func prepareForSleep() async throws
@@ -17,10 +18,12 @@ public final class ExecutionModuleCapability: NSObject {
     package let runFeature: RunFeatureModel
     package let testService: LanguageTestService
     package let projectDevelopment: ProjectDevelopmentFeatureModel
+    package let cargoProject: CargoProjectFeatureModel
     fileprivate init(graph: any ExecutionServiceGraph) {
         runFeature = graph.runFeature
         testService = graph.tests
         projectDevelopment = graph.projectDevelopment
+        cargoProject = graph.cargoProject
     }
 }
 

@@ -15,6 +15,7 @@ enum WorkbenchModuleUIComposition {
                 gitRegistration,
                 languageRegistration,
                 executionRegistration,
+                cargoRegistration,
                 debugRegistration
             ])
         } catch {
@@ -102,6 +103,18 @@ enum WorkbenchModuleUIComposition {
                 }
             )
         ]
+    )
+
+    private static let cargoRegistration = WorkbenchModuleUIRegistry.Registration(
+        contributions: BundledLanguagePluginCatalog.executionContributions(languageID: "rust"),
+        actions: [.init(id: "cargo.toggle", commandID: "toggle-cargo")],
+        renderers: [.init(
+            id: "cargo.project", ideaAssetPath: nil,
+            isVisible: { $0.isCargoAvailable },
+            isSelected: { $0.isCargoToolWindowSelected },
+            content: { _ in AnyView(CargoToolWindowView()) },
+            contentIdentity: { WorkbenchModuleUIRegistry.Renderer.featureIdentity($0.cargoProjectFeatureIfActive) }
+        )]
     )
 
     private static let debugRegistration = WorkbenchModuleUIRegistry.Registration(

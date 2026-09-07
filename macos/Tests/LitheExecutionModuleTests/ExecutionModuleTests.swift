@@ -448,7 +448,42 @@ private func makeTestGraph() -> ExecutionFeatureGraph {
         executableResolver: resolver,
         processFactory: { TestStreamingProcess() }
     )
-    return ExecutionFeatureGraph( run: run, tests: tests)
+    return ExecutionFeatureGraph(run: run, tests: tests, cargoProject: makeTestCargoProject())
+}
+
+/// The graph only needs a constructed feature here; no refresh is started, so
+/// every port fails loudly rather than pretending a toolchain exists.
+@MainActor
+private func makeTestCargoProject() -> CargoProjectFeatureModel {
+    CargoProjectFeatureModel(
+        nativePreparer: TestCargoMetadataPreparer(),
+        normalizer: TestProjectMetadataNormalizer(),
+        makeInput: { workspaceURL, generation, manifestURL, deadline in
+            CargoMetadataPreparationRequest(
+                workspaceURL: workspaceURL, manifestURL: manifestURL,
+                workspaceGeneration: generation, cargoCandidates: [], rustupCandidates: [],
+                customCargoURL: nil, environment: [:], deadline: deadline
+            )
+        },
+        providerModuleID: .languageExecutionExtension("rust"),
+        activateProvider: { throw ProjectMetadataFailure.invalidInput(message: "No provider in tests.") }
+    )
+}
+
+private struct TestCargoMetadataPreparer: CargoMetadataNativePreparing {
+    func prepare(_ request: CargoMetadataPreparationRequest) throws -> any CargoMetadataNativeSession {
+        throw ProjectMetadataFailure.invalidInput(message: "No Cargo in tests.")
+    }
+}
+
+private struct TestProjectMetadataNormalizer: ProjectMetadataNormalizing {
+    func normalize(
+        _ captures: ProjectMetadataCaptures, workspaceDirectory: String,
+        roots: [ProjectMetadataRoot], operationID: String, timeoutMilliseconds: Int
+    ) throws -> ProjectMetadataNormalization {
+        throw ProjectMetadataFailure.invalidInput(message: "No normalizer in tests.")
+    }
+    func cancel(operationID: String) -> Bool { false }
 }
 
 @MainActor

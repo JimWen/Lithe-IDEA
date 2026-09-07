@@ -903,8 +903,15 @@ struct WorkbenchView: View {
                 if let renderer = moduleUIRegistry.renderer(for: contribution),
                    renderer.isVisible(model) {
                     Button { moduleUIRegistry.perform(contribution, model: model) } label: {
-                        Image(systemName: contribution.icon ?? "rectangle.rightthird.inset.filled")
-                            .font(.system(size: 18))
+                        Group {
+                            if let asset = renderer.ideaAssetPath {
+                                LitheIDEAIcon(resourcePath: asset, size: 18,
+                                    fallbackSystemImage: contribution.icon ?? "rectangle.rightthird.inset.filled")
+                            } else {
+                                Image(systemName: contribution.icon ?? "rectangle.rightthird.inset.filled")
+                                    .font(.system(size: 18))
+                            }
+                        }
                             .frame(width: ActivityBarMetrics.buttonWidth, height: ActivityBarMetrics.buttonHeight)
                             .litheRowHover(
                                 isActive: renderer.isSelected(model),
@@ -915,7 +922,8 @@ struct WorkbenchView: View {
                     .buttonStyle(.plain)
                     .lithePointer()
                     .foregroundStyle(renderer.isSelected(model) ? LitheTheme.primaryText : LitheTheme.secondaryText)
-                    .help(contribution.title)
+                    .disabled(moduleUIRegistry.commandID(for: contribution).map { !model.canPerformShortcutCommand(id: $0) } == true)
+                    .help(commandHelp(contribution.title, commandID: moduleUIRegistry.commandID(for: contribution)))
                     .accessibilityLabel(contribution.title)
 
                 }

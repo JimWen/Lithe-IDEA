@@ -23,7 +23,7 @@ struct ProjectToolModuleLifecycleTests {
             let module: any LitheModule = language == "go"
                 ? GoExecutionModule(executionHost: execution, projectToolHost: host)
                 : BundledLanguageExecutionModule(languageID: language, executionHost: execution, projectToolHost: host)
-            try runtime.register(ModuleFactory(manifest: module.manifest) { module })
+            try runtime.register(ModuleFactory(manifest: module.manifest, contributions: module.contributions()) { module })
             try await runtime.setEnabled(true, for: module.manifest.id)
             let capability = try #require(try await runtime.activateCapability(.languageProjectTools(language)) as? any LanguageProjectToolsProviding)
             let request = LanguageProjectToolRequest(

@@ -332,6 +332,9 @@ final class MacServiceContainer {
                             executableResolver: executableResolver,
                             processFactory: { MacStreamingProcess(processRegistry: processRegistry, moduleID: .execution) },
                             extensionRequiredLanguageIDs: pluginLanguageIDs
+                        ),
+                        cargoProject: MacCargoProjectComposition.makeFeature(
+                            runtime: runtimeService, moduleRuntime: moduleRuntime, core: rustCore
                         )
                     )
                     return graph
@@ -468,7 +471,10 @@ final class MacServiceContainer {
                         executionHost: languageExecutionHost,
                         projectToolHost: specification.id == "rust" ? languageProjectToolHost : nil
                     )
-                    try moduleRegistry.register(ModuleFactory(manifest: executionModule.manifest) {
+                    try moduleRegistry.register(ModuleFactory(
+                        manifest: executionModule.manifest,
+                        contributions: BundledLanguagePluginCatalog.executionContributions(languageID: specification.id)
+                    ) {
                         BundledLanguageExecutionModule(
                             languageID: specification.id,
                             executionHost: languageExecutionHost,

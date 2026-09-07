@@ -122,6 +122,9 @@ public extension ModuleEvent {
     static let stateChangedName = "module.state-changed"
     static let activityStartedName = "module.activity-started"
     static let activityEndedName = "module.activity-ended"
+    /// Sent synchronously when a language capture factory closes, including
+    /// shutdowns whose remaining native resources prevent a shutdown event.
+    static let languageProjectToolsRetiredName = "module.language-project-tools-retired"
 }
 
 @MainActor

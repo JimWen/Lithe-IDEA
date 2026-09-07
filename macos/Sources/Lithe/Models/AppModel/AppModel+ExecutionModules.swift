@@ -15,6 +15,7 @@ extension AppModel {
     }
 
     var runFeatureIfActive: RunFeatureModel? { executionCapability?.runFeature }
+    var cargoProjectFeatureIfActive: CargoProjectFeatureModel? { executionCapability?.cargoProject }
     var genericDebugFeatureIfActive: GenericDebugFeatureModel? {
         debugCapability?.genericFeature as? GenericDebugFeatureModel
     }

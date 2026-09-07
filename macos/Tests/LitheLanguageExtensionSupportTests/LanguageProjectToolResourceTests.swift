@@ -75,7 +75,7 @@ struct LanguageProjectToolResourceTests {
         #expect(session.state == .finished)
         #expect(!resource.isModuleResourceActive)
         #expect(fixture.scope.activeLeaseReasons.isEmpty)
-        #expect(fixture.events.names == [ModuleEvent.activityStartedName, ModuleEvent.activityEndedName])
+        #expect(fixture.events.names == [ModuleEvent.activityStartedName, ModuleEvent.languageProjectToolsRetiredName, ModuleEvent.activityEndedName])
         #expect(fixture.scope.resourceSnapshots().isEmpty)
         fixture.scope.releaseStoppedResources()
         let fresh = try fixture.register()
@@ -214,7 +214,7 @@ struct LanguageProjectToolResourceTests {
         #expect(fixture.host.ownerIDs.isEmpty)
         #expect(!resource.isModuleResourceActive)
         #expect(fixture.scope.activeLeaseReasons.isEmpty)
-        #expect(fixture.events.names.count == 2)
+        #expect(fixture.events.names == [ModuleEvent.activityStartedName, ModuleEvent.languageProjectToolsRetiredName, ModuleEvent.activityEndedName])
         await resource.stopModuleResource()
     }
 

@@ -14,7 +14,9 @@ import LitheCoreContracts
 @MainActor
 final class AppModel: ObservableObject, Identifiable {
     let id = UUID()
-    @Published private(set) var workspaceURL: URL?
+    @Published private(set) var workspaceURL: URL? {
+        didSet { invalidateCargoWorkspace() }
+    }
     @Published private(set) var standaloneFileURL: URL? {
         didSet { standaloneCommandGeneration += 1 }
     }
@@ -32,6 +34,15 @@ final class AppModel: ObservableObject, Identifiable {
         }
     }
     @Published var isRunVisible = false
+    @Published var isCargoVisible = false
+    @Published var isCargoActivating = false
+    @Published var isCargoCancelling = false
+    @Published var cargoActivationError: String?
+    @Published var selectedCargoManifestURL: URL?
+    var cargoRefreshTask: Task<Void, Never>?
+    var cargoCancellationTask: Task<Void, Never>?
+    var cargoRequestGeneration = 0
+    let cargoTreePresentation = CargoTreePresentation()
     @Published var editingRunConfiguration: RunConfiguration?
     @Published var pendingGitPushReference: GitReference?
     @Published var pendingNewBranchReference: GitReference?
@@ -361,6 +372,7 @@ final class AppModel: ObservableObject, Identifiable {
         workbenchBackgroundFeatureObservation = workbenchBackgroundFeature.objectWillChange.sink { [weak self] _ in self?.scheduleObjectWillChangeRelay() }
         moduleRuntimeObservationID = services.moduleRuntime.observeEvents { [weak self] event in
             guard let self else { return }
+            handleCargoModuleEvent(event)
             if event.name == "module.sleeping" || event.name == "module.shutdown" {
                 if event.source == .database, selectedSidebar == .database {
                     selectedSidebar = .project

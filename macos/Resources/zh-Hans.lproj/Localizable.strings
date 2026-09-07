@@ -949,6 +949,12 @@
 "Show or hide Git history" = "显示或隐藏 Git 历史";
 "Toggle Run" = "切换运行窗口";
 "Show or hide run output" = "显示或隐藏运行输出";
+"Cargo" = "Cargo";
+"Show or hide the Cargo tool window" = "显示或隐藏 Cargo 工具窗口";
+"Cargo: Refresh" = "Cargo：刷新";
+"Reload Cargo workspace metadata" = "重新读取 Cargo 工作区元数据";
+"Cargo: Cancel Refresh" = "Cargo：取消刷新";
+"Stop reading Cargo workspace metadata" = "停止读取 Cargo 工作区元数据";
 "Toggle Debug" = "切换调试窗口";
 "Toggle Line Breakpoint" = "切换行断点";
 "Add or remove a breakpoint at the caret" = "在光标所在行添加或移除断点";

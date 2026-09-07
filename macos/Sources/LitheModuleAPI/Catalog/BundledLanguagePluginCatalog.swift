@@ -104,13 +104,27 @@ public enum BundledLanguagePluginCatalog {
         specifications.first { $0.id == languageID }
     }
 
+    /// Inert UI declarations are shared by the catalog, factory and instance.
+    /// Reading them must not activate a language module or probe its toolchain.
+    public static func executionContributions(languageID: String) -> [ModuleContribution] {
+        guard languageID == "rust" else { return [] }
+        return [ModuleContribution(
+            id: "language.rust.cargo", kind: .toolWindow, title: "Cargo",
+            icon: "shippingbox", placement: .rightSidebar, order: 100,
+            actionID: "cargo.toggle", rendererID: "cargo.project"
+        )]
+    }
+
     private static func makeManifest(_ specification: BundledLanguagePluginSpecification) -> PluginManifest {
         var modules: [PluginModuleDeclaration] = []
         if specification.supportsLanguageServer {
             modules.append(PluginModuleDeclaration(manifest: languageServerManifest(specification)))
         }
         if specification.supportsExecution {
-            modules.append(PluginModuleDeclaration(manifest: executionManifest(specification)))
+            modules.append(PluginModuleDeclaration(
+                manifest: executionManifest(specification),
+                contributions: executionContributions(languageID: specification.id)
+            ))
         }
         return PluginManifest(
             id: PluginID("dev.lithe.plugin.\(specification.id)-support"),

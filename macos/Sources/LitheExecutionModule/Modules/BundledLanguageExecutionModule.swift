@@ -54,6 +54,9 @@ public final class BundledLanguageExecutionModule: LitheModule {
     public func prepareForSleep() async throws {}
     public func sleep() async { capability = nil; await releaseProjectTools() }
     public func shutdown() async { capability = nil; await releaseProjectTools() }
+    public func contributions() -> [ModuleContribution] {
+        BundledLanguagePluginCatalog.executionContributions(languageID: languageID)
+    }
 
     private func releaseProjectTools() async {
         projectToolResource?.retire()

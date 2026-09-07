@@ -54,8 +54,10 @@ public final class LanguageProjectToolResource: ModuleResource {
     /// Call before sleep/shutdown drops the module's capability, including when
     /// no capture is active and the runtime would skip stopModuleResource().
     public func retire() {
+        guard activation.isOpen else { return }
         activation.isOpen = false
         unregisterIfRetiredAndStopped()
+        events.publish(ModuleEvent(source: ownerModuleID, name: ModuleEvent.languageProjectToolsRetiredName))
     }
 
     public func stopModuleResource() async {

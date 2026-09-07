@@ -59,6 +59,9 @@ enum LitheCommandCatalog {
         command("toggle-git-log", "Toggle Git Log", "Show or hide Git history", .window, "9", [.command]),
         command("toggle-run", "Toggle Run", "Show or hide run output", .window, "4", [.command]),
         command("toggle-tests", "Toggle Tests", "Show or hide language-neutral test runners", .window),
+        command("toggle-cargo", "Cargo", "Show or hide the Cargo tool window", .window),
+        command("refresh-cargo", "Cargo: Refresh", "Reload Cargo workspace metadata", .project),
+        command("cancel-cargo-refresh", "Cargo: Cancel Refresh", "Stop reading Cargo workspace metadata", .project),
         command("toggle-debug", "Toggle Debug", "Show or hide the Debug tool window", .window, "5", [.command]),
 
         command("local-history", "Local History", "Open history for the active file", .history),

@@ -405,6 +405,12 @@ extension AppModel {
         return switch id {
         case "open-project", "settings":
             true
+        case "toggle-cargo":
+            isCargoAvailable
+        case "refresh-cargo":
+            canRefreshCargoProject
+        case "cancel-cargo-refresh":
+            canCancelCargoRefresh
         case "save", "find-in-file", "replace-in-file", "go-to-line", "local-history", "reveal-in-finder", "toggle-breakpoint":
             activeDocument != nil
         case "find-next", "find-previous":
