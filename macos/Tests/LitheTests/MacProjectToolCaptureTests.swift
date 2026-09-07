@@ -140,7 +140,10 @@ struct MacProjectToolCaptureTests {
             #expect(fixture.registry.processCount(for: fixture.module) == 0)
             #expect(await fixture.owner.stopAndWait())
         }
-        #expect(openPipeCount() == before)
+        // The count is process-wide and other suites run in parallel, so only a
+        // growth proves this capture leaked; a concurrent suite closing its own
+        // pipes may legitimately lower it.
+        #expect(openPipeCount() <= before)
     }
 
     @Test
