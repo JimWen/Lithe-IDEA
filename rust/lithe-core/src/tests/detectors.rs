@@ -1252,3 +1252,140 @@ fn python_detector_labels_a_declared_django_project() {
 
     fs::remove_dir_all(root).unwrap();
 }
+
+/// Go entry points hide behind file names other than `main.go`: a module root
+/// whose main package lives in `server.go`, a `cmd/<name>` layout with no
+/// `main.go` at all, and a plain subdirectory that only declares main in
+/// `seed.go`. All three are launchable with a directory-level `go run .`.
+#[test]
+fn go_detector_finds_main_packages_under_any_file_name() {
+    let root = temporary_root("detect-go-any-file");
+    for directory in ["app", "cmd/migrate", "tools/seed"] {
+        fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    fs::write(root.join("app/go.mod"), "module example.com/gw\ngo 1.22\n").unwrap();
+    fs::write(root.join("app/server.go"), "package main\nfunc main() {}\n").unwrap();
+    fs::write(
+        root.join("cmd/migrate/run.go"),
+        "package main\nfunc main() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("tools/seed/seed.go"),
+        "package main\nfunc main() {}\n",
+    )
+    .unwrap();
+
+    let ids = generated_configurations(&root)
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+
+    for expected in [
+        "go.main:app/app",
+        "go.command:cmd/migrate/migrate",
+        "go.main:tools/seed/seed",
+    ] {
+        assert!(
+            ids.contains(&expected.to_string()),
+            "missing {expected} in {ids:?}"
+        );
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// The clause often carries a trailing comment such as a build-tag note.
+/// Trimming whole lines only, as the first matcher did, missed it.
+#[test]
+fn go_detector_reads_a_package_clause_with_a_trailing_comment() {
+    let root = temporary_root("detect-go-clause-comment");
+    fs::create_dir_all(root.join("runner")).unwrap();
+    fs::write(
+        root.join("runner/entry.go"),
+        "package main // starts the runner\nfunc main() {}\n",
+    )
+    .unwrap();
+
+    let ids = generated_configurations(&root)
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"go.main:runner/runner".to_string()),
+        "missing go.main:runner/runner in {ids:?}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Disabled entry points are usually left behind as comments. A clause inside
+/// a line or block comment, or one after the file's real clause, must never
+/// make a library directory look runnable.
+#[test]
+fn go_detector_ignores_commented_out_package_clauses() {
+    let root = temporary_root("detect-go-commented-clause");
+    fs::create_dir_all(root.join("lib")).unwrap();
+    fs::write(
+        root.join("lib/a.go"),
+        "// package main\n/* package main\n   still commented */\npackage tool\nfunc Run() {}\n",
+    )
+    .unwrap();
+
+    let go_items = generated_configurations(&root)
+        .into_iter()
+        .filter(|item| item["provider"].as_str().unwrap_or("").starts_with("go."))
+        .count();
+    assert_eq!(go_items, 0, "commented clauses must not look runnable");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A directory holding only `*_test.go` files with `package main` exists to
+/// drive `go test`; launching it with `go run .` is not meaningful.
+#[test]
+fn go_detector_ignores_test_only_main_packages() {
+    let root = temporary_root("detect-go-test-only");
+    fs::create_dir_all(root.join("suites")).unwrap();
+    fs::write(
+        root.join("suites/main_test.go"),
+        "package main\nfunc main() {}\n",
+    )
+    .unwrap();
+
+    let go_items = generated_configurations(&root)
+        .into_iter()
+        .filter(|item| item["provider"].as_str().unwrap_or("").starts_with("go."))
+        .count();
+    assert_eq!(go_items, 0, "test-only main packages must not be launched");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A main package split across several files is one program. The union of the
+/// three entry rules must therefore yield exactly one configuration for the
+/// directory, not one per file or per matching rule.
+#[test]
+fn go_detector_emits_one_entry_for_a_multi_file_main_package() {
+    let root = temporary_root("detect-go-multi-file");
+    fs::create_dir_all(root.join("worker")).unwrap();
+    fs::write(
+        root.join("worker/main.go"),
+        "package main\nfunc main() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("worker/helper.go"),
+        "package main\nfunc help() {}\n",
+    )
+    .unwrap();
+
+    let go_items = generated_configurations(&root)
+        .into_iter()
+        .filter(|item| item["provider"].as_str().unwrap_or("").starts_with("go."))
+        .collect::<Vec<_>>();
+    assert_eq!(go_items.len(), 1, "one directory, one entry: {go_items:?}");
+    assert_eq!(go_items[0]["id"], "go.main:worker/worker");
+
+    fs::remove_dir_all(root).unwrap();
+}

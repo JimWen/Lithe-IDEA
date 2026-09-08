@@ -88,6 +88,13 @@ impl DirectoryContext {
         fs::read_to_string(self.path.join(name)).ok()
     }
 
+    /// Iterates the file names the shared walk recorded for this directory,
+    /// in sorted order. Detectors enumerate through this instead of touching
+    /// the filesystem so the single-walk cost bound stays intact.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.files.iter().map(String::as_str)
+    }
+
     /// Turns a file name into a project-relative path for `source`.
     pub fn join_relative(&self, name: &str) -> String {
         if self.relative == "." {
