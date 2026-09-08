@@ -512,9 +512,26 @@ extension AppModel {
         case .stale:
             return
         }
-        guard runFeature.configurationStatus == .ready else {
-            runFeature.requestRunConfigurationGeneration(intent: .run)
-            return
+        if runFeature.configurationStatus != .ready {
+            showNotification(
+                String(localized: "No Run configuration exists yet. Lithe is identifying this project automatically."),
+                severity: .information,
+                title: "Run",
+                action: .identifyRunConfiguration
+            )
+            await generateRunConfigurations()
+            guard isCurrentWorkspace(identity), runFeatureIfActive === runFeature else { return }
+            guard runFeature.configurationStatus == .ready else {
+                if !goManifestURLs.isEmpty {
+                    showNotification(
+                        String(localized: "Go runtime was not found. Lithe detected this Go project; configure Go env or install Go."),
+                        severity: .warning,
+                        title: "Go runtime",
+                        action: .configureGoRuntime
+                    )
+                }
+                return
+            }
         }
         guard let configuration = runFeature.selectedConfiguration else { return }
         if !(await activateLanguageRunExtensionIfNeeded(
@@ -803,9 +820,26 @@ extension AppModel {
         guard isCurrentWorkspace(identity) else { return }
         guard await activateDebugModule() != nil,
               isCurrentWorkspace(identity) else { return }
-        guard runFeature.configurationStatus == .ready else {
-            runFeature.requestRunConfigurationGeneration(intent: .debug)
-            return
+        if runFeature.configurationStatus != .ready {
+            showNotification(
+                String(localized: "No Run configuration exists yet. Lithe is identifying this project automatically."),
+                severity: .information,
+                title: "Debug",
+                action: .identifyRunConfiguration
+            )
+            await generateRunConfigurations()
+            guard isCurrentWorkspace(identity), runFeatureIfActive === runFeature else { return }
+            guard runFeature.configurationStatus == .ready else {
+                if !goManifestURLs.isEmpty {
+                    showNotification(
+                        String(localized: "Go runtime was not found. Lithe detected this Go project; configure Go env or install Go."),
+                        severity: .warning,
+                        title: "Go runtime",
+                        action: .configureGoRuntime
+                    )
+                }
+                return
+            }
         }
         guard let selectedConfiguration = runFeature.selectedConfiguration else {
             showNotification("Choose a Run configuration before starting Debug")

@@ -105,6 +105,7 @@ final class AppModel: ObservableObject, Identifiable {
     }
     @Published var activeNotifications: [WorkbenchNotification] = []
     @Published var notifications: [WorkbenchNotification] = []
+    var languageServerInstallPromptedProviderIDs: Set<String> = []
     var notificationDismissalTasks: [UUID: Task<Void, Never>] = [:]
     var notificationDismissalDeadlines: [UUID: ContinuousClock.Instant] = [:]
     var notificationRemainingDurations: [UUID: Duration] = [:]
@@ -841,6 +842,7 @@ final class AppModel: ObservableObject, Identifiable {
     func restartLanguageServers() {
         languageToolingSessionsIfActive?.stopAllLanguageServers()
         languageToolingFeature.resetWorkspaceState()
+        languageServerInstallPromptedProviderIDs.removeAll()
         cancelJavaLanguageServerPreparation()
         let didStart = activateCurrentDocumentLanguageServerIfAvailable()
         showNotification(
@@ -946,6 +948,7 @@ final class AppModel: ObservableObject, Identifiable {
         stopTerminalSessions()
         languageTestServiceIfActive?.reset()
         languageToolingFeature.resetWorkspaceState()
+        languageServerInstallPromptedProviderIDs.removeAll()
         runtimeFeature.openProject(at: normalizedURL)
         runFeatureIfActive?.reset()
         pendingRunAction = nil
@@ -1443,6 +1446,16 @@ final class AppModel: ObservableObject, Identifiable {
             return languageToolingSessions.activeLanguageServerIDs.contains(descriptor.id)
         } catch {
             languageToolingFeature.markActivationFailed(providerID: descriptor.id, descriptor: descriptor, error: error)
+            if languageServerInstallPromptedProviderIDs.insert(descriptor.id).inserted {
+                showNotification(
+                    settings.language == .simplifiedChinese
+                        ? "未找到 \(descriptor.displayName) 语言服务器，点击安装并自动配置。"
+                        : "\(descriptor.displayName) language server is not installed. Install and configure it automatically.",
+                    severity: .warning,
+                    title: descriptor.displayName,
+                    action: .installLanguageServer(providerID: descriptor.id)
+                )
+            }
             return false
         }
     }

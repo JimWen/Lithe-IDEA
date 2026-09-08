@@ -63,6 +63,14 @@ struct WorkbenchNotificationStack: View {
                     HStack(alignment: .top, spacing: 4) {
                         VStack(alignment: .leading, spacing: 6) {
                             WorkbenchNotificationContent(notification: notification, maximumMessageLines: 4)
+                            if let action = notification.action {
+                                Button(action.title) {
+                                    model.performNotificationAction(action)
+                                    model.dismissNotification(notification.id)
+                                }
+                                .buttonStyle(LitheSecondaryButtonStyle())
+                                .controlSize(.small)
+                            }
                             if notification.severity == .error || notification.message.count > 100
                                 || notification.message.contains("\n") {
                                 Button("Details") {

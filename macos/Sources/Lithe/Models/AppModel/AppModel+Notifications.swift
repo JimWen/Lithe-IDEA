@@ -16,9 +16,12 @@ extension AppModel {
     func showNotification(
         _ message: String,
         severity: WorkbenchNotificationSeverity = .information,
-        title: String? = nil
+        title: String? = nil,
+        action: WorkbenchNotificationAction? = nil
     ) {
-        let notification = WorkbenchNotification(message: message, title: title, severity: severity)
+        let notification = WorkbenchNotification(
+            message: message, title: title, severity: severity, action: action
+        )
         notifications.insert(notification, at: 0)
         if notifications.count > 100 {
             notifications.removeLast(notifications.count - 100)
@@ -36,6 +39,17 @@ extension AppModel {
                 for: notification,
                 after: WorkbenchNotificationTiming.displayDuration(for: notification)
             )
+        }
+    }
+
+    func performNotificationAction(_ action: WorkbenchNotificationAction) {
+        switch action {
+        case .installLanguageServer(let providerID):
+            Task { await installLanguageServer(providerID: providerID) }
+        case .identifyRunConfiguration:
+            Task { await generateRunConfigurations() }
+        case .configureGoRuntime:
+            showSettings(category: .go)
         }
     }
 

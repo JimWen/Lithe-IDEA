@@ -3,6 +3,21 @@ import LitheCoreContracts
 
 @MainActor
 extension AppModel {
+    func installLanguageServer(providerID: String) async {
+        guard let descriptor = languageProviderCatalog.descriptors.first(where: { $0.id == providerID }) else { return }
+        await prepareLanguageSettings()
+        guard let tools = languageServerToolsIfActive else { return }
+        guard tools.isHomebrewAvailable(), tools.installPlan(for: descriptor).homebrewFormula != nil else {
+            showSettings(category: .lsp)
+            return
+        }
+        await tools.installWithHomebrew(descriptor)
+        if case .installed = tools.installationState(for: providerID) {
+            languageServerToolConfigurationDidChange(providerID: providerID)
+            if let document = activeDocument { _ = activateLanguageServerIfAvailable(for: document) }
+        }
+    }
+
     func chooseLanguageServerExecutable(providerName: String) -> URL? {
         platformUI.chooseFile(
             title: settings.language == .simplifiedChinese

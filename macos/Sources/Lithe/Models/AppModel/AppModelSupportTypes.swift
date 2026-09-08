@@ -65,11 +65,26 @@ enum WorkbenchNotificationSeverity: Equatable {
     case error
 }
 
+enum WorkbenchNotificationAction: Equatable {
+    case installLanguageServer(providerID: String)
+    case identifyRunConfiguration
+    case configureGoRuntime
+
+    var title: String {
+        switch self {
+        case .installLanguageServer: "Install"
+        case .identifyRunConfiguration: "Configure"
+        case .configureGoRuntime: "Configure Go"
+        }
+    }
+}
+
 struct WorkbenchNotification: Identifiable, Equatable {
     let id: UUID
     let message: String
     let title: String?
     let severity: WorkbenchNotificationSeverity
+    let action: WorkbenchNotificationAction?
     let createdAt: Date
     var isRead: Bool
 
@@ -78,6 +93,7 @@ struct WorkbenchNotification: Identifiable, Equatable {
         message: String,
         title: String? = nil,
         severity: WorkbenchNotificationSeverity = .information,
+        action: WorkbenchNotificationAction? = nil,
         createdAt: Date = Date(),
         isRead: Bool = false
     ) {
@@ -85,6 +101,7 @@ struct WorkbenchNotification: Identifiable, Equatable {
         self.message = message
         self.title = title
         self.severity = severity
+        self.action = action
         self.createdAt = createdAt
         self.isRead = isRead
     }
