@@ -946,6 +946,7 @@ struct CodeEditorView: NSViewRepresentable {
                 codeTextView.syncFindState(isVisible: findVisible, query: findQuery, options: findOptions)
             }
         }
+        context.coordinator.applyInitialRunnableMarkers()
         context.coordinator.applySynchronizedMarkdownScrollIfNeeded(to: container.scrollView)
     }
 
