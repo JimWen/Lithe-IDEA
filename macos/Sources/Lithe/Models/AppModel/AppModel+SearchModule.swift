@@ -199,6 +199,18 @@ extension AppModel {
             },
             applyTransaction: { [weak self] edits in
                 guard let self else { return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: edits.map(\.path)) }
+                let leasedDocuments = edits.compactMap { edit in
+                    self.openDocuments.first { $0.url.standardizedFileURL == rootURL.appendingPathComponent(edit.path).standardizedFileURL }
+                }
+                var leases: [(EditorDocument, EditorDocument.MutationLease)] = []
+                for document in leasedDocuments {
+                    guard let lease = document.acquireMutationLease() else {
+                        leases.forEach { $0.0.releaseMutationLease($0.1) }
+                        return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: edits.map(\.path))
+                    }
+                    leases.append((document, lease))
+                }
+                defer { leases.forEach { $0.0.releaseMutationLease($0.1) } }
                 let transactionEdits = edits.map {
                     WorkspaceTextEdit(path: $0.path, sourceText: $0.sourceText, replacementText: $0.replacementText, sourceIdentity: "")
                 }

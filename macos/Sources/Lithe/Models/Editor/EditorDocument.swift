@@ -2,6 +2,7 @@ import Foundation
 
 @MainActor
 final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable {
+    struct MutationLease: Hashable, Sendable { fileprivate let id: UUID }
     enum DocumentError: LocalizedError {
         case readOnly
         case externalConflict
@@ -28,6 +29,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     @Published private(set) var savedText: String
     private(set) var lifecycleState: DocumentLifecycleState
     private(set) var lastKnownModificationDate: Date?
+    private var activeMutationLease: MutationLease?
 
     init(
         url: URL,
@@ -51,6 +53,22 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
 
     var isDirty: Bool { lifecycleState.hasUnpersistedText }
     var hasExternalConflict: Bool { lifecycleState.status == .conflict }
+
+    /// Reserves this buffer for a coordinated multi-file edit. Callers must
+    /// release the exact token; a second lease is rejected deterministically.
+    func acquireMutationLease() -> MutationLease? {
+        guard activeMutationLease == nil else { return nil }
+        let lease = MutationLease(id: UUID())
+        activeMutationLease = lease
+        return lease
+    }
+
+    func releaseMutationLease(_ lease: MutationLease) {
+        guard activeMutationLease == lease else { return }
+        activeMutationLease = nil
+    }
+
+    var hasMutationLease: Bool { activeMutationLease != nil }
 
     /// Keep the live NSTextView buffer in sync without waking SwiftUI on every
     /// already-dirty keystroke. The first edit still publishes so the tab dirty
