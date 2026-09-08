@@ -240,14 +240,12 @@ extension AppModel {
                     openUndoEdits.append((document: document, before: edit.sourceText, after: edit.replacementText))
                     document.applyLiveEditorText(edit.replacementText)
                 }
-                if !transactionEdits.isEmpty {
-                    self.services.workspaceTextEditUndoController.register(
-                        edits: transactionEdits,
-                        workspaceURL: rootURL,
-                        transactionID: result.transactionID
-                    )
-                }
-                self.services.workspaceTextEditUndoController.registerOpenDocuments(openUndoEdits)
+                self.services.workspaceTextEditUndoController.registerTransaction(
+                    edits: transactionEdits,
+                    openDocuments: openUndoEdits,
+                    workspaceURL: rootURL,
+                    transactionID: result.transactionID
+                )
                 return ProjectReplacementApplyResult(changedFiles: transactionEdits.count, failedFiles: [])
             }
         )

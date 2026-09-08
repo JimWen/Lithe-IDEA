@@ -39,6 +39,37 @@ final class WorkspaceTextEditUndoController {
         undoManager.setActionName("Replace Text")
     }
 
+    func registerTransaction(
+        edits: [WorkspaceTextEdit],
+        openDocuments: [(document: EditorDocument, before: String, after: String)],
+        workspaceURL: URL,
+        transactionID: UUID
+    ) {
+        guard !edits.isEmpty else { return }
+        undoManager.registerUndo(withTarget: self) { target in
+            Task { @MainActor in
+                let inverse = edits.map {
+                    WorkspaceTextEdit(path: $0.path, sourceText: $0.replacementText,
+                                      replacementText: $0.sourceText, sourceIdentity: "")
+                }
+                _ = await target.coordinator.apply(inverse, at: workspaceURL,
+                                                   operations: target.operations,
+                                                   transactionID: transactionID)
+                for edit in openDocuments { edit.document.text = edit.before }
+                target.undoManager.registerUndo(withTarget: target) { _ in
+                    Task { @MainActor in
+                        _ = await target.coordinator.apply(edits, at: workspaceURL,
+                                                           operations: target.operations,
+                                                           transactionID: transactionID)
+                        for edit in openDocuments { edit.document.text = edit.after }
+                    }
+                }
+                target.undoManager.setActionName("Redo Replace Text")
+            }
+        }
+        undoManager.setActionName("Replace Text")
+    }
+
     private func applyInverse(_ edits: [WorkspaceTextEdit], workspaceURL: URL, transactionID: UUID) async {
         let inverse = edits.map {
             WorkspaceTextEdit(path: $0.path, sourceText: $0.replacementText,
