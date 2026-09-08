@@ -4026,6 +4026,8 @@ final class LineNumberGutterView: NSView {
     private var onToggleFold: ((JavaFoldRegion) -> Void)?
     private var implementationMarkers: [JavaImplementationMarker] = []
     private var runnableMarkers: [DocumentRunnable] = []
+    private var onSelectRunnable: ((DocumentRunnable) -> Void)?
+    private var contextRunnable: DocumentRunnable?
     private var onSelectImplementation: ((JavaImplementationMarker) -> Void)?
     private var debugBreakpointLines: Set<Int> = []
     private var debugBreakpointStatesByLine: [Int: EditorDebugBreakpointState] = [:]
@@ -4194,6 +4196,12 @@ final class LineNumberGutterView: NSView {
     ) {
         implementationMarkers = markers
         onSelectImplementation = onSelect
+        needsDisplay = true
+    }
+
+    func updateRunnableMarkers(_ markers: [DocumentRunnable], onSelect: @escaping (DocumentRunnable) -> Void) {
+        runnableMarkers = markers
+        onSelectRunnable = onSelect
         needsDisplay = true
     }
 
@@ -5016,6 +5024,10 @@ final class LineNumberGutterView: NSView {
             guard let region = foldRegions.first(where: { $0.startLine == line }) else { return }
             onToggleFold?(region)
         case .implementation:
+            if let runnable = runnableMarkers.first(where: { $0.line == line }) {
+                onSelectRunnable?(runnable)
+                return
+            }
             let markers = implementationMarkers.filter { $0.line == line }
             let preferredDirection: JavaImplementationDirection = localX
                 < gutterLayout.implementationRange.lowerBound
@@ -5034,6 +5046,23 @@ final class LineNumberGutterView: NSView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         let localX = point.x - editorGutterOriginX
+        if gutterLayout.implementationRange.contains(localX),
+           let line = editorLine(at: point),
+           let runnable = runnableMarkers.first(where: { $0.line == line }) {
+            contextRunnable = runnable
+            let menu = NSMenu(title: "Runnable")
+            let run = NSMenuItem(title: "Run ‘\(runnable.displayName)’", action: #selector(runRunnableFromGutterMenu), keyEquivalent: "")
+            run.target = self
+            menu.addItem(run)
+            let debug = NSMenuItem(title: "Debug ‘\(runnable.displayName)’", action: #selector(debugRunnableFromGutterMenu), keyEquivalent: "")
+            debug.target = self
+            menu.addItem(debug)
+            menu.addItem(.separator())
+            let modify = NSMenuItem(title: "Modify Run Configuration…", action: #selector(modifyRunnableFromGutterMenu), keyEquivalent: "")
+            modify.target = self
+            menu.addItem(modify)
+            return menu
+        }
         if gutterLayout.breakpointInteractionRange.contains(localX),
            let line = editorLine(at: point) {
             return debugBreakpointContextMenu(forLine: line)
@@ -5091,6 +5120,10 @@ final class LineNumberGutterView: NSView {
         )
         return nil
     }
+
+    @objc private func runRunnableFromGutterMenu() { if let contextRunnable { onSelectRunnable?(contextRunnable) } }
+    @objc private func debugRunnableFromGutterMenu() { if let contextRunnable { onSelectRunnable?(contextRunnable) } }
+    @objc private func modifyRunnableFromGutterMenu() { if let contextRunnable { onSelectRunnable?(contextRunnable) } }
 
     func debugBreakpointContextMenu(forLine line: Int) -> NSMenu? {
         contextDebugBreakpointLine = line
