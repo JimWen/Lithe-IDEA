@@ -1,6 +1,7 @@
 # B7b：运行入口 gutter 与右键运行配置
 
-状态：基于 `3680935d`。**方案待独立审查，未实施。** 对应总方案要求 9
+状态：基于 `3680935d` 的初稿；2026-09-08 真实 gopls 探针发现候选判定与生命周期缺口，
+**方案尚未放行，未实施，修订约束见 §3.1。** 对应总方案要求 9
 （[入口运行与参数](goland-parity-implementation.md)）中的编辑器侧部分。
 参照基线为本机 RustRover **2026.2.1 / 262.9437.161** 与 GoLand **2025.2.4 / GO-252.27397.100**。
 
@@ -68,13 +69,37 @@ gutter 的绘制与交互反而是现成的。方案的重点必须放在这个�
   `main` 函数与 `Test*/Benchmark*/Example*` 由宿主按 Go 测试命名规则匹配。
 - **Rust**：路径 B 优先，A 兜底。rust-analyzer 的 runnables 比命名匹配准确
   （能正确处理 `#[cfg(test)] mod tests`、`#[bench]`、doc test）。
-  rust-analyzer 不可用时退到 A。
+  仅服务器仍正常工作、专有请求明确不支持时可以退到 A；服务器不可用时两条路径都不可用。
 - **Python**：路径 A。`if __name__ == "__main__"` 不是符号，需要额外的语法判定 →
   **Python 的 main guard 入口推迟到 L8**，本批只交付 Python 的 `test_*` 函数标记。
 - **路径 C** 在 L8 落地后作为**离线兜底**接入同一个 port，不改 gutter 侧任何代码。
 
 **因此 B7b 的硬前置是 B6a2**（`documentSymbol` 能力协商 + 请求白名单 + 结果解析）。
 在 B6a2 交付前不得开始 B7b 的实现；提前实现只能得到基于正则的假入口。
+
+### 3.1 实测发现与修订约束（2026-09-08）
+
+本节优先于下方初稿中的 Go 字符串匹配和仅 revision 校验。当前方案仍需解决这些问题后重审：
+
+- gopls 0.20.0 的符号 detail 保留导入别名（`func(t *tt.T)`）和类型别名（`func(t *T)`），
+  因而不能只匹配 `*testing.T`。Go 1.24.4 的 `cmd/go/internal/load/test.go` 还接受裸前缀
+  `Test` / `Benchmark`；`TestMain(t *testing.T)` 也是普通测试，只有 `*testing.M` 才是测试主入口。
+- gopls 的 `test` CodeLens 默认关闭，开启后仍漏掉别名参数的 `TestAlias`。
+  `gopls.packages` 的 TestFiles/Tests/Loc 同样漏此项，并把无 Output 的 Example 列入。
+  因此二者均不能单独作为完整、可执行的测试列表。独立无副作用 fixture 中真实
+  `go test -list .` 返回 `Test`、`TestAlias`、`Example`，不包含 `ExampleNoOutput`。
+- 候选来源必须覆盖别名、Output/Unordered output/空 Output、接收者、类型参数、构建标签和
+  外部测试包。自动发现不得运行项目 init/TestMain；`go test -list` 仅用于受控验收 fixture，
+  不能直接进入编辑器自动刷新路径。需要确定可靠语法/语义来源，再修改 §5 的 Go capability。
+- 异步请求与菜单执行均须携带 workspace、document、provider/session 的身份及 generation，
+  加上文档 revision、元数据 generation 和 operationID。关闭、切换工作区、禁用插件、
+  LSP 重启、编辑与新请求必须取消或废弃旧结果，不能仅比较两个可能相同的 revision 数字。
+- Python main guard 仍属于 L8；本批的 Python 测试入口也必须绑定实际可用的运行提供者，
+  不得仅因函数名以 `test_` 开头就展示无法执行的菜单。
+
+证据位于 `.artifacts/plan-implementation/b7b-probe/`：`symbols-and-lenses.json`、
+`enabled-test-lenses.json`、`package-tests.json`、`alias-go-test-list.log`。
+探针均有截止时间并已退出；这些结果是方案输入，不能计为 gutter 产品验收。
 
 ## 4. 契约变更
 

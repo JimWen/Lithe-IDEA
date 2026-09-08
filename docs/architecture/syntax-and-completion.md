@@ -1,6 +1,6 @@
 # 语法高亮、离线补全与语言插件：实施方案
 
-状态：**2026-09-06 独立方案复核通过，尚未实现**，见 [审查记录](goland-parity-implementation.md#plan-review)。本文是语言能力实施依据，不能用方案中的接口、预算或验收项证明产品已支持对应功能。
+状态：**尚未实现**。2026-09-06 独立设计基线复核为历史结论，见 [审查记录](goland-parity-implementation.md#plan-review)。2026-09-08 已完成 [L0–L2 第二版方案复核](syntax-l0-l2-engine.md#l0-l2-plan-review)：首轮 6 项 P1、3 项 P2 均在方案层闭环，候选身份、错误确认、取消、模块接线与资源契约已同步修订。本文是语言能力实施依据，不能用方案中的接口、预算或验收项证明产品已支持对应功能。
 
 目标是在当前原生编辑器和 Rust Core 上，逐批对齐 GoLand 的编辑、高亮、补全、提示与常规文件体验，并让语言包扩展这些能力。本文保留“**不启动 LSP 也可用的语法层**”定位；跨文件类型分析、精确成员、导入、重构仍由完整 LSP 链路提供。Tree-sitter 不替代类型系统或 formatter。
 
@@ -113,7 +113,7 @@ Views 不构造 parser、进程、Rust C ABI 或平台适配器。Rust 负责确
 
 ### 4.1 标识、操作和错误
 
-统一请求携带 `schemaVersion: 1`、`workspaceSessionID`、`documentID`、`generation`、`version`、`operationID`；查询另带 `languageID` 和 `resourceRevision`。`documentID` 是打开文档稳定 ID，不是文件路径；同路径不同项目、虚拟文档、未命名文档不可串用。相对文件名只作为识别元数据，不作缓存主键。
+文档请求携带 `schemaVersion: 1`、`workspaceSessionID`、`documentID`、`generation`、`version`、`operationID`、`languageID` 和 `resourceRevision`。`documentID` 是打开文档稳定 ID，不是文件路径；同路径不同项目、虚拟文档、未命名文档不可串用。相对文件名只作为识别元数据，不作缓存主键。`closeWorkspace` 只需 schema、workspaceSessionID 与 operationID；其余身份不伪填。generation 是同一文档会话的递增整数，资源/语言切换与休眠后重建使用新 generation，视图转移不递增。payload 的 `operationID` 与外层既有 `operationId` 必须相同；外层 `id` 是本次传输请求 ID，可与重试的 operationID 不同。
 
 | 拟议命令 | 行为 |
 | --- | --- |
@@ -124,11 +124,13 @@ Views 不构造 parser、进程、Rust C ABI 或平台适配器。Rust 负责确
 | `syntax.completions` | 位置、触发原因、前缀范围；返回本地候选及稳定身份 |
 | `syntax.structure` | 符号、折叠、结构选区、运行候选；子能力显式标注支持情况 |
 | `syntax.hints` | 高置信本地 hover/signature；没有可靠结果则为空 |
+| `syntax.cancel` | `targetKind: text/query/parse`、targetOperationID；只取消同一文档身份下的目标，返回目标的状态快照，不撤销 accepted 文本 |
+| `syntax.retry` | 显式重试当前 accepted 版本；只重新调度解析，不传文本、不修改版本；返回新的 parseOperationID |
 | `syntax.close` / `syntax.closeWorkspace` | 撤销任务并释放文档/会话全部缓存；重复关闭幂等 |
 
 所有结果回显身份、版本、operationID、资源 revision。旧 generation 关闭后永不复活；版本单调递增不要求连续整数，但 change 的 base 必须精确匹配。Undo/Redo 生成新 version，不回退版本号。
 
-稳定错误拟为 `syntax.unsupportedVersion`、`syntax.documentNotOpen`、`syntax.resyncRequired`、`syntax.invalidRange`、`syntax.grammarUnavailable`、`syntax.resourceRejected`、`syntax.cancelled`、`syntax.budgetExceeded`；落地时使用现有 CoreError envelope。`resyncRequired` 返回当前接受版本，不返回文本；UI 只重同步一次当前快照，失败后等待新编辑或明确重试，避免循环重解析。
+稳定错误为拟议的 `syntax.unsupportedVersion`、`syntax.documentNotOpen`、`syntax.resyncRequired`、`syntax.invalidRange`、`syntax.grammarUnavailable`、`syntax.resourceRejected`、`syntax.cancelled`、`syntax.budgetExceeded`、`syntax.operationConflict`。最后一项用于 operationID 被不同 payload 重用、同版本快照内容冲突；不把该冲突当作可自动恢复的版本缺口。使用现有 CoreError envelope，保留 `details: String?`，以新增可选 `error.context` 承载 typed syntax 状态；不得把 details 改成对象或从文案提取版本。正式 wire 决策及五个 JSON 示例见 [待实现契约](../../shared/contracts/rust-core-api.md#planned-syntax-v1)。`resyncRequired` 返回当前接受版本，不返回文本；UI 只重同步一次当前快照，失败后等待新编辑或明确重试，避免循环重解析。
 
 ### 4.1.1 文本接受和解析完成分开确认
 
@@ -136,9 +138,9 @@ Views 不构造 parser、进程、Rust C ABI 或平台适配器。Rust 负责确
 
 | 时点/事件 | 确定的状态与响应 |
 | --- | --- |
-| change 校验/应用前 | 先验证 base、全部有序范围和内存预算，在临时快照生成新文本；未通过或已取消时不改变 accepted 文本/版本，错误 details 返回 `disposition: notApplied`、当前 acceptedTextVersion/parsedVersion |
+| change 校验/应用前 | 先验证 base、全部有序范围和内存预算，在临时快照生成新文本；未通过或已取消时不改变 accepted 文本/版本，error.context 返回 `disposition: notApplied`、当前 acceptedTextVersion/parsedVersion |
 | 文本事务提交点 | 一次原子交换文本、行索引、acceptedTextVersion 和有序 edit ledger；change 成功立即返回 `disposition: applied`、acceptedTextVersion、parsedVersion、parseState，不等待 Tree 解析 |
-| 提交后收到取消/解析超时 | 不撤销已接受文本，也不把成功 ack 改成 generic cancelled；解析状态变为 cancelled/budgetExceeded，acceptedTextVersion 保持新版本。取消响应回显文本是否已经 applied，客户端可据此继续下一 delta |
+| 提交后收到取消/解析超时 | 不撤销已接受文本，也不把成功 ack 改成 generic cancelled。取消 text operation 只取回原 applied ack，不隐式取消已派生的 parse；取消 parse 必须使用 parseOperationID，解析状态才变为 cancelled/budgetExceeded。取消响应的 targetDisposition 指目标 text operation；query/parse 目标该值为 null |
 | 完整 parse 成功 | 只有任务仍拥有当前 generation/resourceRevision/parseOperationID 且目标版本仍是当前 acceptedTextVersion 时才发布 Tree/符号/结果，更新 parsedVersion；旧任务成功仅释放资源，不覆盖新状态 |
 | close 与 parse/resync 交错 | close 撤销 generation、取消任务并清缓存；随后到达的旧 change/resync/parse 一律 documentNotOpen/过期，不隐式重新 open；重新打开必须显式 open 新 generation |
 
@@ -146,9 +148,13 @@ Views 不构造 parser、进程、Rust C ABI 或平台适配器。Rust 负责确
 
 内置 Core 的查询由平台适配器的受限后台执行器调用 typed Rust operation；等待不得占用主线程、Swift cooperative executor 或负责 parse 的 worker 池。外部 syntax worker 则保留原 Content-Length 请求 ID，完成后回复该请求，宿主 async port 仍只完成一次。查询从登记起共用初始 100 ms 预算（包括等待解析和 query），用完成信号/有界等待，不定时重发；取消、版本变化或 close 立即移除 waiter。预算到期返回 `syntax.budgetExceeded`，若该版本解析尚在跑则一并取消该轮，保留 accepted 文本并结束 loading，只有新编辑或显式 Retry 才新建任务。解析在 deadline 后完成也不得发布结果；所有 waiter 在成功、取消、超时和关闭路径都必须释放。
 
+查询取消只撤销对应 waiter，避免关闭一个视图时终止另一视图共享的解析；显式取消 parse、解析自身 deadline 或上述共享版本的 query 超时才终止该轮 parse，并完成所有依赖该轮的 waiter。对已经 failed/cancelled/budgetExceeded 的版本，滚动/主题查询返回终态，不自动启动解析；Retry 先发 `syntax.retry` 再发一次所需查询。相同版本已有在跑解析时 retry 返回现有任务，不创建第二个 worker。
+
 不得把旧 Tree 的结果标成新版本。解析失败不丢 accepted 文本；`parsedVersion` 仍指向原来的完整 Tree。对旧 Tree 的 `InputEdit` 在任务私有 clone 上进行，编辑过但未 parse 完的工作树不冒充已完成版本；取消后丢弃该工作树，后续从已知版本的 Tree/快照重建。
 
 成功 ack 丢失后的同 operationID 重试应幂等：每文档缓存最近 32 个文本提交确认及请求 digest；相同 ID/相同请求返回原确认，不再应用 edits，相同 ID/不同 payload 拒绝。记录已淘汰或连接中断导致接受状态无法确认时，不盲目重发 delta；使用下述一次完整 resync。worker 重启以新 connection epoch 隔离全部旧回包，需重新 open/resync，不把旧连接 ack 当新进程状态。
+
+同 generation/version 的 open 或 resync 仅在语言、资源及文本 digest 全部相同时幂等；内容不同返回 operationConflict，不覆盖文本。取消状态无法确认时 targetDisposition 为 null，不能据此继续 delta。先取得在途文本事务的终态或隔离旧传输，再按 §4.1.2 恢复。
 
 ### 4.1.2 A → B → C 的合并规则
 
@@ -162,6 +168,19 @@ L1/L7 的共享 fixture 用可控 gate 固定：A→B→C 合并与逐次应用�
 
 另用可控完成信号和注入时钟验证：applied 后只发送一次 query，用户不再输入也能收到准确版本的 highlights/structure；超时结束 loading、取消解析并释放 waiter，之后完成信号不能修改 UI，也没有自动重请求；显式 Retry 才产生新 operation；close 与 ready 同时到达仍只完成一次且不复活文档。
 
+<a id="syntax-cancellation-boundary"></a>
+### 4.1.3 提交确认、调度和取消的实际边界
+
+Rust dispatcher 在解码 envelope/command 后把 syntax 命令分流到 domain-finalized 路径：这些命令自行完成校验、提交前 deadline 检查和错误 context，不经过会丢失 context 的 generic 前置取消返回，也不在返回后执行会把成功替换为 generic cancelled 的统一后置检查。仅 syntax 分支适用；其他命令的前后取消检查不变。query 在自身完成点判定 deadline，不得在刚完成后被外层改写而丢失版本。JSON 编码失败仍为传输未知状态，按一次恢复处理，不能伪造 notApplied。
+
+`languages/syntax/runtime.rs` 拥有任务与 waiter 注册，`task.rs` 拥有 `Arc` 取消 token、单调 deadline、完成信号；文本请求、查询、后台 parse 使用不同 operationID。parseOperationID 由 Core 分配，终态不复用。任务不得引用同步命令的 thread-local `cancellation::Scope`，不能在 change 返回时被 Drop 注销。调度器在终态注销句柄，响应缓存单独保留文本 ack。
+
+宿主使用 typed `syntax.cancel`，不把 `lithe_core_cancel(changeID)` 当作 ack 后取消 parse 的接口。cancel 的控制通道不排在正在等待的 query 后面。尚未进入 Core 的排队请求由平台原子取消并完成；进入 Core 与取消相撞时，Core 为尚未登记的 text/query 目标保留按完整身份+operationID 索引的 early-cancel 标记，注册时先消费标记再决定提交，不能依赖同步 FFI 暴露不存在的“已登记”回调。标记在目标终态或 generation 关闭后释放，初始全局上限 128；满额时撤销目标 generation 并返回预算状态，不淘汰仍可能被在途请求消费的标记。unknown 取消响应不是 notApplied 证明，平台仍等待原 completion 或执行有界隔离恢复。重试同 operationID 的并发副本由平台合并，Core 在幂等登记中也只允许一个提交者。
+
+共享 parse 池最多 2 个 OS worker；状态机锁内不等待解析、query 或线程退出。macOS adapter 使用独立受限 query 执行器（初值 4 个工作线程、最多 64 个排队查询，每视图同类只保留最新一个）；文本使用独立有界提交队列，cancel/close 的控制通道不被数据提交积压阻塞。排队等待也计入宿主 100 ms 查询总预算，进入 Core 时传剩余预算；队列满返回 budgetExceeded 并结束 loading，不增加线程或轮询重试。文本待办沿用每文档 128 项/256 KiB 上限，超限走一次快照恢复。
+
+文本校验/构造在锁外针对 captured base 进行，提交时重验 base/关闭标记。单次文本传输初始 500 ms deadline；未收到确认时先取得终态，或撤销旧 generation/传输 epoch 使其无法再提交，再恢复，不能在未隔离的旧事务旁假设 notApplied。close 先撤销身份并唤醒 waiter，再在锁外有界回收；测试必须通过真实 dispatcher 与 Swift 解码验证提交前后取消。
+
 ### 4.2 坐标与增量编辑
 
 - Tree-sitter 使用 UTF-8 byte offset，Point column 也是字节数；LSP/编辑器 DTO 使用零基行、UTF-16 列；AppKit NSRange 是全文 UTF-16 offset/length；产品列表显示一基行号。
@@ -173,7 +192,12 @@ L1/L7 的共享 fixture 用可控 gate 固定：A→B→C 合并与逐次应用�
 
 ### 4.3 缓存、生命周期与预算
 
-文档模型是文本真源，cache 不写回旧文本。保存快照、Tree、坐标索引、局部符号和有限视口 token；query 按 `(grammarID, grammarABI, resourceRevision)` 编译共享，不按 tab 重复编译。
+文档模型是文本真源，cache 不写回旧文本。保存快照、Tree、坐标索引、局部符号和有限视口 token；query 按 `(resourceRevision, queryKind)` 编译共享，不按 tab 重复编译。resourceRevision 是下述整组资源内容身份，不是包内递增版本号。
+
+<a id="resolved-syntax-resources"></a>
+`ResolvedSyntaxResourcesV1` 固定包含 ownerPackageID、ownerModuleID（纯数据包可为 null）、languageID、grammarID、grammarABI、grammarSourceRevision、grammarDigest、runtimeContractVersion，以及八个槽位各自的 UTF-8 内容 SHA-256（缺省为 null）和 editor/keywords/snippets/formatter 声明的 digest。平台从已校验安装资源生成观测值，Rust 以固定字段顺序、JSON 数组、明确 null、UTF-8/无额外空白编码，使用现有 sha2 生成 `resourceRevision = "sha256:" + 小写十六进制摘要`；不纳入机器路径。grammarDigest 绑定固定 parser/scanner 构建输入，worker 还必须匹配其 executable digest/协议握手。ABI 只校验接口，不替代 grammar 内容身份。
+
+资源集整体不可变；内容、owner 或引擎语义版本变更即生成不同 resourceRevision。启用 epoch 单独由宿主递增，资源更新/禁用/回滚关闭旧 generation 再显式 open 新 generation；即使回滚到同一 digest，旧 generation 的回包仍不能生效。L1/L2 用内部 bundled 资源清单，L5 的 manifest v2 与资源 schema 1 适配这份既定身份，不提前宣称安装能力可用。L4 的新槽位资源只改变内容身份，无须新增编辑器语言分支。
 
 以下为**内部预算初值，需以实测校正**，不是现有性能数据：
 
@@ -189,7 +213,7 @@ L1/L7 的共享 fixture 用可控 gate 固定：A→B→C 合并与逐次应用�
 
 内置 C scanner 在进程内执行，不具备恶意 parser 硬隔离；仅使用随产品编译并审计的 parser。实测不响应取消的 grammar 暂停默认启用并修复，不能用无限后台任务掩盖卡顿。动态语言插件使用第 6.3 节独立进程。
 
-关闭文档/项目、项目休眠、语言关联改变、资源更新均取消并回收；cache 淘汰只触发按需重建，不清空文本或关闭 tab。窗口合并/拆分只转移视图，不改变 generation 或重启其他项目服务。禁用插件撤销其资源；进程能力继续遵循安装包所有权，不能恢复宿主进程 fallback。
+关闭文档/项目、项目休眠、语言关联改变、资源更新均取消并回收。文档目录中的身份、accepted 版本/digest 与已关闭 generation 高水位独立于重缓存；LRU 先逐出 Tree/结果，再逐出不可见文档的文本/索引，返回 resyncRequired 要求一次当前快照，不隐式 open 已关闭文档。64/24 个限制指重缓存，目录随文档/项目生命周期回收；关闭 workspace 后平台拒绝其所有请求，Core 保留会话撤销信息，重开项目分配新 sessionID。窗口合并/拆分只转移视图引用，不改变 generation；最后一个文档所有者关闭才发送 close，移走一个视图只取消该视图 query。禁用插件撤销其资源；进程能力继续遵循安装包所有权，不能恢复宿主进程 fallback。
 
 ### 4.4 视口、角色和失效
 
@@ -197,9 +221,15 @@ L1/L7 的共享 fixture 用可控 gate 固定：A→B→C 合并与逐次应用�
 
 沿用当前 20 个 `SyntaxHighlightingColorRole` wire 名，新增 Rust enum 和共享映射 fixture。capture 显式映射；未知 capture 记录一次资源诊断并安全忽略。新增角色需 Rust/Swift/主题默认值/fixture 同步扩展。
 
-重叠 capture 按固定资源优先级、capture 优先级、语法层级裁决并切成不重叠 span，再按范围排序；只 sort/dedup 相同范围不能解决交叉覆盖。删除字符、闭合注释后要清除旧颜色。
+重叠 capture 按固定资源优先级、capture 优先级、节点深度（较大优先），再按 pattern index、capture index（较小优先）裁决并切成不重叠 span，再按范围排序；只 sort/dedup 相同范围不能解决交叉覆盖。删除字符、闭合注释后要清除旧颜色。
 
 合成顺序：默认文本色 → 基础语法 → 有效 semantic tokens；诊断下划线、搜索和选择独立保留。主题切换只重映射 role，不重新 parse/启动 LSP。IME marked text 期间不改文本、不抢焦点、不破坏撤销栈和光标布局；语法属性批量小范围更新。
+
+L2 投影接收 `SyntaxHighlightSnapshot`：完整文档身份/operationID、parsedVersion、视图 requestID、resourceRevision、`coveredRanges`（当前版本 UTF-16 半开区间）和不重叠 role spans。视图 requestID 为宿主本地订阅标识，与该次 query operationID 关联，不新增另一套 wire 请求 ID。空 spans 仍须把 coveredRanges 恢复默认 foreground，再叠加有效 semantic tokens；不调用 `setAttributes` 清理其他装饰。旧/新坐标的 invalidations 先经过 edit ledger 变换到当前版本；范围过碎时可保守扩大为当前视口，不逐次全量重绘文档。
+
+每个视图只选一个基础着色来源：bundled 资源验证通过即进入 syntax loading，清理受影响可见范围的旧 foreground，等待结果期间用默认文本色；ready 应用 syntax。只有资源不可用或本轮终态失败才切到原 adapter fallback，并一次清除旧 syntax 的可见属性/范围缓存。fallback 持续到新编辑或显式 Retry；滚动只绘制当前来源，不能在 syntax loading/ready 时先正则后覆盖。未知语言和既有配置格式维持其 adapter，Java 保留旧结果路径。
+
+应用结果前同时比对 workspaceSessionID、documentID、generation、version、languageID、resourceRevision、connection epoch、view requestID；不只看 revision。theme epoch 只影响 palette，迟到 role 按当前主题映射，不能恢复旧颜色。IME 组合期间文档增量仍同步；与 marked range 相交的属性延至 composition 结束并重验版本后应用，语法结果不写文本、不发布全页 SwiftUI 状态。视口更新合并在已有编辑器调度路径中；缓存 role 重映射不重新解析。
 
 ## 5. 补全与提示的完整链路
 
@@ -207,11 +237,25 @@ L1/L7 的共享 fixture 用可控 gate 固定：A→B→C 合并与逐次应用�
 
 复用现有 Rust LSP，逐字段贯通到 Swift DTO/UI：`CompletionList.isIncomplete`、trigger、itemDefaults、insertTextFormat/Mode、insert/replace ranges、preselect、commitCharacters、label details、markup kind、resolve data、command、additional edits。只声明端到端实现的 optional capability。[LSP 3.17 Completion](https://github.com/microsoft/language-server-protocol/blob/gh-pages/_specifications/lsp/3.17/language/completion.md)。
 
-L0 先如实声明尚未实现的 snippet 能力；完整会话落地再开启。普通字符串不经 snippet 展平，`$` 不被误删。旧调用缺插入格式时使用明确兼容默认，不靠字符串内容猜格式。
+L0 明确发送 `snippetSupport: false`；完整 L3 会话验收后再开启。`insertTextFormat` 缺省/null 按 plainText(1)，普通字符串不经 snippet 展平，`$1`/`${name}` 原样插入。仍返回 snippet(2) 的不合规/旧服务器候选在 L0 拒绝并记录诊断，继续本地 provider，不把模板损坏后插入。L0 不声明未支持的 itemDefaults/insertReplaceSupport；收到未支持的 edit/default 形状就拒绝该候选，不忽略 edit 后退化为 label 插入。Rust parse、Swift DTO 与 resolve 回传三处保留格式，附加 edits 有一项非法便拒绝该候选，不用 filter_map 静默删掉导入。
 
 失败区分可恢复 provider 缺失/超时/崩溃/拒绝、无候选成功、用户取消、项目关闭、过期结果。前两类可继续本地 provider；后三类直接结束，不借 fallback 重新弹窗。保留结构化故障状态，自动补全失败不每次弹通知。禁用包允许独立宿主离线语法，不能启动该包拥有的进程能力。
 
 候选身份由 provider、主插入范围/文本、插入格式、类型/签名和必要附加编辑确定，保留 resolve data；禁止仅 label 去重。精确成员优先，保留 LSP 过滤/排序语义，组内再做前缀/模糊排序。同 label 的不同签名、不同 import 来源可选且提交正确编辑。
+
+<a id="completion-identity-v1"></a>
+L0 统一在 Rust `lsp/lightweight/completion_identity.rs` 生成身份；新增批量 typed operation `lsp.completionIdentities`，Swift provider/manager 经 `BuiltinLanguageFeatureCore` 调用，Swift 不再实现第二种摘要。主范围缺省时先绑定请求时捕获的 fallbackRange。规范输入为固定字段顺序的 JSON 数组：identityVersion(1)、providerID（含 builtin/LSP 来源）、label、kind、detail/签名、主范围和 newText、insertTextFormat、按原序保留的 additional edits、原始 resolve data 的规范化内容。可选字段缺省统一 null，空串与 null 不合并；数组保序，data 的对象键递归按 UTF-8 字节排序，数字由固定 serde_json 编码，不作 Unicode 文本归一化。SHA-256 使用现有 sha2，wire 为 `completion:v1:<hex>`；不纳入 sortText、filterText、documentation 或当前数组下标。
+
+每次返回以确定性 ID 去重，末端 AppModel/NSMenu 不再按 label 二次过滤；相同 ID 仍需比较规范输入，检测不相等则报告冲突并拒绝该批，不能覆盖字典值。data 变化保守视为不同候选；resolve 使用原始 data、原 provider/session，并保持选中的原 ID 与请求快照，不用 resolve 后新增 edits 重置选中项或投递到当前语言的另一 provider。结果刷新仅排序变化时 ID 保持；L0 文本变化即结束当前手动会话，L3 再扩展连续前缀会话。
+
+归一化返回 `items + issues`；不支持的 snippet/edit/default/command 候选产生稳定 issue code，
+每批最多 64 条、不记录源文本。L0 未实现的 completion command 不静默丢掉后继续插入；
+resolve 收到不支持字段同样为 typed rejected。Swift payload/manager 保留这些诊断并按可恢复失败
+处理，不把 Rust filter_map 丢项后的空列表冒充无候选成功。
+
+L0 维护轻量请求上下文：workspace session、documentID/generation/revision、provider session epoch、光标/替换范围、operationID 与取消句柄。请求前、各 provider 回调、resolve 返回、菜单展示和同步提交前逐次核对；开始 IME、光标移出范围、输入、切文件、Esc、项目关闭使会话失效。LanguageServerSession 保留 runtime error code/stage，不能先展平字符串再猜取消原因；可恢复 missing/notReady/timeout/crash/rejected 才继续 builtin，无候选成功照常继续，cancelled/closed/stale 直接结束。
+
+接受时主 edit 与 additional edits 作为同一已打开文档事务，经 B6b1 的同步快路径验证 revision/范围/重叠，B6b2 提供一次 Undo；resolve 期间文本变化直接丢弃，失败 fallback 到原 item 也必须通过同一快照校验。因此 L0 硬依赖 B6b2，不另写临时 workspace edit 实现。L0 保留 NSMenu 外观，但会话回调必须修改；“不改 UI”只指不交付 L3 popup。
 
 ### 5.2 本地候选与提示
 
@@ -253,6 +297,7 @@ Go 复用 gopls，Rust 复用 rust-analyzer，Python 延续当前默认 provider
   "queries": {
     "highlights": "languages/rust/highlights.scm",
     "locals": "languages/rust/locals.scm",
+    "outline": null,
     "injections": null,
     "brackets": null,
     "indents": null,
@@ -276,15 +321,25 @@ Go 复用 gopls，Rust 复用 rust-analyzer，Python 延续当前默认 provider
 }
 ```
 
-`queries` 的七个槽位与 `editor` 字段在资源 schema 1 一次定义，避免为补字段提升 schema。除 `highlights` 外全部可缺省，**缺省语义是该能力不可用，而不是回退到猜测规则**：无 `indents` 不启用自动缩进，无 `brackets` 保持编辑器现有配对行为，无 `overrides` 时注释/字符串抑制沿用 5.2 的默认判定，无 `runnables` 时该语言不产出语法级运行候选。`injections` 缺省时不做嵌套语言解析，其预算见 4.3。
+`queries` 的八个槽位（highlights/locals/outline/injections/brackets/indents/overrides/runnables）与 `editor` 字段在资源 schema 1 一次定义。除 `highlights` 外全部可缺省，**缺省语义是该能力不可用，而不是回退到猜测规则**：无 `outline` 不产出语法 Structure（已就绪 LSP symbols 独立可用）；无 `indents` 不新增语法缩进，无 `brackets` 保持编辑器现有配对行为，无 `overrides` 时注释/字符串抑制沿用 5.2 的默认判定，无 `runnables` 时该语言不产出语法级运行候选。`injections` 缺省时不做嵌套语言解析，其预算见 4.3。
 
-批次归属：`highlights` 与 `locals` 属 L2/L4，`injections` 随 6.2 的 Markdown/HTML 验收在 L6 落地，`indents`/`brackets`/`overrides`/`runnables` 属 L8。声明存在不等于能力已交付。运行候选与上下文抑制以 query 表达而非在 Rust 内按语言分支实现，否则每新增一门语言都要改引擎代码，与“新增语言即新增声明与资源”的目标冲突。
+批次归属：`highlights` 属 L2，`locals`/`outline` 属 L4，`injections` 随 6.2 的 Markdown/HTML 验收在 L6 落地，`indents`/`brackets`/`overrides`/`runnables` 属 L8。L4 的符号/折叠范围用 outline query 消费同一 Tree，不在高亮 query 中猜结构。声明存在不等于能力已交付。运行候选与上下文抑制以 query 表达而非在 Rust 内按语言分支实现，否则每新增一门语言都要改引擎代码，与“新增语言即新增声明与资源”的目标冲突。
 
 包索引记录 revision、grammar ABI、大小、SHA-256、来源 revision/许可证。query 与固定 grammar 成对验证，不能把 Zed/Helix predicates/captures 默认视为全部兼容。
 
+<a id="syntax-query-validation"></a>
+L2 支持且执行 Tree-sitter 0.25.10 的 text predicates：eq?/not-eq?/any-eq?/any-not-eq?、match?/not-match?/any-match?/any-not-match?、any-of?/not-any-of?；参数遵循固定 binding 的验证规则。启用前逐 pattern 检查 general_predicates、property_predicates、property_settings：L2 暂不支持任何自定义 predicate/property，包含 #is? local、#set! priority 的资源均拒绝，不能因 Query::new 成功便忽略语义。选用/修订上游 query 时去掉不支持的规则必须同时给出语义等价语料；需 locals 的资源留 L4，再提升内部 runtimeContractVersion。
+
+未知 capture 可以诊断后忽略；未知 predicate/property 会拒绝整份资源并保留上一可用资源。重叠顺序在内部已校验捕获表中明定为（资源层优先级、capture 优先级、节点深度、pattern index、capture index）的全序，再切分 span；不偷偷支持资源 #set! 优先级。测试需有“编译成功但不允许的 predicate/property”负例，以及同语料满足/不满足 text predicate 的结果对照。包更新在所有受支持槽位编译及语义校验通过后才原子启用；尚未交付的槽位可以校验并保留声明，但能力保持不可用。
+
 已内置 grammar 的资源包可添加识别/query/关键字/snippet/设置/LSP/formatter 声明，无须改通用编辑器。纯数据包类型由插件批次正式扩展，不能伪装成空 native Bundle。尚未内置 grammar 在前期随宿主发布，最终以 6.3 节安装，不把“修改 Cargo.toml 重编宿主”当插件扩展完成。
 
-安装拒绝绝对路径、`..`、逃出包目录的 symlink、损坏/超限、未知 ABI、未允许签名、散列不符；query 预编译成功后原子启用。资源更新递增 revision、取消旧任务；回滚恢复整组资源，失败保留上个可用版本并显示诊断。原生 Bundle 仍遵守重启卸载；第三方市场签名策略另行评审。
+安装拒绝绝对路径、`..`、逃出包目录的 symlink、损坏/超限、未知 ABI、未允许签名、散列不符；query 预编译及上述语义校验成功后原子启用。资源更新更换 resourceRevision 并递增启用 epoch、取消旧任务；回滚恢复整组资源，失败保留上个可用版本并显示诊断。两个包扩展同语言时各保留 owner 身份，由用户/项目显式选择资源集；无选择时保持当前可用集，不能由安装顺序覆盖。同一项目每语言仅激活一套基础语法资源。原生 Bundle 仍遵守重启卸载；第三方市场签名策略另行评审。
+
+ABI 校验针对实际执行 parser 的 runtime：bundled grammar 必须被宿主支持，worker grammar
+须与其包内 runtime 匹配，不要求等于宿主 ABI。第三方 worker 的执行/握手及 query 预编译均在
+§6.3 的明确本地授权后进行；安装前静态校验不偷跑 worker。新增包若无当前可用集也无用户选择，
+优先使用仍受支持的 bundled 集，否则保持 plain/fallback 并等待选择，不能隐式随机选包。
 
 设置按语言贡献 File Types、Tabs and Indents、Completion、Inlay Hints、Formatter、Language Server 的已实现项。优先级：本次显式选择 > 项目设置/EditorConfig 已支持字段 > 用户语言设置 > 包默认 > 通用默认；显示有效值与来源。工作区数据不能越过现有信任边界启动任意工具。
 
@@ -357,7 +412,7 @@ Tree-sitter 不负责风格格式化。复用 LSP formatting/workspace edit，�
 
 | 批次 | 内容与依赖 | 自动验证 | 用户验收/完成证据 |
 | --- | --- | --- | --- |
-| L0 / P0 | 错误分类、候选身份、completion DTO、真实能力、版本保护 | 同 label 不同签名/导入；报错 fallback；取消/过期；普通 `$` | 三语言服务停止/恢复仍可输入、候选正确；基线截图 |
+| L0 / P0 | 错误分类、候选身份、completion DTO、真实能力、版本保护；硬依赖 B6b2 同一事务/Undo | 同 label 不同签名/导入；报错 fallback；取消/过期；普通 `$`；真实 resolve 往返 | 三语言服务停止/恢复仍可输入、候选正确；菜单接受/一次 Undo 与基线截图 |
 | L1 / P1 | syntax v1、accepted/parsed 状态机、有序 delta 合并、坐标/缓存/预算、单语言原型 | A→B→C、提交前后取消/ack 重试、resync/close、增量/全量等价、UTF-8/16/CRLF、淘汰 | 连续输入/撤销/跨行无光标错位；解析/RSS/体积基线 |
 | L2 / P1 | Go/Rust/Python grammar/query、投影、主题；保留已有路径 | 重叠 capture、跨视口、树形不变文本编辑、IME | 三语言离线打开/编辑/滚动/切主题；无双重全量着色 |
 | L3 / P2 | 自动 popup、文档/排序/resolve、snippet/undo；依赖 L0/L1 | 可控迟到/取消、isIncomplete、选中保持、insert/replace、附加 edits | 成员/导入/参数视频，键鼠接受、一次 Undo、屏幕边界 |
@@ -368,6 +423,10 @@ Tree-sitter 不负责风格格式化。复用 LSP formatting/workspace edit，�
 | L8 | 3.1 预留槽位的语法驱动编辑行为：`indents` 自动缩进、`brackets` 配对与包围/展开选区、`overrides` 上下文抑制、`runnables` 运行候选；依赖 L2/L4/L5 | 缺省槽位不改变现有行为、缩进不破坏 Make recipe 与已有缩进设置、配对不吞选区/IME 输入、包围与展开可一次 Undo、运行候选与真实 Run/Test provider 一致 | 三语言回车缩进、括号配对与包围操作、注释与字符串内不弹代码补全、gutter 运行入口点击可运行；无声明语言行为不变 |
 
 L0/L1 分别提交，L2/L6 可按语言再拆；L3 不只换 UI，L5 不只加 manifest，L7 必须实际安装。L8 与 L7 无相互依赖，可按资源就绪顺序单独提交，但**不能只提交 6.1 的槽位声明**：每项能力需连同 query 资源、引擎消费与验收一起交付，未交付项在设置与 UI 中保持不可用而不是静默无效果。每批提交说明附实际测试、截图和缺口，不推送；尚未交付的后续批次保持未完成。
+
+L0/L1 会共改 dispatcher、Swift bridge、契约和文档事件，默认按
+[L0–L2 细案 §3](syntax-l0-l2-engine.md#3-分批依赖与提交边界) 串行；不再按原四文件清单
+宣称可以并发。L1a 用已有 Java grammar 原型，L1c 仍执行原生输入/Undo/IME/关闭验收。
 
 ## 9. 验证与完成审计
 

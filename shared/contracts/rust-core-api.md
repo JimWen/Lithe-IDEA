@@ -978,3 +978,181 @@ and does not start a Java process or contact JDT.
 ## Project tools metadata
 
 `execution.normalizeProjectMetadata` consumes captured Go/Cargo stdout and returns portable, stable project topology. It performs no native I/O. See [project-tools-metadata.md](project-tools-metadata.md) for the version 1 fields, root mapping, eligibility, ordering, resource limits and error behavior.
+
+<a id="planned-syntax-v1"></a>
+## Planned syntax v1 and completion identity (not implemented)
+
+This section records the L0–L2 design decision, not available commands or a
+claim of ABI support. Implementation must update the command enum, dispatcher,
+Swift consumers and shared fixtures before adding these commands to the supported
+table. The owning plans are [syntax and completion](../../docs/architecture/syntax-and-completion.md)
+and [L0–L2](../../docs/architecture/syntax-l0-l2-engine.md).
+
+L0 adds batch `lsp.completionIdentities` with `schemaVersion: 1` and `items`.
+Each item supplies the normalized provider, label/signature, insertion format,
+primary range/text, additional edits and resolve data defined in the
+[canonical identity rule](../../docs/architecture/syntax-and-completion.md#completion-identity-v1).
+The response preserves input order with one identity per item. Rust is the sole
+canonical encoder/hash authority; Swift forwards the result unchanged. Limit one
+batch to 200 items and 1 MiB of encoded input; the caller applies its existing
+provider ordering/candidate cap first. Invalid input rejects the batch with the
+existing `invalid_request` category, not partial IDs.
+
+L1 adds `syntax.open/change/resync/close/closeWorkspace/cancel/retry`; L2 adds
+`syntax.highlights`. Later completion/structure/hints commands are not part of
+this implementation gate. All use the existing UTF-8 envelope and C ABI.
+Payload `operationID` equals outer `operationId`; outer `id` identifies this
+transport attempt. Text request retries retain operationID and payload, while
+receiving the current transport id around the cached acknowledgement.
+
+The existing `CoreError.details` remains an optional string. Add only an optional
+`error.context` JSON value, produced from a typed syntax failure context; old
+commands omit it. Add explicit Serde wire names for the nine `syntax.*` error
+codes listed in the owning plan; do not change existing snake_case codes.
+Swift's generic error decoder preserves optional context as `ToolingJSONValue`,
+and the syntax adapter decodes `kind: "syntax.v1"` into `SyntaxFailureContext`.
+Unknown/missing context means acceptance is unconfirmed, never notApplied.
+Malformed envelopes/payloads that cannot establish identity retain the existing
+generic invalid_request response; no invented version or identity is returned.
+
+For open/change/resync, success data carries the request identity, `disposition:
+applied`, acceptedTextVersion, parsedVersion, parseState and parseOperationID.
+Failure context carries the same fields and `disposition: notApplied` when
+non-application is proven. Query/control operations use `disposition: null`;
+their completion cannot decide whether a different text transaction committed.
+acceptedTextVersion is null when no accepted document exists; parsedVersion is
+null when no complete Tree is retained. parseState is one of idle, queued,
+parsing, ready, cancelled, budgetExceeded or failed. Request `version` never
+substitutes for acceptedTextVersion or parsedVersion.
+
+`syntax.cancel` has its own operationID and additionally names targetKind
+(text/query/parse) and targetOperationID. Its success includes targetStatus
+(cancelRequested/completed/unknown), targetDisposition (applied/notApplied/null),
+and targetAcknowledgement (the original text acknowledgement or null), plus the
+current document state. A completed text target returns its cached applied ack;
+it does not cancel the parse derived from that text. Unknown/expired text target
+state cannot be used as proof that a delta is safe. Query cancellation removes
+only that waiter; parse cancellation completes all dependent waiters.
+`syntax.retry` checks the exact accepted version and only schedules parsing;
+it changes neither text nor version and returns the active/new parseOperationID.
+
+L2 `syntax.highlights` adds `viewport: {start, length}` in document UTF-16 units.
+Its success data echoes the complete request identity and parsedVersion, with
+`coveredRanges: [{start, length}]` and `spans: [{start, length, role}]`, ordered,
+non-overlapping and bounded by the current document. Every span must lie inside
+the covered ranges. Empty spans still clear those ranges. Zero-length viewports
+return empty ranges/spans; no fabricated token is needed for an empty document.
+The host maps the query operationID to its local view request/connection epoch.
+A stale query returns syntax.cancelled with optional context reason `stale`,
+never current-version tokens labelled as the requested old version.
+
+Cancellation racing request registration uses the bounded early-cancel registry
+defined in the owning plan. An unknown target returns no acceptance guarantee;
+the original request must complete or its generation must be revoked before
+resynchronization. A queued parse already has an independently registered
+parseOperationID before its text acknowledgement is returned.
+
+The following five JSON examples are planned fixture seeds. The resource digest
+is deliberately synthetic. Before release the same records must be exercised
+through Rust execute_json and the real Swift envelope decoder, including
+legacy string-details errors. These examples are not results of executed tests.
+
+```json
+[
+  {
+    "case": "applied",
+    "response": {
+      "id": "transport-2", "ok": true,
+      "data": {
+        "schemaVersion": 1, "workspaceSessionID": "workspace-fixture",
+        "documentID": "document-fixture", "generation": 1, "version": 2,
+        "operationID": "change-2", "languageID": "rust",
+        "resourceRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "disposition": "applied", "acceptedTextVersion": 2, "parsedVersion": 1,
+        "parseState": "queued", "parseOperationID": "parse-2"
+      }
+    }
+  },
+  {
+    "case": "invalid-range-not-applied",
+    "response": {
+      "id": "transport-3", "ok": false,
+      "error": {
+        "code": "syntax.invalidRange", "message": "The edit range is invalid.",
+        "details": "The range splits a UTF-16 surrogate pair.",
+        "context": {
+          "kind": "syntax.v1", "schemaVersion": 1,
+          "workspaceSessionID": "workspace-fixture", "documentID": "document-fixture",
+          "generation": 1, "version": 3, "operationID": "change-3",
+          "languageID": "rust",
+          "resourceRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "disposition": "notApplied", "acceptedTextVersion": 2, "parsedVersion": 1,
+          "parseState": "parsing", "parseOperationID": "parse-2"
+        }
+      }
+    }
+  },
+  {
+    "case": "base-mismatch",
+    "response": {
+      "id": "transport-4", "ok": false,
+      "error": {
+        "code": "syntax.resyncRequired", "message": "Synchronize the current document snapshot.",
+        "context": {
+          "kind": "syntax.v1", "schemaVersion": 1,
+          "workspaceSessionID": "workspace-fixture", "documentID": "document-fixture",
+          "generation": 1, "version": 4, "operationID": "change-4",
+          "languageID": "rust",
+          "resourceRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "disposition": "notApplied", "acceptedTextVersion": 2, "parsedVersion": 1,
+          "parseState": "parsing", "parseOperationID": "parse-2"
+        }
+      }
+    }
+  },
+  {
+    "case": "cancelled-before-commit",
+    "response": {
+      "id": "transport-5", "ok": false,
+      "error": {
+        "code": "syntax.cancelled", "message": "The text operation was cancelled.",
+        "context": {
+          "kind": "syntax.v1", "schemaVersion": 1,
+          "workspaceSessionID": "workspace-fixture", "documentID": "document-fixture",
+          "generation": 1, "version": 3, "operationID": "change-5",
+          "languageID": "rust",
+          "resourceRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "disposition": "notApplied", "acceptedTextVersion": 2, "parsedVersion": 1,
+          "parseState": "parsing", "parseOperationID": "parse-2"
+        }
+      }
+    }
+  },
+  {
+    "case": "query-budget-exceeded-after-applied",
+    "response": {
+      "id": "transport-6", "ok": false,
+      "error": {
+        "code": "syntax.budgetExceeded", "message": "Syntax analysis exceeded its budget.",
+        "context": {
+          "kind": "syntax.v1", "schemaVersion": 1,
+          "workspaceSessionID": "workspace-fixture", "documentID": "document-fixture",
+          "generation": 1, "version": 2, "operationID": "highlights-6",
+          "languageID": "rust",
+          "resourceRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "disposition": null, "acceptedTextVersion": 2, "parsedVersion": 1,
+          "parseState": "budgetExceeded", "parseOperationID": null
+        }
+      }
+    }
+  }
+]
+```
+
+Syntax dispatch owns the commit/terminal deadline check. Its completed response
+must not be overwritten by the generic post-command cancellation check. This
+exception does not alter other commands. Domain-owned cross-thread cancellation
+tokens survive the synchronous text command, and query/control executors must
+remain independent of the parse pool. See the
+[cancellation boundary](../../docs/architecture/syntax-and-completion.md#syntax-cancellation-boundary)
+for queue, timeout, close and retry semantics.

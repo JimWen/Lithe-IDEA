@@ -180,6 +180,43 @@ shared fixtures 与 stable-tests 静态门禁通过。新的共享
 记录属于阶段验证，后续改动仍需相应回归。
 
 尚不放行整体 B3b：旧逐文件 Apply 尚待统一事务替换；磁盘身份快照、租约、回滚/恢复、
-原生 Undo/Redo、occurrence 排除与真实 ARM64 GUI 验收未完成。完整项目中的二进制文件、
+原生 Undo/Redo 与真实 ARM64 GUI 验收未完成。occurrence 排除已有未提交实现，尚未接入统一事务。
+完整项目中的二进制文件、
 大文件和预算交互仍须 GUI 验证，不能以当前单元测试代替。B3b3b 同时依赖 B6b1 和 B6b2，
 本次修正文档表格中漏列的 Undo 依赖；保持本文件未完成状态。
+
+<a id="b3b-uncommitted-review"></a>
+## 2026-09-08 提交前审查：保留实现，暂不放行代码提交
+
+按用户“继续处理前先检查未提交修改”的要求，以 `dee25f92` 和当时工作区差异复核。
+范围、快照与选择实现能复用，没有整体回退重写的依据；下列改动保留在工作区，
+不混入已验收的 Go Tools / B6a1a 提交或系统安装：
+
+| 改动 | 必要性与提交边界 |
+| --- | --- |
+| Rust scoped preview、matcher/index 扩展、DTO 和共享 fixture | B3b1 所需；显式范围、未保存候选、精确原文/UTF-16 edits、错误与预算应一并保留；文件读取缺陷修复后复核 |
+| Swift typed port/bridge、preview worker、模块关闭与 Search 接线 | 与上述协议配套；不能只提交一端或把真实错误恢复为空结果；与 Rust 同批验证 |
+| occurrence 选择投影、Find/Replace UI | B3b4 所需；保留从同一原文重建的实现，正式 Apply 仍须接 B6b1/B6b2 |
+| EditorDocument 的 UTF-8 字节比较与回归 | 应保留，避免 Unicode 规范形式变化丢失 revision/dirty；当前回归位于 ScopedSearchContractTests，若独立提交需先拆出验证边界 |
+| SearchModule / SearchLifecycle / Rust 与桥接测试 | 覆盖真实协议、零范围、错误、Unicode 和任务收尾，继续复用；已有通过记录不覆盖下列遗漏场景 |
+
+本次源码审查确认的提交阻塞：
+
+1. **P1：特殊文件可阻塞预览及 shutdown。** `scoped_replacement.rs` 的 `validate_path`
+   允许 FIFO 等特殊文件通过，`read_bounded` 先 `File::open` 再检查 `is_file`；显式文件范围
+   可在 open 等待写端时越过 cooperative deadline。静态 metadata 预检仍有路径替换竞争，
+   需要有界、no-follow 的实际打开与身份校验，覆盖文件及父目录切换。应补有局部超时和
+   失败清理的回归，不能让 FIFO 回归本身挂住测试进程。
+2. **P1：新选择结果仍进入旧的过期写入路径。** `SearchFeatureModel.applyProjectReplacement`
+   读取 `currentText` 后未与 `sourceText` 做字节比较，直接写入由预览原文重建的结果。
+   `recordHistory` 等待后也没有重新校验；预览后编辑文件或缓冲区仍可能被旧结果覆盖。
+   文件身份、所有目标预检、文档租约和补偿/恢复尚缺，不能把 occurrence 单测通过当作
+   安全 Apply 通过。
+3. **既定交付依赖未满足。** AppModel 仍直接保存打开文档，失败后关闭并清空预览；
+   原生跨文件 Undo、自动保存/IME/待决回调、切项目和恢复行为须按 B6b1/B6b2 与本文验收。
+
+本轮仅提交必要的方案和审查记录，未修改上述生产代码/测试，未运行新的产品测试或 GUI，
+也未替换系统安装。暂存文档的 98 处本地链接/锚点、5 个 syntax JSON 示例、资源八槽位、
+实施命令语法与 `git diff --cached --check` 通过；Search 契约差异单独留在工作区。
+原始清单、文件摘要及文档检查保留在
+`.artifacts/plan-implementation/uncommitted-review/`；历史测试仍只代表当时覆盖的场景。
