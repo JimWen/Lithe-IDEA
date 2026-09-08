@@ -16,7 +16,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
     @Published package private(set) var errorMessage: String?
     @Published package private(set) var isActive = false
 
-    private let nativePreparer: any CargoMetadataNativePreparing
+    private let nativePreparer: any ProjectMetadataNativePreparing
     private let normalizer: any ProjectMetadataNormalizing
     private let makeInput: @MainActor (URL, Int, URL, ContinuousClock.Instant) throws -> CargoMetadataPreparationRequest
     private let providerModuleID: ModuleID
@@ -30,7 +30,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
     package var onOwnershipEnded: (@MainActor () -> Void)?
 
     package init(
-        nativePreparer: any CargoMetadataNativePreparing,
+        nativePreparer: any ProjectMetadataNativePreparing,
         normalizer: any ProjectMetadataNormalizing,
         makeInput: @escaping @MainActor (URL, Int, URL, ContinuousClock.Instant) throws -> CargoMetadataPreparationRequest,
         providerModuleID: ModuleID,
@@ -124,36 +124,63 @@ package final class CargoProjectFeatureModel: ObservableObject {
             try checkCurrent(owner)
             let input = try makeInput(owner.workspaceURL, owner.workspaceGeneration, owner.manifestURL, owner.deadline)
             let preparer = nativePreparer
-            let (native, commands) = try await worker.perform {
+            let (native, current) = try await worker.perform {
                 let session = try preparer.prepare(input)
-                return (session, session.resolutionCommands)
+                return (session, session.initialStage)
             }
             try checkCurrent(owner)
-            guard commands.isEmpty || commands.count == 2 else {
-                throw CargoProjectFailure(message: "Cargo toolchain resolution returned an invalid command plan.")
-            }
             let provider = try await activateProvider()
             try checkCurrent(owner)
             guard provider.languageID == "rust" else {
                 throw CargoProjectFailure(message: "The selected provider does not support Cargo metadata.")
             }
-            var outputs: [Data] = []
-            for command in commands {
-                try await worker.perform { try native.validate() }
+            // Staged capture: each round runs its planned commands in order and
+            // hands the stdouts back to the session, which decides the next
+            // round or finishes. The bounds are defensive; a session that
+            // exceeds them is broken and fails the refresh instead of looping.
+            var stage = current
+            var doneSource: ProjectMetadataNormalizationSource?
+            var lastRoundResults: [LanguageProjectToolResult] = []
+            var rounds = 0
+            while doneSource == nil {
+                rounds += 1
+                guard rounds <= 4 else {
+                    throw CargoProjectFailure(message: "Project metadata capture exceeded the staged round limit.")
+                }
+                guard stage.commands.count <= 512 else {
+                    throw CargoProjectFailure(message: "Project metadata capture issued an oversized command plan.")
+                }
+                var outputs: [Data] = []
+                var roundResults: [LanguageProjectToolResult] = []
+                for command in stage.commands {
+                    try await worker.perform { try native.validate() }
+                    try checkCurrent(owner)
+                    let result = try await capture(command, provider: provider, owner: owner)
+                    outputs.append(result.stdout)
+                    roundResults.append(result)
+                }
                 try checkCurrent(owner)
-                let result = try await capture(command, provider: provider, owner: owner)
-                outputs.append(result.stdout)
+                let completed = stage
+                let collected = outputs
+                let outcome = try await worker.perform {
+                    try native.validate()
+                    return try native.advance(stage: completed, outputs: collected)
+                }
+                try checkCurrent(owner)
+                switch outcome {
+                case .more(let next):
+                    stage = next
+                case .done(let done):
+                    doneSource = done
+                    lastRoundResults = roundResults
+                }
             }
-            let resolved = outputs
-            let command = try await worker.perform {
-                try native.validate()
-                return try native.metadataCommand(resolutionOutputs: resolved)
+            guard let source = doneSource, let finalResult = lastRoundResults.last else {
+                throw CargoProjectFailure(message: "Project metadata capture produced no result.")
             }
-            try checkCurrent(owner)
-            let result = try await capture(command, provider: provider, owner: owner)
             let nativeInput = try await worker.perform {
                 try native.validate()
-                return try native.normalizationInput(metadata: result.stdout)
+                return try native.normalizationInput(source)
             }
             try checkCurrent(owner)
             let normalizeID = UUID().uuidString
@@ -161,7 +188,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
             let timeout = try remainingMilliseconds(owner)
             let core = normalizer
             let normalized = try await worker.perform {
-                let value = try core.normalize(.cargo(result), workspaceDirectory: nativeInput.workspaceDirectory,
+                let value = try core.normalize(.cargo(finalResult), workspaceDirectory: nativeInput.workspaceDirectory,
                     roots: nativeInput.roots, operationID: normalizeID, timeoutMilliseconds: timeout)
                 try native.validate()
                 return value
@@ -187,7 +214,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
         }
     }
 
-    private func capture(_ command: CargoMetadataCommand, provider: any LanguageProjectToolsProviding,
+    private func capture(_ command: ProjectMetadataCommand, provider: any LanguageProjectToolsProviding,
                          owner: CargoProjectRefreshOperation) async throws -> LanguageProjectToolResult {
         try checkCurrent(owner)
         guard owner.stdoutRemaining > 0, owner.stderrRemaining > 0 else {

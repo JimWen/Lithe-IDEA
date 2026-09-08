@@ -470,8 +470,8 @@ private func makeTestCargoProject() -> CargoProjectFeatureModel {
     )
 }
 
-private struct TestCargoMetadataPreparer: CargoMetadataNativePreparing {
-    func prepare(_ request: CargoMetadataPreparationRequest) throws -> any CargoMetadataNativeSession {
+private struct TestCargoMetadataPreparer: ProjectMetadataNativePreparing {
+    func prepare(_ request: CargoMetadataPreparationRequest) throws -> any ProjectMetadataNativeSession {
         throw ProjectMetadataFailure.invalidInput(message: "No Cargo in tests.")
     }
 }

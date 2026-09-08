@@ -1,6 +1,8 @@
 # B7a3：Go 元数据隔离读取、Go Tools 工具窗口与独立工具任务
 
-状态：基于 `3680935d`。**方案待独立审查，未实施。** 本文是 [B7a Go/Cargo 方案](goland-parity-b7a-go-cargo.md)
+状态：基于 `3680935d`。**方案待独立审查；B7a3d 与 B7a3a 已实施并通过 §6 的自动验证
+（2026-09-08，记录见 §6.1），B7a3b / B7a3c 未实施。** 本文是
+[B7a Go/Cargo 方案](goland-parity-b7a-go-cargo.md)
 中 B7a2c3、B7a3 两项的实施细案，并把 B7a2c2 已交付的 Cargo 链路作为 Go 侧的实现模板。
 本文供实现方按第 5 节逐文件执行；第 2 节的每条现状都已在当前 HEAD 核对过。
 
@@ -327,6 +329,35 @@ git diff --check
   必须证明 `CargoTreePresentationTests` 与 Cargo 相关测试全部保持通过，且 Cargo 的
   两轮命令序列逐字节不变。
 - B7a3b / B7a3c：全套 + **真实 ARM64 GUI 点击验收**（见 §7.5）。
+
+### 6.1 实施记录（2026-09-08，B7a3d 与 B7a3a）
+
+- **实施前重测（§2.3 门槛）**：本机 Go 为 go1.24.4 darwin/arm64，与实验绑定版本一致；
+  §1 表格五行与 §2 隔离方案全部复现（隔离副本三轮刷新后用户工作区 SHA-256 逐字节一致，
+  `go.work.sum` 落在隔离目录）。脚本与日志在
+  `.artifacts/goland-parity/go-isolation-recheck.sh` 与同目录 `*-2026-09-08.log`。
+- **B7a3d**：`detectors/go.rs` 按第 5 节实施；包子句判定为「跳过注释后的首个有效行」，
+  比原任何行匹配更严（真子句之前的注释行被跳过，之后的 `package main` 不再误判）。
+  三条规则按并集去重为每目录一条。`cargo fmt`、verify-test-stability、
+  verify-rust-core-comments、verify-rust-core 通过；Rust 计时 harness 359/359，
+  含五个新检测器场景。
+- **B7a3a**：§4.1 契约与 §5 清单全部落地；`CargoFileIdentity` 更名为
+  `ProjectToolFileIdentity` 并去掉 private 供 Go 侧共用。隔离副本在 prepare 时即创建
+  （go.work 存在性 prepare 可查），`advance` 阶段冻结 use module 的 go.mod；会话可变
+  状态由 NSLock 保护，调用所有权仍归串行 worker。五条清理路径中的模型接线（取消/超时/
+  失败/项目关闭/完成时删除隔离目录）随 B7a3b 的 `GoProjectFeatureModel` 交付，本批
+  仅有 `cleanupIsolation()` 与 deinit 兜底。
+- **对方案的更正**：`ProjectMetadataContracts.swift` 中已有同名枚举
+  `ProjectMetadataCaptureStage`（capture 拒绝归因），与 §4.1 新 struct 撞名。保留
+  §4.1 的命名，把既有枚举更名为 `ProjectMetadataCaptureOrigin`（两处使用，纯 Swift
+  内部错误类型，不触及 §4.2 的任何受保护契约）。
+- **验证**：新增 `ProjectMetadataPreparationTests` 7 项（Go workspace/single 阶段序列、
+  外部 go.work 拒绝、身份变更失败、隔离副本逐字节重写、Cargo 两轮序列逐字节不变）；
+  verify-test-stability、verify-shared-contracts、verify-service-boundaries、
+  verify-module-boundaries、verify-rust-core-comments、verify-rust-core 通过；完整
+  Swift 套件 `test-macos.sh`（含 Rust force_load）1131 项全部通过。测试直接断言
+  §7.7 要求的「Cargo 命令序列逐字节不变」；§7 的 GUI 与真实进程验收项仍未执行，
+  不据此宣布 B7a3a「已验收」，独立代码审查待做。
 
 ## 7. 验收矩阵
 

@@ -57,7 +57,7 @@ struct RustProjectMetadataOperations: ProjectMetadataNormalizing {
     private func makePayload(
         _ captures: ProjectMetadataCaptures, workspaceDirectory: String, roots: [ProjectMetadataRoot]
     ) throws -> Payload {
-        let stages: [(ProjectMetadataCaptureStage, LanguageProjectToolResult)]
+        let stages: [(ProjectMetadataCaptureOrigin, LanguageProjectToolResult)]
         let language: ProjectMetadataLanguage
         switch captures {
         case .cargo(let result):

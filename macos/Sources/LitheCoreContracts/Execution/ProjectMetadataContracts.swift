@@ -17,14 +17,16 @@ package enum ProjectMetadataCaptures: Sendable {
     case go(modules: LanguageProjectToolResult, packages: [LanguageProjectToolResult])
 }
 
-package enum ProjectMetadataCaptureStage: Equatable, Sendable {
+/// Which capture a rejected result came from, for failure attribution only.
+/// The staged capture plan itself lives in `ProjectMetadataCaptureStage`.
+package enum ProjectMetadataCaptureOrigin: Equatable, Sendable {
     case cargo, goModules
     /// Zero-based index in the caller's frozen package stage list.
     case goPackages(Int)
 }
 
 package enum ProjectMetadataFailure: LocalizedError, Sendable {
-    case captureRejected(stage: ProjectMetadataCaptureStage, result: LanguageProjectToolResult)
+    case captureRejected(stage: ProjectMetadataCaptureOrigin, result: LanguageProjectToolResult)
     case invalidInput(message: String)
     case core(code: String, message: String, details: String?)
 

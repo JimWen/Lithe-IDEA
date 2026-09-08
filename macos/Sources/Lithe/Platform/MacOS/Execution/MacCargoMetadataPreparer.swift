@@ -7,16 +7,16 @@ import LitheCoreContracts
 /// returns command plans that the Rust language module executes through its own
 /// capture session. Everything it records is frozen at preparation time so a
 /// later `validate()` can prove the tools and files did not change mid-refresh.
-struct MacCargoMetadataPreparer: CargoMetadataNativePreparing {
-    func prepare(_ request: CargoMetadataPreparationRequest) throws -> any CargoMetadataNativeSession {
-        let manifest = try CargoFileIdentity.regularFile(at: request.manifestURL, role: "Cargo.toml")
+struct MacCargoMetadataPreparer: ProjectMetadataNativePreparing {
+    func prepare(_ request: CargoMetadataPreparationRequest) throws -> any ProjectMetadataNativeSession {
+        let manifest = try ProjectToolFileIdentity.regularFile(at: request.manifestURL, role: "Cargo.toml")
         let workingDirectory = request.manifestURL.deletingLastPathComponent().standardizedFileURL
 
         // An explicit user choice is authoritative: if it is unusable the refresh
         // fails instead of quietly falling back to a different toolchain.
-        let cargo: CargoFileIdentity
+        let cargo: ProjectToolFileIdentity
         if let custom = request.customCargoURL {
-            cargo = try CargoFileIdentity.nativeExecutable(at: custom, role: "the configured Cargo")
+            cargo = try ProjectToolFileIdentity.nativeExecutable(at: custom, role: "the configured Cargo")
         } else {
             cargo = try firstUsableExecutable(request.cargoCandidates, role: "Cargo")
         }
@@ -34,10 +34,10 @@ struct MacCargoMetadataPreparer: CargoMetadataNativePreparing {
         )
     }
 
-    private func firstUsableExecutable(_ candidates: [URL], role: String) throws -> CargoFileIdentity {
+    private func firstUsableExecutable(_ candidates: [URL], role: String) throws -> ProjectToolFileIdentity {
         var lastFailure: Error?
         for candidate in candidates {
-            do { return try CargoFileIdentity.nativeExecutable(at: candidate, role: role) }
+            do { return try ProjectToolFileIdentity.nativeExecutable(at: candidate, role: role) }
             catch { lastFailure = error }
         }
         if let lastFailure, !candidates.isEmpty { throw lastFailure }
@@ -50,9 +50,9 @@ struct MacCargoMetadataPreparer: CargoMetadataNativePreparing {
     /// binary. Detecting that is what decides whether the real toolchain still
     /// has to be resolved before `cargo metadata` may run.
     private func rustupProxy(
-        for cargo: CargoFileIdentity, candidates: [URL]
-    ) throws -> CargoFileIdentity? {
-        let rustups = candidates.compactMap { try? CargoFileIdentity.nativeExecutable(at: $0, role: "rustup") }
+        for cargo: ProjectToolFileIdentity, candidates: [URL]
+    ) throws -> ProjectToolFileIdentity? {
+        let rustups = candidates.compactMap { try? ProjectToolFileIdentity.nativeExecutable(at: $0, role: "rustup") }
         if cargo.resolvedURL.lastPathComponent == "rustup" {
             return rustups.first { $0.isSameFile(as: cargo) } ?? cargo
         }
@@ -63,32 +63,86 @@ struct MacCargoMetadataPreparer: CargoMetadataNativePreparing {
 
 /// Immutable for the whole refresh. The feature model calls every method on one
 /// serial worker, so no method mutates state and the identities stay comparable.
-private struct MacCargoMetadataSession: CargoMetadataNativeSession {
+///
+/// The staged adaptation keeps the historical two-phase sequence byte for byte:
+/// the optional rustup resolution round, then the single `cargo metadata`
+/// command built from its outputs.
+private struct MacCargoMetadataSession: ProjectMetadataNativeSession {
+    private static let resolutionStageID = "cargo-resolution"
+    private static let metadataStageID = "cargo-metadata"
+
     let workspaceURL: URL
     let manifestURL: URL
-    let manifest: CargoFileIdentity
+    let manifest: ProjectToolFileIdentity
     let workingDirectory: URL
-    let cargo: CargoFileIdentity
-    let rustupProxy: CargoFileIdentity?
+    let cargo: ProjectToolFileIdentity
+    let rustupProxy: ProjectToolFileIdentity?
     let environment: [String: String]
 
-    var resolutionCommands: [CargoMetadataCommand] {
-        guard let rustupProxy else { return [] }
+    var initialStage: ProjectMetadataCaptureStage {
+        guard let rustupProxy else {
+            return ProjectMetadataCaptureStage(id: Self.resolutionStageID, commands: [])
+        }
         // Both proxies are asked in one plan so the pair can be checked against
         // each other; RUSTUP_AUTO_INSTALL=0 keeps a missing toolchain an error
         // rather than a silent download.
-        return ["cargo", "rustc"].map { tool in
-            CargoMetadataCommand(
+        let commands = ["cargo", "rustc"].map { tool in
+            ProjectMetadataCommand(
                 executablePath: rustupProxy.resolvedURL.path,
                 arguments: ["which", tool],
                 workingDirectory: workingDirectory.path,
                 environment: environment
             )
         }
+        return ProjectMetadataCaptureStage(id: Self.resolutionStageID, commands: commands)
     }
 
-    func metadataCommand(resolutionOutputs: [Data]) throws -> CargoMetadataCommand {
-        let executable: CargoFileIdentity
+    func advance(
+        stage: ProjectMetadataCaptureStage, outputs: [Data]
+    ) throws -> ProjectMetadataStageOutcome {
+        guard outputs.count == stage.commands.count else {
+            throw ProjectMetadataFailure.invalidInput(
+                message: "Cargo metadata capture outputs do not match the issued command plan."
+            )
+        }
+        switch stage.id {
+        case Self.resolutionStageID:
+            let command = try metadataCommand(resolutionOutputs: outputs)
+            return .more(ProjectMetadataCaptureStage(id: Self.metadataStageID, commands: [command]))
+        case Self.metadataStageID:
+            guard let output = outputs.first else {
+                throw ProjectMetadataFailure.invalidInput(
+                    message: "Cargo metadata capture produced no metadata output."
+                )
+            }
+            return .done(.cargo(output))
+        default:
+            throw ProjectMetadataFailure.invalidInput(
+                message: "Cargo metadata received a stage it did not issue."
+            )
+        }
+    }
+
+    func normalizationInput(_ source: ProjectMetadataNormalizationSource) throws
+        -> ProjectMetadataNativeInput {
+        switch source {
+        case .cargo(let metadata):
+            return try normalizationInput(metadata: metadata)
+        case .go:
+            throw ProjectMetadataFailure.invalidInput(
+                message: "Cargo metadata cannot normalize Go captures."
+            )
+        }
+    }
+
+    func validate() throws {
+        try manifest.validate(role: "Cargo.toml")
+        try cargo.validate(role: "Cargo")
+        try rustupProxy?.validate(role: "rustup")
+    }
+
+    private func metadataCommand(resolutionOutputs: [Data]) throws -> ProjectMetadataCommand {
+        let executable: ProjectToolFileIdentity
         if rustupProxy == nil {
             guard resolutionOutputs.isEmpty else {
                 throw ProjectMetadataFailure.invalidInput(
@@ -102,10 +156,10 @@ private struct MacCargoMetadataSession: CargoMetadataNativeSession {
                     message: "Cargo toolchain resolution did not return both tool paths."
                 )
             }
-            let resolvedCargo = try CargoFileIdentity.nativeExecutable(
+            let resolvedCargo = try ProjectToolFileIdentity.nativeExecutable(
                 at: try singlePath(resolutionOutputs[0], role: "cargo"), role: "the resolved Cargo"
             )
-            let resolvedRustc = try CargoFileIdentity.nativeExecutable(
+            let resolvedRustc = try ProjectToolFileIdentity.nativeExecutable(
                 at: try singlePath(resolutionOutputs[1], role: "rustc"), role: "the resolved rustc"
             )
             guard resolvedCargo.resolvedURL.deletingLastPathComponent()
@@ -117,7 +171,7 @@ private struct MacCargoMetadataSession: CargoMetadataNativeSession {
             executable = resolvedCargo
         }
         try executable.validate(role: "Cargo")
-        return CargoMetadataCommand(
+        return ProjectMetadataCommand(
             executablePath: executable.resolvedURL.path,
             arguments: [
                 "metadata", "--format-version", "1", "--no-deps", "--frozen",
@@ -128,7 +182,35 @@ private struct MacCargoMetadataSession: CargoMetadataNativeSession {
         )
     }
 
-    func normalizationInput(metadata: Data) throws -> CargoMetadataNativeInput {
+    /// Authorizes only what the typed metadata actually referenced. Everything
+    /// inside the host workspace is covered by the single workspace root; each
+    /// remaining location is mapped on its own so no ancestor is authorized by
+    /// accident, and `/` is never mapped.
+    private func roots(directories: Set<String>, files: Set<String>) throws -> [ProjectMetadataRoot] {
+        let workspacePrefix = workspaceURL.path.hasSuffix("/") ? workspaceURL.path : workspaceURL.path + "/"
+        var external: Set<String> = []
+        for path in directories.union(files) where path != workspaceURL.path && !path.hasPrefix(workspacePrefix) {
+            guard path != "/" else {
+                throw ProjectMetadataFailure.invalidInput(
+                    message: "Cargo metadata referenced the filesystem root, which cannot be authorized."
+                )
+            }
+            external.insert(path)
+        }
+        // A file only needs its own mapping when its directory is not mapped.
+        let externalDirectories = external.filter { directories.contains($0) }
+        let mapped = externalDirectories.union(external.filter { path in
+            !externalDirectories.contains(where: { path.hasPrefix($0 + "/") })
+        })
+        var roots = [ProjectMetadataRoot(id: "workspace", path: workspaceURL.path)]
+        for (index, path) in mapped.sorted().enumerated() {
+            _ = try ProjectToolFileIdentity.existing(at: URL(fileURLWithPath: path), role: "a Cargo workspace location")
+            roots.append(ProjectMetadataRoot(id: "external\(index + 1)", path: path))
+        }
+        return roots
+    }
+
+    private func normalizationInput(metadata: Data) throws -> ProjectMetadataNativeInput {
         let document: CargoMetadataDocument
         do { document = try JSONDecoder().decode(CargoMetadataDocument.self, from: metadata) }
         catch {
@@ -162,44 +244,10 @@ private struct MacCargoMetadataSession: CargoMetadataNativeSession {
                 directories.insert(standardized(path))
             }
         }
-        return CargoMetadataNativeInput(
+        return ProjectMetadataNativeInput(
             workspaceDirectory: workspaceURL.path,
             roots: try roots(directories: directories, files: files)
         )
-    }
-
-    func validate() throws {
-        try manifest.validate(role: "Cargo.toml")
-        try cargo.validate(role: "Cargo")
-        try rustupProxy?.validate(role: "rustup")
-    }
-
-    /// Authorizes only what the typed metadata actually referenced. Everything
-    /// inside the host workspace is covered by the single workspace root; each
-    /// remaining location is mapped on its own so no ancestor is authorized by
-    /// accident, and `/` is never mapped.
-    private func roots(directories: Set<String>, files: Set<String>) throws -> [ProjectMetadataRoot] {
-        let workspacePrefix = workspaceURL.path.hasSuffix("/") ? workspaceURL.path : workspaceURL.path + "/"
-        var external: Set<String> = []
-        for path in directories.union(files) where path != workspaceURL.path && !path.hasPrefix(workspacePrefix) {
-            guard path != "/" else {
-                throw ProjectMetadataFailure.invalidInput(
-                    message: "Cargo metadata referenced the filesystem root, which cannot be authorized."
-                )
-            }
-            external.insert(path)
-        }
-        // A file only needs its own mapping when its directory is not mapped.
-        let externalDirectories = external.filter { directories.contains($0) }
-        let mapped = externalDirectories.union(external.filter { path in
-            !externalDirectories.contains(where: { path.hasPrefix($0 + "/") })
-        })
-        var roots = [ProjectMetadataRoot(id: "workspace", path: workspaceURL.path)]
-        for (index, path) in mapped.sorted().enumerated() {
-            _ = try CargoFileIdentity.existing(at: URL(fileURLWithPath: path), role: "a Cargo workspace location")
-            roots.append(ProjectMetadataRoot(id: "external\(index + 1)", path: path))
-        }
-        return roots
     }
 
     private func standardized(_ path: String) -> String {
@@ -225,19 +273,20 @@ private struct MacCargoMetadataSession: CargoMetadataNativeSession {
 }
 
 /// A file plus the identity fields that prove it is still the same file later.
-private struct CargoFileIdentity: Sendable {
+/// Shared by the project tool preparers; the role names appear in failures.
+struct ProjectToolFileIdentity: Sendable {
     let resolvedURL: URL
     let device: Int
     let inode: UInt64
     let size: Int
     let modified: TimeInterval
 
-    static func existing(at url: URL, role: String) throws -> CargoFileIdentity {
+    static func existing(at url: URL, role: String) throws -> ProjectToolFileIdentity {
         let resolved = url.resolvingSymlinksInPath().standardizedFileURL
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: resolved.path) else {
             throw ProjectMetadataFailure.invalidInput(message: "Could not read \(role) at \(resolved.path).")
         }
-        return CargoFileIdentity(
+        return ProjectToolFileIdentity(
             resolvedURL: resolved,
             device: (attributes[.systemNumber] as? Int) ?? -1,
             inode: (attributes[.systemFileNumber] as? UInt64) ?? 0,
@@ -246,7 +295,7 @@ private struct CargoFileIdentity: Sendable {
         )
     }
 
-    static func regularFile(at url: URL, role: String) throws -> CargoFileIdentity {
+    static func regularFile(at url: URL, role: String) throws -> ProjectToolFileIdentity {
         let identity = try existing(at: url, role: role)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: identity.resolvedURL.path, isDirectory: &isDirectory),
@@ -259,7 +308,7 @@ private struct CargoFileIdentity: Sendable {
     /// Only a real Mach-O image is accepted. A script shim would run an
     /// interpreter the host never inspected, so it is rejected rather than
     /// executed on the user's behalf.
-    static func nativeExecutable(at url: URL, role: String) throws -> CargoFileIdentity {
+    static func nativeExecutable(at url: URL, role: String) throws -> ProjectToolFileIdentity {
         let identity = try regularFile(at: url, role: role)
         guard FileManager.default.isExecutableFile(atPath: identity.resolvedURL.path) else {
             throw ProjectMetadataFailure.invalidInput(message: "\(role) is not executable.")
@@ -277,7 +326,7 @@ private struct CargoFileIdentity: Sendable {
         return identity
     }
 
-    func isSameFile(as other: CargoFileIdentity) -> Bool {
+    func isSameFile(as other: ProjectToolFileIdentity) -> Bool {
         device == other.device && inode == other.inode && device != -1
     }
 
