@@ -219,6 +219,13 @@ extension AppModel {
                     at: rootURL,
                     operations: self.services.workspaceTextEditFileOperations
                 )
+                if result.state == .applied {
+                    self.services.workspaceTextEditUndoController.register(
+                        edits: transactionEdits,
+                        workspaceURL: rootURL,
+                        transactionID: result.transactionID
+                    )
+                }
                 return ProjectReplacementApplyResult(changedFiles: result.changedPaths.count, failedFiles: result.failedPaths + result.recoveryPaths)
             }
         )

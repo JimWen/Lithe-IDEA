@@ -33,6 +33,7 @@ final class AppServices {
     let fileOperations: any WorkspaceFileOperations
     let workspaceTextEditFileOperations: any WorkspaceTextEditFileOperations
     let workspaceTextEditCoordinator: WorkspaceTextEditCoordinator
+    let workspaceTextEditUndoController: WorkspaceTextEditUndoController
     /// Empty by default; binary support exists only after an explicit registration.
     let binaryFileViewerRegistry: BinaryFileViewerRegistry
     let projectRuntimeService: ProjectRuntimeService
@@ -71,6 +72,7 @@ final class AppServices {
         fileStorage: any FileStorage,
         fileOperations: any WorkspaceFileOperations,
         workspaceTextEditFileOperations: any WorkspaceTextEditFileOperations = UnavailableWorkspaceTextEditFileOperations(),
+        workspaceTextEditUndoManager: UndoManager = UndoManager(),
         binaryFileViewerRegistry: BinaryFileViewerRegistry,
         projectRuntimeService: ProjectRuntimeService,
         gitWatchContextProvider: any GitWatchContextProviding,
@@ -117,6 +119,11 @@ final class AppServices {
         self.fileOperations = fileOperations
         self.workspaceTextEditFileOperations = workspaceTextEditFileOperations
         self.workspaceTextEditCoordinator = WorkspaceTextEditCoordinator()
+        self.workspaceTextEditUndoController = WorkspaceTextEditUndoController(
+            undoManager: workspaceTextEditUndoManager,
+            coordinator: self.workspaceTextEditCoordinator,
+            operations: workspaceTextEditFileOperations
+        )
         self.binaryFileViewerRegistry = binaryFileViewerRegistry
         self.projectRuntimeService = projectRuntimeService
         self.gitWatchContextProvider = gitWatchContextProvider
