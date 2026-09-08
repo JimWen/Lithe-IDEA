@@ -718,6 +718,7 @@ struct CodeEditorView: NSViewRepresentable {
         gutterWidthConstraint.isActive = true
 
         let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        textView.externalUndoManager = model.services.workspaceTextEditUndoController.sharedUndoManager
         textView.delegate = context.coordinator
         textView.layoutManager?.delegate = textView
         textView.string = document.text
@@ -2077,6 +2078,48 @@ private struct TextLineIndex {
 }
 
 final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
+    var externalUndoManager: UndoManager?
+    override var undoManager: UndoManager? { externalUndoManager ?? super.undoManager }
+
+    override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if modifiers == .command, event.charactersIgnoringModifiers == "z" {
+            if let externalUndoManager, externalUndoManager.canUndo {
+                externalUndoManager.undo()
+                return
+            }
+            if super.undoManager?.canUndo == true {
+                super.undoManager?.undo()
+                return
+            }
+        }
+        if modifiers == [.command, .shift], event.charactersIgnoringModifiers == "z" {
+            if let externalUndoManager, externalUndoManager.canRedo {
+                externalUndoManager.redo()
+                return
+            }
+            if super.undoManager?.canRedo == true {
+                super.undoManager?.redo()
+                return
+            }
+        }
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers.contains(.command), event.keyCode == 6 else {
+            return super.performKeyEquivalent(with: event)
+        }
+        if modifiers.contains(.shift) {
+            guard externalUndoManager?.canRedo == true || super.undoManager?.canRedo == true else { return false }
+            (externalUndoManager?.canRedo == true ? externalUndoManager : super.undoManager)?.redo()
+        } else {
+            guard externalUndoManager?.canUndo == true || super.undoManager?.canUndo == true else { return false }
+            (externalUndoManager?.canUndo == true ? externalUndoManager : super.undoManager)?.undo()
+        }
+        return true
+    }
     override var isOpaque: Bool { false }
     var onCaretPresentationChanged: (() -> Void)?
     var onLayoutGeometryChanged: (() -> Void)?

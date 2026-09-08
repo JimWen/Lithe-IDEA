@@ -10,6 +10,8 @@ final class WorkspaceTextEditUndoController {
     private let coordinator: WorkspaceTextEditCoordinator
     private let operations: any WorkspaceTextEditFileOperations
 
+    var sharedUndoManager: UndoManager { undoManager }
+
     init(undoManager: UndoManager, coordinator: WorkspaceTextEditCoordinator,
          operations: any WorkspaceTextEditFileOperations) {
         self.undoManager = undoManager
