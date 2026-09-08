@@ -1,6 +1,6 @@
 # B3b 搜索范围与跨文件替换事务
 
-状态：基于 `517b4584`。B3b1a Unicode matcher/候选修复已完成，方案与代码经 `workbench_audit` 独立审查通过，自动检查和 ARM64 真实点击见 [验收记录](#b3b1a-acceptance)。下述 scope 与事务为后续实施设计，原生 undo 仍须专项审查；本次审查未放行新的 Apply 事务。B3a 和 B4a0–B4a3 已验收，跳过；Project 按用户要求暂停。本批是 [B3 搜索方案](goland-parity-b3-search.md) 的细化，后续 B3c/B3d、设置、语言和 Git 批次仍保留。
+状态：B3b1 正在实施；2026-09-08 已接通显式范围、原文/位置和结构化预览结果，并完成阶段自动验证，见下方实施记录。事务、原生 Undo 和整体 GUI 验收仍未完成。历史基线为 `517b4584`。B3b1a Unicode matcher/候选修复已完成，方案与代码经 `workbench_audit` 独立审查通过，自动检查和 ARM64 真实点击见 [验收记录](#b3b1a-acceptance)。下述 scope 已进入实现，事务为后续实施设计，原生 undo 仍须专项审查；本次审查未放行新的 Apply 事务。B3a 和 B4a0–B4a3 已验收，跳过；Project 按用户要求暂停。本批是 [B3 搜索方案](goland-parity-b3-search.md) 的细化，后续 B3c/B3d、设置、语言和 Git 批次仍保留。
 
 ## 1. 先解决什么
 
@@ -111,7 +111,7 @@ B3b1a 只改变 matcher/候选正确性，可在独立审查和完整验证后�
 | B3b1 | 明确 scope、空文件集合、override 候选、typed 错误、原文/匹配范围及预算契约 | Rust/Swift 同步消费者与 shared fixture；独立方案及代码审查；尚不替换旧 Apply。**归属 B3b 批次自身（Search owner），不由 B6 带做**；与 B6 的文件集不重叠，可并行 |
 | B3b2 | ~~文本事务协调器、文件适配器、文档租约、版本校验、准备/回滚/恢复~~ | **交付物并入 [B6b1](goland-parity-b6-refactor.md)（2026-09-08 定案）。** 本批不再单独排期；B6b1 只依赖 B6a2，不依赖 B3b1 |
 | B3b3a | 文档级原生 Undo/Redo、顺序、异步失败栈恢复 | **并入 [B6b2](goland-parity-b6-refactor.md)**；仍须先补 undo 设计并独立审查 |
-| B3b3b | Search Apply 接入统一事务 | 留在 B3b；依赖 B6b1 已交付协调器；完整替换链路通过真实点击/截图才可替换安装 |
+| B3b3b | Search Apply 接入统一事务 | 留在 B3b；依赖 B6b1 协调器和 B6b2 原生 Undo 均已交付并验收；完整替换链路通过真实点击/截图才可替换安装 |
 | B3b4 | 所有 scope 与 occurrence 选择/排除接入统一请求；错误/冲突/取消呈现 | Find/Replace 数据一致；B3d 再统一完整弹窗排版，不重复重做 Project |
 
 B3b1–B3b2 可以作为准备性代码提交，但不能将总体状态标为完成或作为完整事务能力交付。已验收的菜单、键盘归属、Terminal 连接隔离不重复实施。源码准备提交均遵循独立 review → 实现 → 自动验证 → code review → commit，改变产品交互的批次还需 ARM64 实际验收。
@@ -152,3 +152,34 @@ Find 当时仍按匹配行计数，跨文件写入与 Undo 未在此批验收。
 1,500 个约 4 KB 文件的暖缓存测量：ASCII 查询中位数 0.174–0.274 ms，半数含中文时
 10.052–11.607 ms，最大 12.370 ms；候选扩展有成本，不作为真实大项目性能保证。
 链接产物身份与全局 force_load 的保留问题见 [链接方案](macos-rust-linking.md)。
+
+## B3b1 实施记录（未整体验收）
+
+2026-09-08，在 `7e0887a1` 与已有未提交 Go Tools 实现上继续修复。复用既有 Rust
+matcher/index、Search 模块和编辑器文档，未回退 B3b1a 已验证实现。当前新增：
+
+- 显式 Project/Directory/Files 范围；Directory 保持原根目录，空 Files 双端零匹配，
+  拒绝矛盾字段（包括 Serde unit variant 原先忽略的 `project.paths`）。
+- 所有范围携带捕获的未保存文本，override 先并入候选；文件读入失败不当作索引无匹配。
+- Rust 返回原文、UTF-16 occurrence 范围、替换文本、complete/incomplete 和分项错误；
+  Find/Replace 已使用 typed 端口，去掉 AppModel 的第二套 regex 预校验，保留 query 空白。
+- 新预览采用最多两个原生 worker；clear/reset 取消显示请求，实际 worker 返回前仍保留
+  模块工作所有权，shutdown 等待收尾。取消与 Core 注册同时发生时可能依赖 5 秒 Core
+  deadline 收尾，不声称强制中断同步文件系统调用。
+- 原文用 UTF-8 字节身份；EditorDocument 的文本、revision 和 dirty 判断也保留 Unicode
+  规范形式变化。incomplete 预览不允许 Apply。
+
+已执行的阶段证据：Rust 计时 harness 368 项通过；SearchModule、SearchLifecycle 与真实
+Rust 桥接定向计时测试 15 项通过；随后完整 macOS 计时测试 1,147 项通过，含文档规范形式
+回归。Rust Core 验证（含真实桥接与 18 项 metadata 消费者测试）、service/module boundaries、
+shared fixtures 与 stable-tests 静态门禁通过。新的共享
+`shared/fixtures/search/scoped-preview-v1.json` 由 Rust `scoped_preview_follows_shared_contract_fixture`
+与 Swift `sharedScopedFixturesCrossTheRealRustBridge` 实际读取；既有 23 组 Unicode fixture
+也走新范围预览。日志与 HTML/JUnit 位于 `.artifacts/test-stability/`，具体报告为
+`rust-tests`、`macos-scoped-search`、`macos-plan-full` 和 `macos-project-metadata`。
+记录属于阶段验证，后续改动仍需相应回归。
+
+尚不放行整体 B3b：旧逐文件 Apply 尚待统一事务替换；磁盘身份快照、租约、回滚/恢复、
+原生 Undo/Redo、occurrence 排除与真实 ARM64 GUI 验收未完成。完整项目中的二进制文件、
+大文件和预算交互仍须 GUI 验证，不能以当前单元测试代替。B3b3b 同时依赖 B6b1 和 B6b2，
+本次修正文档表格中漏列的 Undo 依赖；保持本文件未完成状态。

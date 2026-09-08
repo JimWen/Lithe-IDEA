@@ -39,10 +39,11 @@ package final class LanguageToolingSessionManager: ObservableObject,
     @Published package private(set) var languageServerInfos: [String: LanguageServerInfo] = [:]
     @Published package private(set) var languageServerOperationIDs: [String: UUID] = [:]
     package var onLanguageServerStateChange: ((String, LanguageServerSessionState, UUID?) -> Void)?
-    private var catalog: LanguageProviderCatalog
+    private var baseCatalog: LanguageProviderCatalog
+    private var catalog: LanguageProviderCatalog { catalogSnapshot }
     private let extensionRequiredProviderIDs: Set<String>
 
-    package var catalogSnapshot: LanguageProviderCatalog { catalog }
+    @Published package private(set) var catalogSnapshot: LanguageProviderCatalog
     private var runtimesByID: [String: any LanguageProviderRuntime]
     private var extensionRuntimeIDs: Set<String> = []
     private var extensionProviderIdentities: [String: ObjectIdentifier] = [:]
@@ -72,7 +73,8 @@ package final class LanguageToolingSessionManager: ObservableObject,
         workspaceStateResetter: ((LanguageProviderDescriptor, URL, String?) throws -> Void)? = nil,
         workspaceStateCleaner: ((LanguageProviderDescriptor, URL, String?) throws -> Int)? = nil
     ) {
-        self.catalog = catalog
+        self.baseCatalog = catalog
+        self.catalogSnapshot = catalog
         self.runtimeFactory = runtimeFactory
         self.extensionRequiredProviderIDs = extensionRequiredProviderIDs
         self.workspaceFingerprintProvider = workspaceFingerprintProvider
@@ -95,7 +97,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
 
     package func updateCatalog(_ catalog: LanguageProviderCatalog) {
         let previousDescriptors = Dictionary(
-            uniqueKeysWithValues: self.catalog.descriptors.map { ($0.id, $0) }
+            uniqueKeysWithValues: baseCatalog.descriptors.map { ($0.id, $0) }
         )
         let updatedDescriptors = Dictionary(
             uniqueKeysWithValues: catalog.descriptors.map { ($0.id, $0) }
@@ -104,7 +106,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
             .union(updatedDescriptors.keys)
             .filter { previousDescriptors[$0] != updatedDescriptors[$0] }
 
-        self.catalog = catalog
+        baseCatalog = catalog
         let validProviderIDs = Set(catalog.descriptors.map(\.id))
         languageServerFeatures = languageServerFeatures.filter { validProviderIDs.contains($0.key) }
         languageServerStates = languageServerStates.filter { validProviderIDs.contains($0.key) }
@@ -118,6 +120,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
         rebuildDiagnostics()
         languageServerLogs = languageServerLogs.filter { validProviderIDs.contains($0.providerID) }
         for providerID in changedProviderIDs {
+            unregisterLanguageServerExtension(languageID: providerID)
             stopLanguageServer(providerID: providerID)
             if updatedDescriptors[providerID] == nil {
                 languageServerStates[providerID] = nil
@@ -126,6 +129,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
                 runtimesByID[providerID] = nil
             }
         }
+        publishCatalog()
     }
 
     @discardableResult
@@ -144,7 +148,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
             return true
         }
 
-        let base = catalog.descriptors.first { $0.id == support.id }
+        let base = baseCatalog.descriptors.first { $0.id == support.id }
         let launch = LanguageServerLaunchDescriptor(
             executableNames: configuration.executableNames,
             arguments: configuration.arguments,
@@ -179,6 +183,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
         extensionLifecycles[support.id] = WeakLanguageServerExtensionLifecycle(
             provider.lifecycle
         )
+        publishCatalog()
         return true
     }
 
@@ -190,6 +195,23 @@ package final class LanguageToolingSessionManager: ObservableObject,
         extensionProviderIdentities[languageID] = nil
         extensionLanguageIdentifiers[languageID] = nil
         extensionLifecycles[languageID] = nil
+        publishCatalog()
+    }
+
+    private func publishCatalog() {
+        // Inert manifest recognition never carries a launch command. Only a
+        // registered extension projects its configuration into discovery and UI.
+        var descriptors = baseCatalog.descriptors
+        for providerID in extensionRuntimeIDs.sorted() {
+            guard let descriptor = runtimesByID[providerID]?.descriptor else { continue }
+            if let index = descriptors.firstIndex(where: { $0.id == providerID }) {
+                descriptors[index] = descriptor
+            } else {
+                descriptors.append(descriptor)
+            }
+        }
+        guard descriptors != catalogSnapshot.descriptors else { return }
+        catalogSnapshot = LanguageProviderCatalog(descriptors: descriptors)
     }
 
     package func provider(for fileURL: URL) -> LanguageProviderDescriptor? {

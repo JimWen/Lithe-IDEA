@@ -14,6 +14,8 @@ pub fn client_initialize(request: ClientInitializeRequest) -> Result<LspClientRe
     let workspace_name = workspace_name_from_uri(&request.root_uri);
     let mut state = request.state;
     let id = allocate_request(&mut state, "initialize");
+    // Server-initiated edits have no host transaction handler yet. Advertising
+    // applyEdit here would invite requests that we can only reject as unknown.
     let message = json_rpc_request(
         &id,
         "initialize",
@@ -89,7 +91,7 @@ pub fn client_initialize(request: ClientInitializeRequest) -> Result<LspClientRe
                     }
                 },
                 "workspace": {
-                    "applyEdit": true,
+                    "applyEdit": false,
                     "configuration": true,
                     "workspaceFolders": true,
                     "workspaceEdit": {

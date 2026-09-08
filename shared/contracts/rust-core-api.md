@@ -724,6 +724,17 @@ directory, initialization options, optional runtime executable,
 `jdtlsLaunchResources`, cache directory, and `workspaceFingerprint`, plus
 initialize, post-initialize readiness, request, and shutdown deadlines.
 
+The client initialization request is locked by
+`shared/fixtures/lsp/client-initialize-v1.json`, consumed by the Rust test
+`client_core_initializes_and_applies_server_capabilities`. Its `PACKAGE_VERSION`
+placeholder is replaced with the crate version before comparison. The client
+advertises `workspace.applyEdit: false` until both server-request correlation
+and the host edit transaction are implemented. Existing rename and code-action
+requests remain available; returning edits from those requests does not imply
+support for server-initiated `workspace/applyEdit` requests. Resource operations,
+transactional failure handling, and the planned refactoring capabilities remain
+unadvertised until their consumers are ready.
+
 
 JDT LS remains `initializing` until `language/status: ServiceReady`. During this
 phase Rust reduces changed `$/progress` notifications into throttled JSON log

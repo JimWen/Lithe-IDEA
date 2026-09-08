@@ -526,4 +526,11 @@ git diff --check
   `swift-real-sleep` 注解只提供 2 秒本地失败期限，不用真实休眠同步状态。
 - **最后复验通过**：无配置工具行的 Run/Stop 改为独立准入，新建任务后从列表点击 Run
   生成新的成功任务，再从列表停止长测试，终态为已取消。单模块仍无 generated.json。
-  原创 G/R 在深浅色下均可读，应用和测试子进程退出干净。待按已验收源码提交并替换系统安装。
+  原创 G/R 在深浅色下均可读，应用和测试子进程退出干净。
+- **提交与系统安装**：实现提交 `211395cc`，从该提交的干净独立检出打包，完整 Swift
+  1168 项 / 128 suites 通过（35.011 s），报告 `macos-go-committed.*`。该检出未包含
+  原工作区尚未完成的 Search 改动，因此测试数与上方工作区结果不同。
+  `/Applications/Lithe.app` 已替换，构建标记为 `211395cc` / dirty=false；签名与包内
+  二进制 SHA-256 一致。安装版 Go Test、Cargo Run 实际点击通过，退出后无本批进程残留。
+  证据为 `.artifacts/goland-parity/b7a3-gui/installation.json`、
+  `13-installed-go-test.png` 和 `14-installed-cargo-run.png`。

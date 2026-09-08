@@ -46,6 +46,12 @@ extension AppModel {
                 self?.handleLanguageSessionChange()
             }
         )
+        observeModuleFeature(
+            .languageIntelligence,
+            observation: capability.sessions.$catalogSnapshot.sink { [weak self] catalog in
+                self?.languageToolingFeature.updateSessionCatalog(catalog)
+            }
+        )
         capability.tools.onCandidatesChanged = { [weak self] providerID in
             guard let self,
                   self.languageToolingFeature.shouldRetryCandidate(providerID: providerID),

@@ -84,6 +84,12 @@ Rust Core 的 `lsp.builtinCompletions`、`lsp.builtinHover` 和
 
 ## Catalog 与工具发现
 
+原生语言插件的静态 manifest 只参与文件识别，不携带可执行启动配置。已激活的
+`LanguageServerExtensionProviding` 注册后，由 session manager 将其实际 launch descriptor
+投影到有效目录；工具发现与设置页消费同一份目录。注销、禁用或目录变更移除投影，
+不得恢复宿主进程兜底。候选缓存同时匹配 provider 与完整 descriptor，迟到的验证结果不能
+覆盖新的刷新；模块结束前取消并等待其有界工具验证任务。
+
 内置 provider catalog 位于
 [`rust/lithe-core/resources/lsp/language-providers.json`](../../rust/lithe-core/resources/lsp/language-providers.json)。项目可以通过 `.lithe/lsp/language-providers.json` 按 `id` 覆盖内置字段、添加 provider，或使用 `disabled: true` 禁用 provider。配置格式由 [`docs/reference/language-providers.schema.json`](../reference/language-providers.schema.json) 定义：
 

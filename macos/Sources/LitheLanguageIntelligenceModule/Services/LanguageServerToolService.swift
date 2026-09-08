@@ -72,13 +72,14 @@ package enum LanguageServerToolConfigurationError: LocalizedError, Equatable {
 package final class LanguageServerToolService: ObservableObject {
     @Published package private(set) var customExecutablePaths: [String: String]
     @Published package private(set) var installationStates: [String: LanguageServerInstallationState] = [:]
-    @Published private var validatedCandidates: [String: [RuntimeToolCandidate]] = [:]
+    @Published private var validatedCandidates: [String: ValidatedLanguageServerCandidates] = [:]
     package var onCandidatesChanged: ((String) -> Void)?
 
     private let runtimeService: any LanguageToolRuntimePort
     private let commandRunner: any LanguageToolCommandRunning
     private let settingsStore: any LanguageToolSettingsStoring
     private var validationCache: [ExecutableValidationKey: ExecutableValidationResult] = [:]
+    private var refreshIDs: [String: UUID] = [:]
 
     package init(
         runtimeService: any LanguageToolRuntimePort,
@@ -108,8 +109,9 @@ package final class LanguageServerToolService: ObservableObject {
     }
 
     package func candidates(for descriptor: LanguageProviderDescriptor) -> [RuntimeToolCandidate] {
-        if let cached = validatedCandidates[descriptor.id] {
-            return cached
+        guard descriptor.languageServerLaunch != nil else { return [] }
+        if let cached = validatedCandidates[descriptor.id], cached.descriptor == descriptor {
+            return cached.candidates
         }
         guard descriptor.languageServerLaunch?.validationArguments.isEmpty != false else {
             return []
@@ -117,31 +119,42 @@ package final class LanguageServerToolService: ObservableObject {
         return discoveredCandidates(for: descriptor)
     }
 
+    package func hasCompletedDiscovery(for descriptor: LanguageProviderDescriptor) -> Bool {
+        validatedCandidates[descriptor.id]?.descriptor == descriptor
+    }
+
     @discardableResult
     package func refreshCandidates(
         for descriptor: LanguageProviderDescriptor
     ) async -> [RuntimeToolCandidate] {
+        guard !Task.isCancelled else { return [] }
+        let refreshID = UUID()
+        refreshIDs[descriptor.id] = refreshID
         let discovered = discoveredCandidates(for: descriptor)
-        let arguments = descriptor.languageServerLaunch?.validationArguments ?? []
-        guard !arguments.isEmpty else {
-            validatedCandidates[descriptor.id] = discovered
-            onCandidatesChanged?(descriptor.id)
-            return discovered
-        }
         var usable: [RuntimeToolCandidate] = []
         for candidate in discovered {
+            guard !Task.isCancelled, refreshIDs[descriptor.id] == refreshID else { return [] }
             if await validate(candidate, for: descriptor).isUsable {
                 usable.append(candidate)
             }
         }
-        validatedCandidates[descriptor.id] = usable
+        guard !Task.isCancelled, refreshIDs[descriptor.id] == refreshID else { return [] }
+        validatedCandidates[descriptor.id] = ValidatedLanguageServerCandidates(
+            descriptor: descriptor, candidates: usable
+        )
         onCandidatesChanged?(descriptor.id)
         return usable
+    }
+
+    package func invalidateCandidates(for providerID: String) {
+        refreshIDs[providerID] = nil
+        validatedCandidates[providerID] = nil
     }
 
     private func discoveredCandidates(
         for descriptor: LanguageProviderDescriptor
     ) -> [RuntimeToolCandidate] {
+        guard descriptor.languageServerLaunch != nil else { return [] }
         var result: [RuntimeToolCandidate] = []
         var seen = Set<String>()
 
@@ -199,7 +212,7 @@ package final class LanguageServerToolService: ObservableObject {
             throw LanguageServerToolConfigurationError.executableInvalid(normalized)
         }
         validationCache.removeAll()
-        validatedCandidates[descriptor.id] = nil
+        invalidateCandidates(for: descriptor.id)
         let candidate = RuntimeToolCandidate(
             command: descriptor.languageServerLaunch?.executableNames.first ?? descriptor.id,
             executableURL: executableURL,
@@ -220,7 +233,7 @@ package final class LanguageServerToolService: ObservableObject {
 
     package func clearCustomExecutablePath(for providerID: String) {
         customExecutablePaths[providerID] = nil
-        validatedCandidates[providerID] = nil
+        invalidateCandidates(for: providerID)
         settingsStore.saveLanguageToolExecutablePaths(customExecutablePaths)
     }
 
@@ -257,7 +270,7 @@ package final class LanguageServerToolService: ObservableObject {
         let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
         if result.succeeded {
             validationCache.removeAll()
-            validatedCandidates[descriptor.id] = nil
+            invalidateCandidates(for: descriptor.id)
             installationStates[descriptor.id] = .installed(
                 output.isEmpty ? "brew install \(formula) completed." : output
             )
@@ -306,6 +319,11 @@ package final class LanguageServerToolService: ObservableObject {
         validationCache[key] = validation
         return validation
     }
+}
+
+private struct ValidatedLanguageServerCandidates {
+    let descriptor: LanguageProviderDescriptor
+    let candidates: [RuntimeToolCandidate]
 }
 
 private struct ExecutableValidationKey: Hashable {

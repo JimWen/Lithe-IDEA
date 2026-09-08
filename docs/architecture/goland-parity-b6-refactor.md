@@ -1,6 +1,6 @@
 # B6 重构：语义编辑事务与 Refactor This
 
-状态：基于 `3680935d`。**第三版，待重审，未实施。** 第一版因「只核查 LSP 解析侧」被否；
+状态：基于 `3680935d`。**第四版，B6a1a 能力纠正与报文快照已实现并通过 Rust 计时及真实 gopls 协议回归；真实编辑/点击及独立候选复验通过；系统替换待提交后执行，其余功能未实施（见 §3.4–3.6）。** 第一版因「只核查 LSP 解析侧」被否；
 第二版补上协商侧与反向请求侧后仍被独立审查**不放行**，列出 9 条阻塞问题。本版按那 9 条
 逐条修订，并采纳其对 B3b 归属冲突的处置建议。承接
 [B6 设计基线](goland-parity-implementation.md) 与
@@ -105,7 +105,7 @@ C2、C3、C4、C4b、C8、C12、N6、N7、R2 是**当前已存在的正确性缺
 
 | 子批 | 交付 | 依赖 | 不属于本批 |
 | --- | --- | --- | --- |
-| **B6a1a** | 协商侧 capabilities 补齐 + 服务器行为重测 | 无 | 解析侧、白名单、任何 Swift 改动 |
+| **B6a1a** | 独立探针重测 + 纠正不实能力声明；新增生产能力按 §3.1 门控 | 无 | 尚无可用消费方的能力声明 |
 | **B6a1b** | `workspace/applyEdit` 反向请求：延迟响应、相关性、新事件与新命令 | B6a1a（其必要性与形状由 a1a 的重测决定） | 编辑的实际应用 |
 | B6a2 | 解析保真（入站 + **出站**）、prepareRename/selectionRange/documentSymbol、feature flag 与嵌套 capability 探测 | B6a1a | 编辑的实际应用 |
 | B6b1 | `WorkspaceTextEditCoordinator` 事务：版本校验、编辑租约、资源操作、失败回滚、恢复记录、LSP 回同步。**不含跨文件 undo** | B6a2 | 跨文件 undo、Search 接入 |
@@ -113,7 +113,7 @@ C2、C3、C4、C4b、C8、C12、N6、N7、R2 是**当前已存在的正确性缺
 | B6c | Refactor This 入口 + Rename（符号/文件/包） | B6b1 | Extract/Inline/Change Signature |
 | B6d | Extract/Inline/Change Signature、Move/Copy/Safe Delete | B6c、B6a1b（若 a1a 重测确认仍需要） | 非 Go 语言的 Go 特有语义 |
 
-**B6a1a 是唯一可以立即开工的子批。** 其余各批在 a1a 的重测结论回写本文之前不排期。
+B6a1a 的探针结论已回写 §3.4；生产能力修正及测试结果见 §3.5。B6a2 的 symbol 分支须将协商、请求、保真解析与消费者一起交付，不能先宣称能力再补实现。
 
 ### 2.2 B3b 归属冲突的处置（采纳审查建议）
 
@@ -154,28 +154,24 @@ C2、C3、C4、C4b、C8、C12、N6、N7、R2 是**当前已存在的正确性缺
 
 ## 3. B6a1a：协商侧补齐与服务器行为重测
 
-范围**只限** `rust/lithe-core/src/lsp/interface/client.rs` 的 initialize capabilities 块
-（`:31-108`）。不含解析侧改动、不含白名单新增方法、不含任何 Swift 改动、不含任何菜单。
+探针与生产初始化声明分开验收。独立探针可声明计划中的完整能力，用来测量服务器行为；
+产品只声明当前 parser、handler 和原生消费方共同兑现的能力。不得把探针的 initialize JSON
+直接复制到生产客户端。
 
-### 3.1 逐字补齐清单
+### 3.1 能力启用门槛
 
-```
-textDocument.rename.prepareSupport = true
-textDocument.rename.prepareSupportDefaultBehavior = 1
-textDocument.documentSymbol.hierarchicalDocumentSymbolSupport = true
-textDocument.documentSymbol.dynamicRegistration = true
-textDocument.selectionRange.dynamicRegistration = true
-textDocument.codeAction.dataSupport = true                        ← 本版新增（N6）
-workspace.didChangeWatchedFiles.dynamicRegistration = true        ← 本版新增（N7）
-workspace.workspaceEdit.resourceOperations = ["create", "rename", "delete"]
-```
+| 能力 | 产品启用条件 |
+| --- | --- |
+| `workspace.applyEdit` | 当前无处理器，先纠正为不支持；B6a1b 请求相关性/延迟响应与 B6b1 编辑消费方均可用后启用 |
+| `codeAction.dataSupport` | B6a2 入站与出站保真、resolve 往返和既有 Source Actions 回归通过后启用 |
+| `rename.prepareSupport` / `prepareSupportDefaultBehavior` | B6a2 保真解析三种 prepareRename 结果，Swift 入口真正调用后启用 |
+| `documentSymbol.hierarchicalDocumentSymbolSupport` | 与 B6a2 请求白名单、两种响应归一化及 B7b 消费能力一起启用 |
+| `workspace.workspaceEdit.resourceOperations` | B6a2 不丢资源操作，B6b1 的 create/rename/delete 及失败恢复均通过后逐项启用；之前不声明 |
+| `documentSymbol` / `selectionRange` / `didChangeWatchedFiles.dynamicRegistration` | 实际支持注册、取消注册、过滤/生命周期及相应通知后才启用；手动文件变化通知不等于动态注册 |
 
-`prepareSupportDefaultBehavior = 1` 对应 LSP 3.17 的 `PrepareSupportDefaultBehavior.Identifier`
-（该枚举目前只有这一个值），实现时按规范链接核对，不凭记忆写数字。
-
-`workspace.didChangeWatchedFiles.relativePatternSupport` **本批不声明**：宿主的
-`lsp.workspaceFilesChanged` 发的是绝对 URI 列表，不做 pattern 注册；声明了就要兑现
-server 端的动态注册协商，超出本批范围。
+`prepareSupportDefaultBehavior = 1` 对应 LSP 3.17 的 `Identifier`；只有消费者支持默认范围推导时
+才启用。`workspace.didChangeWatchedFiles.relativePatternSupport` 本批仍不声明。
+每个生产能力改动必须有执行该 initialize fixture 的测试，且验证其消费链路。
 
 ### 3.2 `failureHandling` 与 `changeAnnotationSupport`：本批与 B6b1 都不声明
 
@@ -213,6 +209,73 @@ LSP 3.17 的 `FailureHandlingKind.transactional` 语义是「全部成功，或�
 第二版 §2 说 B6a1 「不做点击验收」，§9 又说「每批真实 ARM64 逐项点击验收」，两处矛盾。
 **本版定为**：B6a1a 不做新功能点击验收（没有新功能），但**必须做上述第 3 项的既有能力
 不回归复测**，因为它实际改变了服务器返回的报文形态。
+
+### 3.4 真实协议重测（2026-09-08）
+
+本机 gopls v0.20.0、Go 1.24.4 darwin/arm64，独立 JSON-RPC 探针在同一隔离 fixture 上测了
+三个 profile。请求、读取、进程组清理均有局部期限；不应用 server 发来的编辑，结束校验源码未变。
+原始请求/响应与摘要在 `.artifacts/plan-implementation/b6-probe/`。
+
+| profile | Rename provider | symbols | Extract constant（resolve 后） | server applyEdit 次数 |
+| --- | --- | --- | --- | --- |
+| 当前 baseline | `true` | 扁平 | command，无 edit / data | 1 |
+| 仅增加 dataSupport | `true` | 扁平 | edit + data，无 command | 0 |
+| 计划能力全集（仅探针） | `prepareProvider: true` | 层级 | edit + data，无 command | 0 |
+
+三组 Rename 都返回 edit，Source Actions 都返回 7 项。单独增加 dataSupport 已足以让本次
+Extract constant 经 resolve 返回 edit；因此该动作不再以 B6a1b 为硬前置，仍以 B6a2 出站保真、
+B6b1 编辑事务为前置。此结论不外推到未测的 Inline、Change Signature 等 command。
+反向 applyEdit 分支仍保留，待逐动作证明必要性后接入。
+
+这只是协议实验，**不是产品 B6a1a 验收完成**；后续生产能力修正见 §3.5，既有能力点击回归仍待实施；B6b1/B6b2 未实现，Search Apply 不能据此接通。
+
+### 3.5 B6a1a 能力纠正实施（2026-09-08）
+
+生产初始化现在声明 `workspace.applyEdit: false`，等待反向请求关联和宿主事务都可用后再启用。
+其余新增 refactoring 能力保持 §3.1 的门槛；此次没有照搬探针的计划能力全集。
+新增 `shared/fixtures/lsp/client-initialize-v1.json` 保存完整 initialize 请求，现有
+`client_core_initializes_and_applies_server_capabilities` 读取并逐字段比较实际发出的 JSON。
+只有版本占位符 `PACKAGE_VERSION` 用 crate 版本替换，不忽略任何 capabilities 字段。
+
+Rust 计时 **368 项通过**，报告 `.artifacts/test-stability/rust-b6-initialize.*`。
+真实 gopls 的修正声明 profile 保持 `renameProvider: true`、Rename edit 和 7 项 Source Actions，
+源码未修改，进程有界退出；报文在 `.artifacts/plan-implementation/b6-initialize-probe/`。
+**gopls 的旧式 Extract constant command 即使看到 applyEdit=false，仍发送一次反向请求。**
+因此能力声明纠正不能替代 B6a2 resolve 保真与 B6b1 事务；这次未声称该重构可用。
+产品链接及既有操作真实点击已通过，见 §3.6。
+
+<a id="b6a1a-acceptance"></a>
+
+### 3.6 B6a1a 产品复验与插件配置修复（2026-09-08）
+
+B6a1a 的产品复验发现独立于协议的既有缺陷：Go 插件提供了 gopls launch configuration，
+session manager 却只创建 runtime，没有发布到有效目录；设置页因此显示没有启动命令，
+工具发现也没有执行插件要求的 `gopls version` 验证。
+
+修复使用通用插件接线：已注册扩展投影有效目录，设置页和工具发现共用；注销与目录变更移除
+投影。缓存匹配完整 descriptor，刷新保留 operation identity，取消/注销后的迟到验证不再发布。
+模块停止前取消并等待有界验证任务；首次启动等待候选验证完成后再判定工具缺失。
+没有把 Go 硬编码回 bundled catalog，也没有安装新的 gopls。
+
+本轮实际 GUI 已完成：`greeting` → `salutation` Rename 更新定义与另外两个源文件；编辑器内
+加入未使用的 `os` 导入后，Source Actions → Organize Imports 删除它；保存后在 Go Tools
+双击测试目标，真实 `go test` 成功（0.481 s）。设置页显示 gopls 已验证且 LSP Running。
+证据为 `.artifacts/plan-implementation/b6-gui-evidence/01-gopls-verified.png` 至
+`04-go-test-after-edits.png`，以及 `after-rename-and-organize.json`。
+最终独立候选首次打开无缺失工具误报，自动进入 Running；关闭 LSP 后 gopls 进程退出，
+重新启用恢复 Running。截图 `06-isolated-restart-running.png`，首次 AX 记录
+`05-isolated-startup.txt`。各轮 Cmd-Q 后核对应用和本批 gopls 子进程全部退出。
+
+完整工作区 Swift 1181 项 / 130 suites 通过（35.556 s），剔除未完成 Search 改动的独立
+候选 1173 项 / 129 suites 通过（33.480 s）。报告为 `.artifacts/test-stability/`
+下的 `macos-b6-lsp-final.*` 与 `macos-b6-isolated.*`；新增候选时序和目录投影测试均约 1 ms，
+没有新增稳定性例外。Rust 368、Rust bridge verifier、service boundaries、shared contracts、
+test stability、ARM64 release build、codesign 和 diff 检查通过。目录只在配置变化时发布，
+不增加按键或拖动时的全页面刷新；UI 继续使用已有布局组件。
+
+代码复核通过：静态识别保持惰性，插件启动配置、工具发现与设置页一致；注销后不借用旧
+候选，延迟验证被取消/作废后不重启插件；能力声明仍遵守 §3.1。系统替换在本批提交后执行。
+本节不代表 B6a2/B6b1/B6b2 已完成。
 
 ## 4. B6a1b：`workspace/applyEdit` 反向请求
 
@@ -540,7 +603,7 @@ Search 替换与重构预览复用同一组件、各自持有自己的预览模�
 - 若重测显示 gopls 改为经 `codeAction/resolve` 返回 edit，
   则主路径改为 resolve 往返（§5.3 的出站无损是硬前置），B6a1b 的优先级下调。
 
-**重测前不写死任何一种。**
+Extract constant 以 §3.4 的 resolve 结果为准；其他动作仍逐项实测，不从单一动作外推。
 
 逐项以实际 gopls 能力为准，缺失项才由 Go language-support 插件的语义工具补足；
 补足方案（Go AST/types）单独立项审查，不在本文放行。

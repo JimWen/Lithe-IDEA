@@ -306,6 +306,9 @@ final class AppModel: ObservableObject, Identifiable {
     func clearModuleBindings(for moduleID: ModuleID) {
         moduleFeatureObservations[moduleID] = nil
         moduleCapabilities = moduleCapabilities.filter { $0.value.moduleID != moduleID }
+        if moduleID == .languageIntelligence {
+            languageToolingFeature.updateSessionCatalog(nil)
+        }
         for ownership in services.pluginCatalog.languageSupports.values {
             let support = ownership.declaration
             if support.languageServerModuleID == moduleID {
@@ -1415,6 +1418,15 @@ final class AppModel: ObservableObject, Identifiable {
         }
         do {
             guard let languageToolingSessions = languageToolingSessionsIfActive else { return false }
+            if let effectiveDescriptor = languageToolingSessions.provider(for: document.url),
+               effectiveDescriptor.languageServerLaunch?.validationArguments.isEmpty == false,
+               let tools = languageServerToolsIfActive,
+               !tools.hasCompletedDiscovery(for: effectiveDescriptor) {
+                // Discovery completes asynchronously after plugin registration.
+                // Its callback retries this document without a false missing-tool alert.
+                languageToolingFeature.awaitCandidates(providerID: descriptor.id)
+                return false
+            }
             try languageToolingSessions.synchronizeLanguageServer(
                 for: document.url,
                 text: document.text,

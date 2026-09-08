@@ -11,8 +11,10 @@ final class LanguageToolingFeatureModel: ObservableObject {
     @Published private(set) var catalogSnapshot: LanguageProviderCatalogSnapshot
     private(set) var disabledProviderIDs: Set<String> = []
     private(set) var startupFailures: [String: String] = [:]
+    private var providersAwaitingCandidates: Set<String> = []
 
     private let catalogSource: any LanguageProviderCatalogSource
+    private var sourceSnapshot: LanguageProviderCatalogSnapshot
     private var sessionsProvider: @MainActor () -> LanguageToolingSessionManager?
     private var documentsProvider: (@MainActor () -> [EditorDocument])?
     private var workspaceProvider: (@MainActor () -> URL?)?
@@ -25,6 +27,7 @@ final class LanguageToolingFeatureModel: ObservableObject {
         sessionsProvider: @escaping @MainActor () -> LanguageToolingSessionManager?
     ) {
         self.catalogSource = catalogSource
+        self.sourceSnapshot = catalogSnapshot
         self.catalogSnapshot = catalogSnapshot
         catalog = catalogSnapshot.catalog
         self.sessionsProvider = sessionsProvider
@@ -51,13 +54,24 @@ final class LanguageToolingFeatureModel: ObservableObject {
     func resetWorkspaceState() {
         disabledProviderIDs.removeAll()
         startupFailures.removeAll()
+        providersAwaitingCandidates.removeAll()
     }
 
     func reloadCatalog(for workspaceURL: URL?) {
         let snapshot = catalogSource.load(workspaceURL: workspaceURL)
-        catalogSnapshot = snapshot
-        catalog = snapshot.catalog
+        sourceSnapshot = snapshot
         sessionsProvider()?.updateCatalog(snapshot.catalog)
+        updateSessionCatalog(sessionsProvider()?.catalogSnapshot)
+    }
+
+    func updateSessionCatalog(_ sessionCatalog: LanguageProviderCatalog?) {
+        catalog = sessionCatalog ?? sourceSnapshot.catalog
+        catalogSnapshot = LanguageProviderCatalogSnapshot(
+            catalog: catalog,
+            schemaVersion: sourceSnapshot.schemaVersion,
+            origin: sourceSnapshot.origin,
+            issues: sourceSnapshot.issues
+        )
     }
 
     func isDisabled(_ providerID: String) -> Bool {
@@ -70,6 +84,7 @@ final class LanguageToolingFeatureModel: ObservableObject {
             synchronizeOpenDocuments(providerID: providerID)
         } else {
             disabledProviderIDs.insert(providerID)
+            providersAwaitingCandidates.remove(providerID)
             sessionsProvider()?.recordLanguageServerLog(
                 providerID: providerID,
                 level: .warning,
@@ -94,9 +109,15 @@ final class LanguageToolingFeatureModel: ObservableObject {
 
     func markActivationSucceeded(providerID: String) {
         startupFailures[providerID] = nil
+        providersAwaitingCandidates.remove(providerID)
+    }
+
+    func awaitCandidates(providerID: String) {
+        providersAwaitingCandidates.insert(providerID)
     }
 
     func markActivationFailed(providerID: String, descriptor: LanguageProviderDescriptor, error: Error) {
+        providersAwaitingCandidates.remove(providerID)
         let message = error.localizedDescription
         guard startupFailures[providerID] != message else { return }
         startupFailures[providerID] = message
@@ -110,7 +131,7 @@ final class LanguageToolingFeatureModel: ObservableObject {
     }
 
     func shouldRetryCandidate(providerID: String) -> Bool {
-        startupFailures[providerID] != nil
+        startupFailures[providerID] != nil || providersAwaitingCandidates.contains(providerID)
     }
 
     private func synchronizeOpenDocuments(providerID: String) {

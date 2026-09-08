@@ -111,6 +111,46 @@ struct LanguageIntelligenceModuleTests {
     }
 
     @Test
+    func registeredExtensionProjectsLaunchConfigurationAndCatalogReloadRetainsIt() throws {
+        let inert = LanguageProviderDescriptor(
+            id: "go", displayName: "Go", fileExtensions: ["go"],
+            capabilities: [.languageServer], activationPolicy: .onDemand
+        )
+        let catalog = LanguageProviderCatalog(descriptors: [inert])
+        let factory = TestLanguageProviderRuntimeFactory()
+        let manager = LanguageToolingSessionManager(
+            catalog: catalog, runtimeFactory: factory, extensionRequiredProviderIDs: ["go"]
+        )
+        let support = LanguageSupportDeclaration(
+            id: "go", displayName: "Go", fileExtensions: ["go"],
+            languageServerModuleID: .languageServerExtension("go")
+        )
+        let provider = TestLanguageServerExtensionProvider()
+        let source = URL(fileURLWithPath: "/workspace/main.go")
+
+        #expect(manager.provider(for: source)?.languageServerLaunch == nil)
+        #expect(manager.registerLanguageServerExtension(provider, support: support))
+        let registered = try #require(manager.catalogSnapshot.provider(for: source))
+        #expect(registered.languageServerLaunch?.executableNames == ["gopls"])
+        #expect(registered.languageServerLaunch?.validationArguments == ["version"])
+
+        manager.updateCatalog(catalog)
+        #expect(manager.provider(for: source) == registered)
+        #expect(manager.registerLanguageServerExtension(provider, support: support))
+        #expect(factory.extensionRequests.count == 1)
+
+        manager.unregisterLanguageServerExtension(languageID: "go")
+        #expect(manager.provider(for: source) == inert)
+        #expect(manager.registerLanguageServerExtension(provider, support: support))
+        #expect(manager.provider(for: source) == registered)
+        #expect(factory.extensionRequests.count == 2)
+
+        manager.updateCatalog(LanguageProviderCatalog(descriptors: []))
+        #expect(manager.provider(for: source) == nil)
+        #expect(manager.catalogSnapshot.descriptors.isEmpty)
+    }
+
+    @Test
     func javaWorkspaceResetUsesTheFingerprintFromTheActiveSession() throws {
         let root = URL(fileURLWithPath: "/workspace/java", isDirectory: true)
         let source = root.appendingPathComponent("src/Main.java")
@@ -1178,6 +1218,7 @@ private final class TestLanguageServerExtensionProvider: LanguageServerExtension
         languageID: "go",
         displayName: "Go",
         executableNames: ["gopls"],
+        validationArguments: ["version"],
         languageIdentifier: "go"
     )
     let lifecycle: any LanguageServerExtensionLifecycle = TestLanguageServerExtensionLifecycle()

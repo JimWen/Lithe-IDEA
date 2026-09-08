@@ -426,6 +426,14 @@ fn client_core_initializes_and_applies_server_capabilities() {
     );
     let initialize_message: Value =
         serde_json::from_str(&initialized.messages[0]).expect("initialize JSON");
+    // Snapshot the actual emitted request so later capability changes must
+    // explicitly update the contract; the package version is build metadata.
+    let mut expected_initialize: Value = serde_json::from_str(include_str!(
+        "../../../../shared/fixtures/lsp/client-initialize-v1.json"
+    ))
+    .expect("initialize fixture");
+    expected_initialize["params"]["clientInfo"]["version"] = json!(env!("CARGO_PKG_VERSION"));
+    assert_eq!(initialize_message, expected_initialize);
     assert_eq!(initialize_message["method"], "initialize");
     assert_eq!(
         initialize_message["params"]["rootUri"],
@@ -445,7 +453,7 @@ fn client_core_initializes_and_applies_server_capabilities() {
     );
     let client_capabilities = &initialize_message["params"]["capabilities"];
     assert_eq!(client_capabilities["workspace"]["configuration"], true);
-    assert_eq!(client_capabilities["workspace"]["applyEdit"], true);
+    assert_eq!(client_capabilities["workspace"]["applyEdit"], false);
     assert_eq!(client_capabilities["workspace"]["workspaceFolders"], true);
     assert_eq!(
         client_capabilities["workspace"]["symbol"]["dynamicRegistration"],

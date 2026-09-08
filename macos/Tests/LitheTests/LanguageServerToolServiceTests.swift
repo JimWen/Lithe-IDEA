@@ -175,10 +175,86 @@ struct LanguageServerToolServiceTests {
         )
 
         #expect(service.executableVerificationState(for: rustDescriptor()) == .unavailable)
+        #expect(!service.hasCompletedDiscovery(for: rustDescriptor()))
         await service.refreshCandidates(for: rustDescriptor())
+        #expect(service.hasCompletedDiscovery(for: rustDescriptor()))
         #expect(service.executableVerificationState(for: rustDescriptor()) == .executableVerified)
         #expect(runner.requests.count == 1)
         #expect(runner.requests.first?.arguments == ["--version"])
+    }
+
+    @Test
+    func inertPluginCacheDoesNotHideActivatedLaunchOrBypassNewValidation() async {
+        let executableURL = URL(fileURLWithPath: "/tools/gopls")
+        let store = LanguageServerToolTestStore()
+        let runner = LanguageServerToolTestProcessRunner()
+        let service = LanguageServerToolService(
+            runtimeService: makeRuntime(
+                executablePaths: [executableURL.path],
+                candidates: ["gopls": [RuntimeToolCandidate(
+                    command: "gopls", executableURL: executableURL, source: .path
+                )]], store: store
+            ), commandRunner: runner, settingsStore: store
+        )
+        let inert = LanguageProviderDescriptor(
+            id: "go", displayName: "Go", fileExtensions: ["go"],
+            capabilities: [.languageServer], activationPolicy: .onDemand
+        )
+        let active = LanguageProviderDescriptor(
+            id: "go", displayName: "Go", fileExtensions: ["go"],
+            capabilities: [.languageServer], activationPolicy: .onDemand,
+            languageServerLaunch: LanguageServerLaunchDescriptor(
+                executableNames: ["gopls"], validationArguments: ["version"]
+            )
+        )
+
+        await service.refreshCandidates(for: inert)
+        #expect(service.executableURL(for: goDescriptor()) == executableURL)
+        await service.refreshCandidates(for: goDescriptor())
+        // A candidate discovered without validation cannot authorize a newly
+        // activated plugin's stricter launch configuration.
+        #expect(service.executableURL(for: active) == nil)
+        #expect(!service.hasCompletedDiscovery(for: active))
+        await service.refreshCandidates(for: active)
+        #expect(service.executableURL(for: active) == executableURL)
+        #expect(service.executableVerificationState(for: active) == .executableVerified)
+        #expect(runner.requests.map(\.arguments) == [["version"]])
+        #expect(service.executableURL(for: inert) == nil)
+        service.invalidateCandidates(for: "go")
+        #expect(service.executableURL(for: active) == nil)
+        #expect(!service.hasCompletedDiscovery(for: active))
+    }
+
+    @Test(arguments: [false, true])
+    func lateValidationCannotPublishAfterInvalidationOrCancellation(cancel: Bool) async {
+        let executableURL = URL(fileURLWithPath: "/tools/rust-analyzer")
+        let store = LanguageServerToolTestStore()
+        let runner = GatedLanguageToolCommandRunner()
+        let service = LanguageServerToolService(
+            runtimeService: makeRuntime(
+                executablePaths: [executableURL.path],
+                candidates: ["rust-analyzer": [RuntimeToolCandidate(
+                    command: "rust-analyzer", executableURL: executableURL, source: .path
+                )]], store: store
+            ), commandRunner: runner, settingsStore: store
+        )
+        var notifications: [String] = []
+        service.onCandidatesChanged = { notifications.append($0) }
+        let descriptor = rustDescriptor()
+        let refresh = Task { await service.refreshCandidates(for: descriptor) }
+        defer { runner.release.open(); refresh.cancel() }
+
+        #expect(await runner.entered.waitUntilOpen())
+        if cancel {
+            refresh.cancel()
+        } else {
+            service.invalidateCandidates(for: descriptor.id)
+        }
+        runner.release.open()
+
+        #expect(await refresh.value.isEmpty)
+        #expect(notifications.isEmpty)
+        #expect(service.executableURL(for: descriptor) == nil)
     }
 
     @Test
@@ -380,6 +456,25 @@ private final class LanguageServerToolTestProcessRunner: ProcessRunner, Language
             timeoutMilliseconds: timeoutMilliseconds
         ))
         return LanguageToolCommandResult(output: result.output, exitCode: result.exitCode)
+    }
+}
+
+private final class GatedLanguageToolCommandRunner: LanguageToolCommandRunning, Sendable {
+    let entered = TestGate()
+    let release = TestGate()
+
+    func runLanguageToolCommand(
+        operationID _: String,
+        executableURL _: URL,
+        arguments _: [String],
+        environment _: [String: String],
+        timeoutMilliseconds _: Int
+    ) -> LanguageToolCommandResult {
+        // The service owns the non-cooperative worker required by this sync
+        // port. Both gates are released on failure and have local deadlines.
+        entered.open()
+        let released = release.waitSynchronously(timeout: 2)
+        return LanguageToolCommandResult(output: "validated", exitCode: released ? 0 : 1)
     }
 }
 
