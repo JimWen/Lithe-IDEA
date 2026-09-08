@@ -36,47 +36,29 @@ extension AppModel {
         let options = suppliedOptions ?? projectSearchOptions
         let scope = projectSearchScope
         let directory = projectSearchDirectory
+        let textScope = capturedSearchScope(rootURL: workspaceURL)
+        let buffers = searchBufferIdentity(rootURL: workspaceURL)
+        let overrides = openDocumentTextOverrides(rootURL: workspaceURL, scope: textScope)
         let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
             guard let self else { return false }
             return self.searchRequests.isCurrent(request) && self.currentWorkspaceIdentity == identity
                 && self.searchQuery == query && self.projectSearchScope == scope
                 && (suppliedOptions != nil || self.projectSearchOptions == options)
                 && self.projectSearchDirectory == directory
+                && self.searchBufferIdentity(rootURL: workspaceURL) == buffers
         }
         guard let searchFeature = await searchRequests.activate(
             for: request, isValid: isCurrent, operation: { await self.activateSearchModule() }
         ) else { return }
         projectSearchError = nil
-        if options.regularExpression, !query.isEmpty {
-            do { _ = try NSRegularExpression(pattern: query) }
-            catch {
-                searchFeature.clearProjectSearch()
-                projectSearchError = error.localizedDescription
-                return
-            }
-        }
-        var root = workspaceURL
-        if scope == .directory, !directory.isEmpty {
-            root = directory.hasPrefix("/")
-                ? URL(fileURLWithPath: directory).standardizedFileURL
-                : workspaceURL.appendingPathComponent(directory).standardizedFileURL
-            let base = workspaceURL.standardizedFileURL.path
-            guard (root.path == base || root.path.hasPrefix(base + "/")),
-                  workspaceFileOperations.isDirectory(at: root) else {
-                searchFeature.clearProjectSearch()
-                projectSearchError = String(localized: "Choose a directory inside the current project.")
-                return
-            }
-        }
         await searchFeature.searchProject(
-            at: root, query: query, options: options,
+            at: workspaceURL, query: query, options: options,
             visibilityRules: settings.fileVisibilityRules.searchRules,
-            paths: scope == .openFiles ? openDocuments.compactMap {
-                workspaceRelativePath(for: $0.url, root: workspaceURL)
-            } : nil,
-            textOverrides: scope == .openFiles ? openDocumentTextOverrides(rootURL: workspaceURL) : [:],
-            isCurrent: isCurrent
+            scope: textScope, textOverrides: overrides, isCurrent: isCurrent
         )
+        if isCurrent() {
+            projectSearchError = searchFeature.searchFailure?.localizedDescription
+        }
         try? services.moduleRuntime.markIdle(.search)
     }
 
@@ -170,21 +152,23 @@ extension AppModel {
         let query = projectReplaceQuery
         let replacement = projectReplaceText
         let options = projectReplaceOptions
-        let files = projectFiles
-        let overrides = openDocumentTextOverrides(rootURL: rootURL)
+        let scope = capturedSearchScope(rootURL: rootURL)
+        let buffers = searchBufferIdentity(rootURL: rootURL)
+        let overrides = openDocumentTextOverrides(rootURL: rootURL, scope: scope)
         let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
             guard let self else { return false }
             return self.searchRequests.isCurrent(request) && self.currentWorkspaceIdentity == identity
                 && self.isProjectReplaceVisible && self.projectReplaceQuery == query
                 && self.projectReplaceText == replacement && self.projectReplaceOptions == options
-                && self.projectFiles == files && self.openDocumentTextOverrides(rootURL: rootURL) == overrides
+                && self.capturedSearchScope(rootURL: rootURL) == scope
+                && self.searchBufferIdentity(rootURL: rootURL) == buffers
         }
         guard let searchFeature = await searchRequests.activate(
             for: request, isValid: isCurrent, operation: { await self.activateSearchModule() }
         ) else { return }
         let accepted = await searchFeature.previewProjectReplacement(
             at: rootURL, query: query, replacement: replacement,
-            paths: files.compactMap { workspaceRelativePath(for: $0, root: rootURL) },
+            scope: scope,
             textOverrides: overrides, options: options,
             visibilityRules: settings.fileVisibilityRules.searchRules, isCurrent: isCurrent
         )
@@ -195,7 +179,7 @@ extension AppModel {
 
     func applyProjectReplacement() async {
         guard let rootURL = workspaceURL,
-              !projectReplaceQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !projectReplaceQuery.isEmpty,
               let searchFeature = await activateSearchModule(),
               !searchFeature.isLoadingProjectReplacement else { return }
         let result = await searchFeature.applyProjectReplacement(
@@ -234,9 +218,32 @@ extension AppModel {
         }
     }
 
-    private func openDocumentTextOverrides(rootURL: URL) -> [String: String] {
+    private func capturedSearchScope(rootURL: URL) -> ProjectTextScope {
+        switch projectSearchScope {
+        case .project: return .project
+        case .directory: return .directory(projectSearchDirectory)
+        case .openFiles:
+            return .files(openDocuments.compactMap { workspaceRelativePath(for: $0.url, root: rootURL) }.sorted())
+        }
+    }
+
+    private func searchBufferIdentity(rootURL: URL) -> [String] {
+        openDocuments.compactMap { document in
+            guard let path = workspaceRelativePath(for: document.url, root: rootURL) else { return nil }
+            return "\(path):\(document.id):\(document.lifecycleState.revision)"
+        }.sorted()
+    }
+
+    private func openDocumentTextOverrides(rootURL: URL, scope: ProjectTextScope = .project) -> [String: String] {
         Dictionary(uniqueKeysWithValues: openDocuments.compactMap { document in
             guard let path = workspaceRelativePath(for: document.url, root: rootURL) else { return nil }
+            switch scope {
+            case .project: break
+            case .directory(let directory):
+                guard directory.isEmpty || path.hasPrefix(directory + "/") else { return nil }
+            case .files(let paths):
+                guard paths.contains(path) else { return nil }
+            }
             return (path, document.text)
         })
     }

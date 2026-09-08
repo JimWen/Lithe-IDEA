@@ -26,6 +26,16 @@ struct ProjectSearchView: View {
                 Text(error).font(.system(size: 12)).foregroundStyle(LitheTheme.error)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16)
             }
+            if model.searchFeatureIfActive?.searchIsIncomplete == true {
+                Text("Results are incomplete. Narrow the search scope.")
+                    .font(.system(size: 12)).foregroundStyle(LitheTheme.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16)
+            }
+            ForEach(model.searchFeatureIfActive?.searchIssues ?? [], id: \.self) { issue in
+                Text([issue.path, issue.message].compactMap { $0 }.joined(separator: ": "))
+                    .font(.system(size: 12)).foregroundStyle(LitheTheme.error)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16)
+            }
             GeometryReader { geometry in
                 LitheSplitPaneView(
                     axis: .vertical, placement: .leading,

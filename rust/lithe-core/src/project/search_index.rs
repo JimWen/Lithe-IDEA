@@ -281,6 +281,17 @@ impl WorkspaceSearchIndex {
         self.path_to_id.get(path).copied()
     }
 
+    /// Candidate pruning cannot prove a negative when indexing could not read
+    /// searchable bytes. Scoped previews must inspect these paths themselves
+    /// so decoding, size and permission failures remain explicit.
+    pub(crate) fn unindexed_content_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.files.iter().enumerate().filter_map(|(id, file)| {
+            file.as_ref()
+                .filter(|file| file.trigrams.is_empty())
+                .map(|_| id as u32)
+        })
+    }
+
     pub(crate) fn candidate_ids(
         &self,
         query: &str,
@@ -390,22 +401,22 @@ fn collect_files(
     files: &mut Vec<PathBuf>,
 ) -> Result<(), CoreError> {
     crate::protocol::cancellation::check()?;
-    let mut children = fs::read_dir(path)
-        .map_err(CoreError::from)?
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let child_path = entry.path();
-            let metadata = fs::symlink_metadata(&child_path).ok()?;
-            if metadata.file_type().is_symlink() {
-                return None;
-            }
-            let relative = relative_path(&child_path, root);
-            if rules.is_hidden(&relative, metadata.is_dir()) {
-                return None;
-            }
-            Some((child_path, metadata.is_dir()))
-        })
-        .collect::<Vec<_>>();
+    let mut children = Vec::new();
+    for entry in fs::read_dir(path)? {
+        crate::protocol::cancellation::check()?;
+        let child_path = entry?.path();
+        // An unreadable directory entry is not evidence of an empty scope.
+        // Propagate it so scoped callers cannot label an incomplete index as a
+        // complete replacement preview.
+        let metadata = fs::symlink_metadata(&child_path)?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        let relative = relative_path(&child_path, root);
+        if !rules.is_hidden(&relative, metadata.is_dir()) {
+            children.push((child_path, metadata.is_dir()));
+        }
+    }
     children.sort_by(|left, right| {
         right.1.cmp(&left.1).then_with(|| {
             left.0

@@ -11,6 +11,10 @@ public struct SearchVisibilityRules: Hashable, Sendable {
 }
 
 public protocol SearchOperations: Sendable {
+    /// The authoritative Rust outcome; errors and incomplete previews are never empty successes.
+    func cancelTextPreview(operationID: String)
+    func textPreview(_ request: ProjectTextPreviewRequest) -> Result<ProjectTextPreview, ProjectSearchFailure>
+
     func warmSearchIndex(at rootURL: URL, visibilityRules: SearchVisibilityRules)
     func updateSearchIndex(at rootURL: URL, changedPaths: [String], visibilityRules: SearchVisibilityRules)
     func invalidateSearchIndex(at rootURL: URL, visibilityRules: SearchVisibilityRules)

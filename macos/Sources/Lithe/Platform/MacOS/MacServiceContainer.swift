@@ -535,6 +535,7 @@ final class MacServiceContainer {
             store: store,
             fileStorage: fileStorage,
             fileOperations: fileOperations,
+            workspaceTextEditFileOperations: MacWorkspaceTextEditFileOperations(),
             binaryFileViewerRegistry: binaryFileViewerRegistry,
             projectRuntimeService: runtimeService,
             gitWatchContextProvider: gitWatchContextProvider,

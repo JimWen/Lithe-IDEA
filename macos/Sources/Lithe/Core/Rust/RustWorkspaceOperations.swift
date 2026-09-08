@@ -128,6 +128,11 @@ struct RustWorkspaceOperations: WorkspaceOperations, Sendable {
 }
 
 extension RustWorkspaceOperations: SearchOperations {
+    func cancelTextPreview(operationID: String) { core.cancel(operationID: operationID) }
+    func textPreview(_ request: ProjectTextPreviewRequest) -> Result<ProjectTextPreview, ProjectSearchFailure> {
+        core.textPreview(request)
+    }
+
     func warmSearchIndex(at rootURL: URL, visibilityRules: SearchVisibilityRules) {
         warmSearchIndex(at: rootURL, visibilityRules: FileVisibilityRules(searchRules: visibilityRules))
     }

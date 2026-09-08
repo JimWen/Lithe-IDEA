@@ -58,12 +58,14 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     func applyLiveEditorText(_ newText: String) {
         let remainsUnpersisted = lifecycleState.status == .saving
             || lifecycleState.status == .conflict
-            || newText != savedText
+            || !newText.utf8.elementsEqual(savedText.utf8)
         replaceText(newText, publish: isDirty != remainsUnpersisted)
     }
 
     private func replaceText(_ newText: String, publish: Bool) {
-        guard storedText != newText else { return }
+        // Canonically equivalent Unicode strings can still be different file
+        // bytes. Document revision and dirty state must track the actual buffer.
+        guard !storedText.utf8.elementsEqual(newText.utf8) else { return }
         let nextRevision = lifecycleState.revision + 1
         let nextLifecycle: DocumentLifecycleState
         switch lifecycleState.status {
@@ -76,7 +78,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
                 operationId: lifecycleState.operationId
             )
         case .clean, .dirty:
-            if newText == savedText {
+            if newText.utf8.elementsEqual(savedText.utf8) {
                 nextLifecycle = .clean(revision: nextRevision)
             } else {
                 nextLifecycle = .dirty(

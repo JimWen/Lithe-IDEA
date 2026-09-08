@@ -146,9 +146,13 @@ struct RustCoreBridge: Sendable {
             let path: String
             let matches: [Match]
             let replacementText: String
+            let sourceText: String?
+            let edits: [ProjectReplacementEdit]?
         }
 
         let files: [File]
+        let status: ProjectTextPreview.Status?
+        let issues: [ProjectTextPreviewIssue]?
 
         func makeModels(at rootURL: URL) -> [ProjectReplacementFile] {
             files.map { file in
@@ -163,7 +167,9 @@ struct RustCoreBridge: Sendable {
                             occurrenceCount: match.occurrenceCount
                         )
                     },
-                    replacementText: file.replacementText
+                    replacementText: file.replacementText,
+                    sourceText: file.sourceText,
+                    edits: file.edits ?? []
                 )
             }
         }
@@ -1071,6 +1077,8 @@ struct RustCoreBridge: Sendable {
         let regularExpression: Bool
         let preserveCase: Bool
         let fileMask: String
+        var scope: ProjectTextScope? = nil
+        var purpose: ProjectTextPreviewPurpose? = nil
         let paths: [String]
         let textOverrides: [String: String]
         let hiddenDirectoryNames: [String]
@@ -1853,6 +1861,33 @@ struct RustCoreBridge: Sendable {
                 hiddenFilePatterns: hiddenFilePatterns
             )
         )
+    }
+
+    func textPreview(_ request: ProjectTextPreviewRequest) -> Result<ProjectTextPreview, ProjectSearchFailure> {
+        if request.scope.isEmpty || request.query.isEmpty {
+            return .success(ProjectTextPreview(files: [], status: .complete))
+        }
+        let result: Result<ReplacementPreviewPayload, CoreCallError> = executeResult(
+            command: "workspace.replacePreview",
+            payload: ReplacementPreviewRequest(
+                root: request.rootURL.standardizedFileURL.path,
+                query: request.query, replacement: request.replacement,
+                caseSensitive: request.options.caseSensitive, wholeWords: request.options.wholeWords,
+                regularExpression: request.options.regularExpression, preserveCase: request.options.preserveCase,
+                fileMask: request.options.fileMask, scope: request.scope, purpose: request.purpose,
+                paths: [], textOverrides: request.textOverrides,
+                hiddenDirectoryNames: request.visibilityRules.hiddenDirectoryNames,
+                hiddenFilePatterns: request.visibilityRules.hiddenFilePatterns
+            ), operationID: request.operationID, timeoutMilliseconds: 5_000
+        )
+        return result.mapError { ProjectSearchFailure(code: $0.code, message: $0.message, details: $0.details) }
+            .flatMap { payload in
+                guard let status = payload.status else {
+                    return .failure(ProjectSearchFailure(code: "not_supported", message: "The search engine does not support scoped previews."))
+                }
+                return .success(ProjectTextPreview(files: payload.makeModels(at: request.rootURL),
+                    status: status, issues: payload.issues ?? []))
+            }
     }
 
     func previewReplacement(

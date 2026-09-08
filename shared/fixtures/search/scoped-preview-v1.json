@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "empty-files",
+      "files": {
+        "a.txt": "needle"
+      },
+      "request": {
+        "query": "needle",
+        "replacement": "x",
+        "scope": {
+          "kind": "files",
+          "paths": []
+        },
+        "textOverrides": {
+          "a.txt": "needle"
+        }
+      },
+      "status": "complete",
+      "expected": []
+    },
+    {
+      "name": "project-overrides",
+      "files": {
+        "a.txt": "plain",
+        "b.txt": "needle"
+      },
+      "request": {
+        "query": "needle",
+        "replacement": "x",
+        "scope": {
+          "kind": "project"
+        },
+        "textOverrides": {
+          "a.txt": "😀 needle",
+          "b.txt": "plain",
+          "new.txt": "needle"
+        }
+      },
+      "status": "complete",
+      "expected": [
+        {
+          "path": "a.txt",
+          "sourceText": "😀 needle",
+          "replacementText": "😀 x",
+          "ranges": [
+            [
+              3,
+              6
+            ]
+          ]
+        },
+        {
+          "path": "new.txt",
+          "sourceText": "needle",
+          "replacementText": "x",
+          "ranges": [
+            [
+              0,
+              6
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "directory-keeps-root",
+      "files": {
+        "src/a.txt": "needle",
+        "other.txt": "needle"
+      },
+      "request": {
+        "query": "needle",
+        "replacement": "x",
+        "scope": {
+          "kind": "directory",
+          "path": "src"
+        },
+        "textOverrides": {
+          "src/new.txt": "needle"
+        }
+      },
+      "status": "complete",
+      "expected": [
+        {
+          "path": "src/a.txt",
+          "sourceText": "needle",
+          "replacementText": "x",
+          "ranges": [
+            [
+              0,
+              6
+            ]
+          ]
+        },
+        {
+          "path": "src/new.txt",
+          "sourceText": "needle",
+          "replacementText": "x",
+          "ranges": [
+            [
+              0,
+              6
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "exact-whitespace-bom-crlf",
+      "files": {
+        "a.txt": "﻿😀 x \r\n x \r\n"
+      },
+      "request": {
+        "query": " x ",
+        "replacement": " $1 ",
+        "scope": {
+          "kind": "project"
+        }
+      },
+      "status": "complete",
+      "expected": [
+        {
+          "path": "a.txt",
+          "sourceText": "﻿😀 x \r\n x \r\n",
+          "replacementText": "﻿😀 $1 \r\n $1 \r\n",
+          "ranges": [
+            [
+              3,
+              3
+            ],
+            [
+              8,
+              3
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "capture-zero-width",
+      "files": {
+        "a.txt": "😀é"
+      },
+      "request": {
+        "query": "(?P<letter>é)|^|$",
+        "replacement": "${letter}x",
+        "regularExpression": true,
+        "scope": {
+          "kind": "files",
+          "paths": [
+            "a.txt"
+          ]
+        }
+      },
+      "status": "complete",
+      "expected": [
+        {
+          "path": "a.txt",
+          "sourceText": "😀é",
+          "replacementText": "x😀éx",
+          "ranges": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unsupported-lookbehind",
+      "files": {
+        "a.txt": "xy"
+      },
+      "request": {
+        "query": "(?<=x)y",
+        "replacement": "z",
+        "regularExpression": true,
+        "scope": {
+          "kind": "project"
+        }
+      },
+      "errorCode": "parse_failed"
+    },
+    {
+      "name": "ambiguous-scope",
+      "files": {
+        "a.txt": "x"
+      },
+      "request": {
+        "query": "x",
+        "replacement": "z",
+        "scope": {
+          "kind": "project",
+          "paths": []
+        }
+      },
+      "errorCode": "invalid_request"
+    }
+  ]
+}

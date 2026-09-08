@@ -119,8 +119,11 @@ B6a1a 的探针结论已回写 §3.4；生产能力修正及测试结果见 §3.
 
 第二版把「B3b1 归属需在重审时明确指派」留给评审，这本身不是可实施方案。本版直接定案：
 
-1. **`WorkspaceTextEditCoordinator` 的唯一归属批次是 B6b1。** 该类目前在源码中**不存在**
-   （全仓只命中三份文档）。需同步修改 `goland-parity-b3b-replacement.md` 的分批表：
+1. **`WorkspaceTextEditCoordinator` 的唯一归属批次是 B6b1。** 当前已在
+   `macos/Sources/Lithe/Services/Workspace/WorkspaceTextEditCoordinator.swift` 落地纯协调器、
+   `WorkspaceTextEditFileOperations` 端口和 macOS 原子替换适配器，并通过两项补偿/源版本测试；
+   文档租约、LSP 回同步、Undo 和现有编辑入口接入仍未完成。需同步修改
+   `goland-parity-b3b-replacement.md` 的分批表：
    B3b2 一行改为「交付物并入 B6b1」；B3b3 拆为「跨文件 undo → 并入 B6b2」与
    「Search Apply 集成 → 留在 B3b」。B3b 保留 B3b1（契约批）与 B3b4（scope/occurrence 接 UI）。
 2. **B3b1 指派给 B3b 批次自身（Search 侧 owner），不由 B6 顺手带做。** 理由是文件集完全不重叠：

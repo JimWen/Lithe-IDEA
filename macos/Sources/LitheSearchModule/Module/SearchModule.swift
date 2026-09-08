@@ -34,7 +34,10 @@ public final class SearchModule: LitheModule {
     }
 
     public func sleep() async { releaseFeature() }
-    public func shutdown() async { releaseFeature() }
+    public func shutdown() async {
+        await capability?.feature.shutdownWork()
+        releaseFeature()
+    }
 
     public func exportedCapabilities() -> [ModuleCapabilityID: AnyObject] {
         guard let capability else { return [:] }
@@ -62,5 +65,5 @@ private final class SearchTaskResource: ModuleResource {
     init(feature: SearchFeatureModel) { self.feature = feature }
     var moduleResourceKind: String { "search-tasks" }
     var isModuleResourceActive: Bool { feature.hasActiveModuleWork }
-    func stopModuleResource() async { feature.reset() }
+    func stopModuleResource() async { await feature.shutdownWork() }
 }

@@ -44,10 +44,35 @@ struct SearchLifecycleTests {
         case .reset: feature.reset()
         case .cancel: task.cancel()
         }
+        if lane == .replacement { #expect(feature.hasActiveModuleWork) }
         operations.firstGate.open()
         #expect(await task.value == false)
         #expect(!lane.isLoading(feature))
         #expect(lane.value(feature) == nil)
+    }
+
+    @Test
+    func shutdownRetainsPreviewOwnershipUntilItsWorkerActuallyReturns() async {
+        let operations = GatedSearchOperations()
+        let feature = SearchFeatureModel(operations: operations)
+        let shutdownStarted = TestGate()
+        var shutdownFinished = false
+        defer { operations.releaseAll(); feature.reset() }
+        let preview = Task { await SearchLane.replacement.run(feature, newest: false) }
+        #expect(await operations.firstStarted.waitUntilOpen())
+        let shutdown = Task {
+            shutdownStarted.open()
+            await feature.shutdownWork()
+            shutdownFinished = true
+        }
+        #expect(await shutdownStarted.waitUntilOpen())
+        #expect(!shutdownFinished)
+        #expect(feature.hasActiveModuleWork)
+        operations.firstGate.open()
+        #expect(await preview.value == false)
+        await shutdown.value
+        #expect(shutdownFinished)
+        #expect(!feature.hasActiveModuleWork)
     }
 
     @Test(arguments: [false, true])
@@ -147,7 +172,7 @@ enum SearchLane: CaseIterable {
             return value(feature) == (newest ? "new" : "old")
         case .replacement:
             return await feature.previewProjectReplacement(at: searchRoot, query: "same",
-                replacement: newest ? "new" : "old", paths: ["file.go"], textOverrides: [:],
+                replacement: newest ? "new" : "old", scope: .files(["file.go"]), textOverrides: [:],
                 visibilityRules: searchRules, isCurrent: { true })
         }
     }
@@ -173,6 +198,17 @@ enum SearchLane: CaseIterable {
 }
 
 private final class GatedSearchOperations: SearchOperations, @unchecked Sendable {
+    func cancelTextPreview(operationID: String) {}
+    func textPreview(_ request: ProjectTextPreviewRequest) -> Result<ProjectTextPreview, ProjectSearchFailure> {
+        enter(newest: request.replacement == "new")
+        return .success(ProjectTextPreview(files: [ProjectReplacementFile(
+            url: request.rootURL.appendingPathComponent("file.go"), relativePath: "file.go", matches: [
+                ProjectReplacementMatch(line: 1, before: "same", after: request.replacement, occurrenceCount: 1)
+            ], replacementText: request.replacement, sourceText: "old", edits: [
+                ProjectReplacementEdit(id: "file.go:0:0", line: 1, utf16Start: 0, utf16Length: 3, newText: request.replacement)
+            ])], status: .complete))
+    }
+
     let firstStarted = TestGate(), secondStarted = TestGate()
     let firstGate = TestGate(), secondGate = TestGate()
     func releaseAll() { firstGate.open(); secondGate.open() }

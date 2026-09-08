@@ -111,6 +111,35 @@ pub struct ReplacementFile {
     pub path: String,
     pub matches: Vec<ReplacementMatch>,
     pub replacement_text: String,
+    /// Exact pre-preview UTF-8 text. Legacy responses omit this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<String>,
+    /// Non-overlapping edits against `source_text`, never against intermediate text.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<ReplacementEdit>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// One selectable occurrence in the original document's UTF-16 coordinates.
+pub struct ReplacementEdit {
+    /// Stable within the exact source snapshot and relative file identity.
+    pub id: String,
+    /// One-based source line containing the original occurrence.
+    pub line: usize,
+    pub utf16_start: usize,
+    pub utf16_length: usize,
+    pub new_text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// A failed or skipped preview target; incomplete previews cannot be applied.
+pub struct ReplacementPreviewIssue {
+    /// Workspace-relative target, or null for a whole-request budget limit.
+    pub path: Option<String>,
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +147,11 @@ pub struct ReplacementFile {
 /// Non-mutating replacement preview grouped by workspace-relative path.
 pub struct ReplacementPreviewResponse {
     pub files: Vec<ReplacementFile>,
+    /// `complete` or `incomplete` for scoped requests; omitted for legacy clients.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<ReplacementPreviewIssue>,
 }
 
 #[derive(Debug, Clone, Serialize)]

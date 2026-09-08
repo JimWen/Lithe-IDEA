@@ -10,6 +10,7 @@ use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const BUILT_IN_HIDDEN_DIRECTORIES: &[&str] = &[
@@ -126,6 +127,13 @@ pub struct ReplacementPreviewRequest {
     pub file_mask: String,
     #[serde(default)]
     pub paths: Vec<String>,
+    /// Explicit scope opts into bounded, source-preserving preview semantics.
+    /// Omission retains the legacy interpretation of an empty `paths` list.
+    #[serde(default)]
+    pub scope: Option<super::scoped_replacement::ReplacementScope>,
+    /// Search previews may inspect read-only/hardlinked files but never write them.
+    #[serde(default)]
+    pub purpose: Option<super::scoped_replacement::PreviewPurpose>,
     #[serde(default)]
     pub text_overrides: HashMap<String, String>,
     #[serde(default)]
@@ -336,10 +344,17 @@ pub fn search_everywhere(request: SearchRequest) -> Result<SearchResponse, CoreE
 pub fn replace_preview(
     request: ReplacementPreviewRequest,
 ) -> Result<ReplacementPreviewResponse, CoreError> {
+    if request.scope.is_some() {
+        return super::scoped_replacement::preview(request);
+    }
     let root = existing_root(&request.root)?;
     let query = request.query.trim().to_string();
     if query.is_empty() {
-        return Ok(ReplacementPreviewResponse { files: Vec::new() });
+        return Ok(ReplacementPreviewResponse {
+            files: Vec::new(),
+            status: None,
+            issues: Vec::new(),
+        });
     }
     let rules = VisibilityRules::new(
         request.hidden_directory_names.clone(),
@@ -415,11 +430,17 @@ pub fn replace_preview(
                 path: relative,
                 matches,
                 replacement_text: replaced_lines.join("\n"),
+                source_text: None,
+                edits: Vec::new(),
             });
         }
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(ReplacementPreviewResponse { files })
+    Ok(ReplacementPreviewResponse {
+        files,
+        status: None,
+        issues: Vec::new(),
+    })
 }
 
 /// Builds or reuses the search index and reports its current size.
@@ -526,7 +547,7 @@ pub(crate) struct VisibilityRules {
 }
 
 impl VisibilityRules {
-    fn new(hidden_directories: Vec<String>, hidden_files: Vec<String>) -> Self {
+    pub(super) fn new(hidden_directories: Vec<String>, hidden_files: Vec<String>) -> Self {
         let mut directories = BUILT_IN_HIDDEN_DIRECTORIES
             .iter()
             .map(|value| (*value).to_string())
@@ -638,7 +659,7 @@ fn scan_node(
     })
 }
 
-fn existing_root(value: &str) -> Result<PathBuf, CoreError> {
+pub(super) fn existing_root(value: &str) -> Result<PathBuf, CoreError> {
     let path = PathBuf::from(value);
     let metadata = fs::metadata(&path)
         .map_err(|_| CoreError::new(ErrorCode::WorkspaceNotFound, "Workspace does not exist"))?;
@@ -779,7 +800,7 @@ fn apply_case_pattern(matched: &str, replacement: &str) -> String {
 }
 
 /// Splits a mask list such as `*.java, *.kt`; an empty list disables filtering.
-fn parse_file_mask(mask: &str) -> Vec<String> {
+pub(super) fn parse_file_mask(mask: &str) -> Vec<String> {
     mask.split(',')
         .map(|part| part.trim())
         .filter(|part| !part.is_empty())
@@ -788,7 +809,7 @@ fn parse_file_mask(mask: &str) -> Vec<String> {
 }
 
 /// Matches masks against the file name only and accepts any matching pattern.
-fn file_mask_allows(masks: &[String], path: &str) -> bool {
+pub(super) fn file_mask_allows(masks: &[String], path: &str) -> bool {
     if masks.is_empty() {
         return true;
     }
@@ -828,7 +849,7 @@ fn glob_matches(pattern: &str, value: &str) -> bool {
 }
 
 /// Literal or regular-expression search semantics compiled for repeated matches.
-struct Matcher {
+pub(super) struct Matcher {
     expression: Regex,
     regular_expression: bool,
     whole_words: bool,
@@ -836,7 +857,75 @@ struct Matcher {
 }
 
 impl Matcher {
-    fn new(
+    /// Returns bounded byte ranges and replacements using the same matcher as
+    /// legacy previews. Coordinates still refer to the unchanged source line.
+    pub(super) fn replacement_edits(
+        &self,
+        text: &str,
+        replacement: &str,
+        preserve_case: bool,
+        max_edits: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<(usize, usize, String)>, CoreError> {
+        let budget_error =
+            || CoreError::new(ErrorCode::NotSupported, "Preview output exceeds its budget");
+        let mut edits = Vec::new();
+        let mut bytes = 0usize;
+        for captures in self.expression.captures_iter(text) {
+            crate::protocol::cancellation::check()?;
+            let matched = captures.get(0).expect("full regex match");
+            if !self.accepts_boundaries(text, matched.start(), matched.end()) {
+                continue;
+            }
+            if edits.len() == max_edits {
+                return Err(budget_error());
+            }
+            // Bound capture expansion before allocation. Each replacement byte
+            // can contribute at most one capture or literal byte; unmatched
+            // captures contribute nothing. Unicode case conversion is bounded
+            // separately because it can expand a character to several bytes.
+            let multiplier = if self.regular_expression && replacement.contains('$') {
+                captures
+                    .iter()
+                    .flatten()
+                    .map(|capture| capture.len())
+                    .max()
+                    .unwrap_or(0)
+                    .max(1)
+            } else if !self.regular_expression && preserve_case {
+                3
+            } else {
+                1
+            };
+            let expansion_bound = replacement
+                .len()
+                .checked_mul(multiplier)
+                .ok_or_else(budget_error)?;
+            if bytes
+                .checked_add(expansion_bound)
+                .ok_or_else(budget_error)?
+                > max_bytes
+            {
+                return Err(budget_error());
+            }
+            let mut new_text = String::new();
+            if self.regular_expression {
+                captures.expand(replacement, &mut new_text);
+            } else if preserve_case {
+                new_text = apply_case_pattern(matched.as_str(), replacement);
+            } else {
+                new_text.push_str(replacement);
+            }
+            bytes = bytes.checked_add(new_text.len()).ok_or_else(budget_error)?;
+            if bytes > max_bytes {
+                return Err(budget_error());
+            }
+            edits.push((matched.start(), matched.end(), new_text));
+        }
+        Ok(edits)
+    }
+
+    pub(super) fn new(
         query: &str,
         case_sensitive: bool,
         whole_words: bool,
@@ -1002,7 +1091,7 @@ fn line_signature(source: &str, byte_offset: usize) -> String {
     source[start..end].trim().to_string()
 }
 
-fn safe_relative_path_string(value: &str) -> Result<String, CoreError> {
+pub(super) fn safe_relative_path_string(value: &str) -> Result<String, CoreError> {
     let path = Path::new(value);
     if path.is_absolute() || invalid_relative_path(value) {
         return Err(CoreError::new(
@@ -1014,12 +1103,58 @@ fn safe_relative_path_string(value: &str) -> Result<String, CoreError> {
 }
 
 pub(crate) fn read_searchable_text(path: &Path) -> Option<String> {
-    let metadata = fs::metadata(path).ok()?;
+    // Search must never follow a link or open a special file. In particular,
+    // a FIFO can block the search worker indefinitely when treated like text.
+    let metadata = fs::symlink_metadata(path).ok()?;
     if !metadata.is_file() || metadata.len() > MAX_FILE_SIZE {
         return None;
     }
-    let text = fs::read_to_string(path).ok()?;
+    let text = String::from_utf8(read_regular_file(path, MAX_FILE_SIZE as usize).ok()?).ok()?;
     is_plain_text(&text).then_some(text)
+}
+
+/// Reads at most the given byte budget from a verified regular file. The native
+/// nonblocking open prevents a path swapped to a FIFO from capturing a worker.
+pub(super) fn read_regular_file(path: &Path, limit: usize) -> Result<Vec<u8>, CoreError> {
+    if !fs::symlink_metadata(path)?.is_file() {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "Preview target must be a regular file",
+        ));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Recheck the opened descriptor; pathname metadata cannot close the
+        // race between validation and opening a special file or final symlink.
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "Preview target must be a regular file",
+        ));
+    }
+    if metadata.len() > limit as u64 {
+        return Err(CoreError::new(
+            ErrorCode::NotSupported,
+            "Preview target exceeds the file size limit",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(CoreError::new(
+            ErrorCode::NotSupported,
+            "Preview target exceeds the file size limit",
+        ));
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn is_plain_text(text: &str) -> bool {

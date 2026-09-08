@@ -515,10 +515,55 @@ updates and deletions update this property together with the indexed contents.
 
 `workspace.replacePreview` accepts `root`, `query`, `replacement`, the same
 query options, optional workspace-relative `paths`, optional `textOverrides`
-keyed by relative path, and visibility fields. It returns `{ "files": [] }`
-where each file contains replacement matches and the complete
-`replacementText` to write. The command never writes files; callers can record
-history before using `file.write` for the selected files.
+keyed by relative path, and visibility fields. A legacy request without `scope`
+retains its historical behavior: an empty `paths` list searches the project;
+legacy results omit the new snapshot and completion fields.
+
+New Find/Replace callers send one explicit `scope`:
+
+- `{ "kind": "project" }`: visible project candidates plus editor overrides.
+- `{ "kind": "directory", "path": "src" }`: filter beneath `src` without
+  changing the workspace root; an empty directory path means the workspace root.
+- `{ "kind": "files", "paths": ["src/main.go"] }`: the exact file set, sorted
+  and deduplicated. An empty set returns immediately without indexing/matching,
+  including when overrides exist. Explicit files honor the file mask and bypass
+  visibility exclusions, as required for captured open documents.
+
+Scope paths must be normalized, workspace-relative paths. Unknown scope fields,
+escaping paths, and nonempty legacy `paths` combined with `scope` are rejected.
+All overrides participate before candidate matching; a buffer replaces the disk
+version rather than supplementing it. Unreadable/unindexed content is inspected
+rather than being assumed to contain no matches. Only an exactly empty query is
+empty; leading/trailing whitespace is significant. The Rust regex engine owns
+validation and emits `parse_failed` with its explanation in `error.details`.
+Matching is line-based; cross-line expressions are not supported.
+
+`purpose` is `replace` (default) or `search`. Search permits read-only targets;
+replacement refuses read-only files and hardlinks. Both reject symbolic-link
+components. Missing paths with captured editor text can be previewed; a later
+transaction must validate whether that document still exists and is editable.
+The preview does not authorize a write or replace native commit-time checks.
+
+Scoped results include `status: "complete" | "incomplete"`, `files`, and optional
+`issues: [{ path?, code, message }]`. Each returned file contains `path`, line
+`matches`, exact `sourceText`, full `replacementText`, and `edits` with stable
+`id`, one-based source `line`, zero-based `utf16Start`, `utf16Length`, and `newText`. Edits refer to the
+unchanged source, including zero-length matches. Source identity is an exact
+UTF-8 byte comparison, preserving BOM, CRLF, final newlines, and Unicode
+normalization; Swift canonical String equality is insufficient.
+
+The scoped policy caps inspected files at 1,000, occurrences at 10,000, each
+source file at 2 MiB, replacement input at 64 KiB, total source at 16 MiB, and
+replacement/line/edit output at 16 MiB. Exceeding a budget reports
+`previewBudgetExceeded` and `incomplete`, never a complete truncated scope.
+Read, decoding, and eligibility failures remain distinct issues. Cancellation
+and timeouts use the error envelope. The host may display partial search results
+with an incomplete indicator; **Apply must reject any incomplete preview**.
+The shared scope/bridge matrix is
+`shared/fixtures/search/scoped-preview-v1.json`; the Unicode matrix also exercises
+scoped previews. All previews are read-only. A source snapshot is a prerequisite
+for transactional Apply, not permission to feed stale output directly to
+`file.write`.
 
 `lsp.applyTextEdits` accepts `{ "text": string, "edits": [] }`, where each edit
 has an LSP range with zero-based `line` and UTF-16 `utf16Column` fields plus

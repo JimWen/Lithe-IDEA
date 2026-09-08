@@ -1528,6 +1528,7 @@ dependencies = [
  "ammonia",
  "base64 0.22.1",
  "comrak",
+ "libc",
  "regex",
  "serde",
  "serde_json",

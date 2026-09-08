@@ -12,7 +12,13 @@ struct ProjectReplaceView: View {
     }
 
     private var selectedMatchCount: Int {
-        selectedFiles.reduce(0) { $0 + $1.matchCount }
+        let excluded = model.searchFeatureIfActive?.excludedReplacementOccurrences ?? []
+        return selectedFiles.reduce(0) { $0 + $1.edits.filter { !excluded.contains($0.id) }.count }
+    }
+
+    private var areAllMatchesSelected: Bool {
+        model.selectedProjectReplacementPaths == Set(model.projectReplacementFiles.map(\.relativePath))
+            && model.searchFeatureIfActive?.excludedReplacementOccurrences.isEmpty != false
     }
 
     var body: some View {
@@ -21,6 +27,16 @@ struct ProjectReplaceView: View {
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
             controls
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
+            if let failure = model.searchFeatureIfActive?.replacementFailure {
+                Text(failure.localizedDescription)
+                    .font(.system(size: 12)).foregroundStyle(LitheTheme.error)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+            }
+            ForEach(model.searchFeatureIfActive?.replacementIssues ?? [], id: \.self) { issue in
+                Text([issue.path, issue.message].compactMap { $0 }.joined(separator: ": "))
+                    .font(.system(size: 12)).foregroundStyle(LitheTheme.error)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
+            }
             results
         }
         .frame(minWidth: 780, minHeight: 560)
@@ -31,9 +47,9 @@ struct ProjectReplaceView: View {
         .onChange(of: model.projectReplaceText) { _ in
             clearPreview()
         }
-        .onChange(of: model.projectReplaceOptions) { _ in
-            clearPreview()
-        }
+        .onChange(of: model.projectReplaceOptions) { _ in clearPreview() }
+        .onChange(of: model.projectSearchScope) { _ in clearPreview() }
+        .onChange(of: model.projectSearchDirectory) { _ in clearPreview() }
     }
 
     private var header: some View {
@@ -92,6 +108,20 @@ struct ProjectReplaceView: View {
             .foregroundStyle(LitheTheme.secondaryText)
 
             HStack(spacing: 8) {
+                Picker("Scope", selection: $model.projectSearchScope) {
+                    ForEach(ProjectSearchScope.allCases) { scope in
+                        Text(LocalizedStringKey(scope.rawValue)).tag(scope)
+                    }
+                }
+                .frame(maxWidth: 240)
+                if model.projectSearchScope == .directory {
+                    TextField("Project-relative directory", text: $model.projectSearchDirectory)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
                 Button {
                     Task { await model.previewProjectReplacement() }
                 } label: {
@@ -100,15 +130,16 @@ struct ProjectReplaceView: View {
                 .buttonStyle(.borderedProminent)
                 .lithePointer()
                 .tint(LitheTheme.accent)
-                .disabled(model.projectReplaceQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isLoadingProjectReplacement)
+                .disabled(model.projectReplaceQuery.isEmpty || model.isLoadingProjectReplacement)
 
                 Button {
-                    let allSelected = model.selectedProjectReplacementPaths.count == model.projectReplacementFiles.count
+                    let allSelected = areAllMatchesSelected
+                    if !allSelected { model.searchFeatureIfActive?.includeAllReplacementOccurrences() }
                     model.selectedProjectReplacementPaths = allSelected
                         ? []
                         : Set(model.projectReplacementFiles.map(\.relativePath))
                 } label: {
-                    Text(model.selectedProjectReplacementPaths.count == model.projectReplacementFiles.count
+                    Text(areAllMatchesSelected
                         ? "Clear Selection"
                         : "Select All")
                 }
@@ -131,7 +162,8 @@ struct ProjectReplaceView: View {
                 .buttonStyle(.borderedProminent)
                 .lithePointer()
                 .tint(LitheTheme.accent)
-                .disabled(selectedFiles.isEmpty || model.isLoadingProjectReplacement)
+                .disabled(selectedMatchCount == 0 || model.isLoadingProjectReplacement
+                    || model.searchFeatureIfActive?.canApplyReplacementPreview != true)
             }
         }
         .padding(12)
@@ -144,9 +176,12 @@ struct ProjectReplaceView: View {
             VStack(spacing: 8) {
                 Image(systemName: "doc.text.magnifyingglass")
                     .font(.system(size: 28, weight: .light))
-                Text(model.projectReplaceQuery.isEmpty
-                    ? "Enter text to preview project changes"
-                    : "No replacement matches")
+                if model.searchFeatureIfActive?.replacementFailure == nil,
+                   model.searchFeatureIfActive?.replacementStatus != .incomplete {
+                    Text(model.projectReplaceQuery.isEmpty
+                        ? "Enter text to preview project changes"
+                        : "No replacement matches")
+                }
             }
             .font(LitheTheme.uiFont)
             .foregroundStyle(LitheTheme.secondaryText)
@@ -180,9 +215,17 @@ struct ProjectReplaceView: View {
                         Text("Line \(match.line)  \(match.before)")
                             .foregroundStyle(LitheTheme.secondaryText)
                             .lineLimit(2)
-                        Text("        \(match.after)")
-                            .foregroundStyle(LitheTheme.primaryText)
-                            .lineLimit(2)
+                        ForEach(Array(file.edits.filter { $0.line == match.line }.enumerated()), id: \.element.id) { index, edit in
+                            Toggle(isOn: Binding(
+                                get: { model.searchFeatureIfActive?.excludedReplacementOccurrences.contains(edit.id) != true },
+                                set: { model.searchFeatureIfActive?.setReplacementOccurrence(edit.id, included: $0) }
+                            )) {
+                                Text("Match \(index + 1) → \(edit.newText)")
+                                    .lineLimit(2)
+                            }
+                            .disabled(!model.selectedProjectReplacementPaths.contains(file.relativePath)
+                                || model.isLoadingProjectReplacement)
+                        }
                     }
                     .font(.system(size: 11.5, design: .monospaced))
                 }
