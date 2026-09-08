@@ -1613,13 +1613,19 @@ struct CodeEditorView: NSViewRepresentable {
             gutter?.updateRunnableMarkers(
                 runnableMarkers,
                 onRun: { [weak model] runnable in
-                    model?.showNotification("Run ‘\(runnable.displayName)’", severity: .information)
+                    guard let model else { return }
+                    model.showNotification("Run ‘\(runnable.displayName)’", severity: .information)
+                    model.runSelectedConfiguration()
                 },
                 onDebug: { [weak model] runnable in
-                    model?.showNotification("Debug ‘\(runnable.displayName)’", severity: .information)
+                    guard let model else { return }
+                    model.showNotification("Debug ‘\(runnable.displayName)’", severity: .information)
+                    model.startDebugging()
                 },
                 onModify: { [weak model] runnable in
-                    model?.showNotification("Modify Run Configuration for ‘\(runnable.displayName)’", severity: .information)
+                    guard let model else { return }
+                    model.showNotification("Modify Run Configuration for ‘\(runnable.displayName)’", severity: .information)
+                    model.showRunConfigurationEditor()
                 }
             )
             scheduleEditorOverlayRelayout()
@@ -4535,7 +4541,7 @@ final class LineNumberGutterView: NSView {
                       canAddDebugBreakpoint?(lineNumber - 1) == true {
                 drawDebugBreakpointHover(y: y, height: lineRect.height)
             } else {
-                let runnableMarkers = runnableMarkers.filter { $0.line == lineNumber - 1 }
+                let runnableMarkers = runnableMarkers.filter { $0.line == lineNumber }
                 if !runnableMarkers.isEmpty {
                     drawRunnableMarker(y: y, height: lineRect.height)
                 }
@@ -5075,7 +5081,7 @@ final class LineNumberGutterView: NSView {
             guard let region = foldRegions.first(where: { $0.startLine == line }) else { return }
             onToggleFold?(region)
         case .implementation:
-            if let runnable = runnableMarkers.first(where: { $0.line == line }) {
+            if let runnable = runnableMarkers.first(where: { $0.line == line + 1 }) {
                 onRunRunnable?(runnable)
                 return
             }
@@ -5099,7 +5105,7 @@ final class LineNumberGutterView: NSView {
         let localX = point.x - editorGutterOriginX
         if gutterLayout.implementationRange.contains(localX),
            let line = editorLine(at: point),
-           let runnable = runnableMarkers.first(where: { $0.line == line }) {
+           let runnable = runnableMarkers.first(where: { $0.line == line + 1 }) {
             contextRunnable = runnable
             let menu = NSMenu(title: "Runnable")
             let run = NSMenuItem(title: "Run ‘\(runnable.displayName)’", action: #selector(runRunnableFromGutterMenu), keyEquivalent: "")
