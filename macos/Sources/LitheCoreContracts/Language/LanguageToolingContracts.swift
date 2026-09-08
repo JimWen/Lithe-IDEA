@@ -221,21 +221,21 @@ package extension LanguageProviderCatalog {
     }
 }
 
-package struct LanguageServerPosition: Equatable, Sendable {
-    package let line: Int
-    package let utf16Column: Int
+public struct LanguageServerPosition: Equatable, Sendable {
+    public let line: Int
+    public let utf16Column: Int
 
-    package init(line: Int, utf16Column: Int) {
+    public init(line: Int, utf16Column: Int) {
         self.line = line
         self.utf16Column = utf16Column
     }
 }
 
-package struct LanguageServerRange: Equatable, Sendable {
-    package let start: LanguageServerPosition
-    package let end: LanguageServerPosition
+public struct LanguageServerRange: Equatable, Sendable {
+    public let start: LanguageServerPosition
+    public let end: LanguageServerPosition
 
-    package init(start: LanguageServerPosition, end: LanguageServerPosition) {
+    public init(start: LanguageServerPosition, end: LanguageServerPosition) {
         self.start = start
         self.end = end
     }
