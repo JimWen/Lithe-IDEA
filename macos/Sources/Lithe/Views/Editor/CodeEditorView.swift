@@ -1592,6 +1592,7 @@ struct CodeEditorView: NSViewRepresentable {
         }
 
         private func applyFoldState() {
+            guard let document else { return }
             (textView as? CodeTextView)?.updateFolds(
                 regions: foldRegions,
                 collapsedIDs: collapsedFoldIDs,
@@ -1606,7 +1607,33 @@ struct CodeEditorView: NSViewRepresentable {
                 guard let document else { return }
                 model?.resolveJavaNavigation(marker, in: document.url)
             }
+            let runnableMarkers = Self.discoverGoRunnables(in: textView?.string ?? "", url: document.url)
+            gutter?.updateRunnableMarkers(runnableMarkers) { [weak model] runnable in
+                model?.showNotification("Runnable: \(runnable.displayName)", severity: .information)
+            }
             scheduleEditorOverlayRelayout()
+        }
+
+        private static func discoverGoRunnables(in text: String, url: URL) -> [DocumentRunnable] {
+            guard url.pathExtension.lowercased() == "go" else { return [] }
+            let lines = text.components(separatedBy: .newlines)
+            let isTestFile = url.lastPathComponent.hasSuffix("_test.go")
+            let isMainPackage = lines.contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("package main") }
+            return lines.enumerated().compactMap { index, raw in
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                guard line.hasPrefix("func ") else { return nil }
+                let suffix = String(line.dropFirst(5))
+                let name = suffix.components(separatedBy: CharacterSet(charactersIn: "({")).first?.trimmingCharacters(in: .whitespaces) ?? ""
+                let kind: DocumentRunnable.Kind?
+                if name == "main" && isMainPackage { kind = .application }
+                else if isTestFile && name.hasPrefix("Test") { kind = .test }
+                else if isTestFile && name.hasPrefix("Benchmark") { kind = .benchmark }
+                else if isTestFile && name.hasPrefix("Example") { kind = .example }
+                else { kind = nil }
+                guard let kind else { return nil }
+                let position = LanguageServerPosition(line: index, utf16Column: 0)
+                return DocumentRunnable(id: "go:\(kind.rawValue):\(name):\(index + 1)", configurationID: nil, displayName: name, kind: kind, line: index + 1, symbolRange: LanguageServerRange(start: position, end: position))
+            }
         }
 
         func updateCodeVisionAndBlame() {
