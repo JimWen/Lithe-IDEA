@@ -54,6 +54,28 @@ struct ProjectRuntimeTests {
         #expect(service.javaHomeURL(overridePath: "toolchains/jdk") == javaHome)
     }
 
+    @Test
+    @MainActor
+    func projectRuntimeOverrideIsPersistedInLitheDirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lithe-runtime-(UUID().uuidString)", isDirectory: true)
+        let executable = root.appendingPathComponent("toolchains/go/bin/go")
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("#!/bin/sh\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let service = ProjectRuntimeService(runtimeLocator: SelectedToolRuntimeLocator(), store: EmptyKeyValueStore())
+        service.openProject(at: root)
+        try service.setCustomExecutablePath(executable.path, for: "go")
+
+        let settings = root.appendingPathComponent(".lithe/runtime.json")
+        #expect(FileManager.default.fileExists(atPath: settings.path))
+        let reloaded = ProjectRuntimeService(runtimeLocator: SelectedToolRuntimeLocator(), store: EmptyKeyValueStore())
+        reloaded.openProject(at: root)
+        #expect(reloaded.customExecutablePath(for: "go") == executable.path)
+    }
+
 
 
     @Test
@@ -138,6 +160,7 @@ private struct SelectedToolRuntimeLocator: RuntimeLocator {
     func javaRuntime(at homeURL: URL) -> JavaRuntimeCandidate? { nil }
     func isExecutable(at url: URL) -> Bool {
         ["/toolchains/custom/bin/go", "/system/bin/go"].contains(url.path)
+            || FileManager.default.isExecutableFile(atPath: url.path)
     }
 }
 

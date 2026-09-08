@@ -19,6 +19,9 @@ extension ProjectRuntimeService: LanguageToolRuntimePort {
 
 @MainActor
 final class ProjectRuntimeService: ObservableObject {
+    private struct ProjectRuntimeFile: Codable {
+        var executables: [String: String]
+    }
     enum JavaLanguageServerRuntimePreparation: Equatable {
         case unprepared
         case ready(executableURL: URL)
@@ -36,6 +39,9 @@ final class ProjectRuntimeService: ObservableObject {
     private var executableOverrides: [String: String] = [:]
     private var executableOverridesKey: String? {
         projectURL.map { "lithe.project-runtime-executables." + $0.standardizedFileURL.path }
+    }
+    private var projectRuntimeFileURL: URL? {
+        projectURL?.appendingPathComponent(".lithe/runtime.json")
     }
     private let toolDiscovery: any RuntimeToolDiscovery
     private var discoveryTask: Task<Void, Never>?
@@ -61,7 +67,9 @@ final class ProjectRuntimeService: ObservableObject {
         activeDiscoveryID = nil
         let normalizedURL = url.standardizedFileURL
         projectURL = normalizedURL
-        executableOverrides = executableOverridesKey.flatMap { store.object(forKey: $0) as? [String: String] } ?? [:]
+        executableOverrides = loadProjectRuntimeFile()
+            ?? executableOverridesKey.flatMap { store.object(forKey: $0) as? [String: String] }
+            ?? [:]
         javaRuntimes = []
         javaEnvironmentReport = .checking(for: normalizedURL)
         javaLanguageServerRuntimePreparation = .unprepared
@@ -258,6 +266,28 @@ final class ProjectRuntimeService: ObservableObject {
             executableOverrides[command] = url.path
         }
         store.set(executableOverrides, forKey: key)
+        persistProjectRuntimeFile()
+    }
+
+    private func loadProjectRuntimeFile() -> [String: String]? {
+        guard let url = projectRuntimeFileURL,
+              let data = try? Data(contentsOf: url),
+              let file = try? JSONDecoder().decode(ProjectRuntimeFile.self, from: data) else { return nil }
+        return file.executables
+    }
+
+    private func persistProjectRuntimeFile() {
+        guard let url = projectRuntimeFileURL,
+              let data = try? JSONEncoder().encode(ProjectRuntimeFile(executables: executableOverrides)) else { return }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: .atomic)
+        } catch {
+            // The injected store remains the compatibility fallback when a
+            // read-only workspace cannot create its project-local settings.
+        }
     }
 
     /// Returns all known candidates in preference order.  The platform
