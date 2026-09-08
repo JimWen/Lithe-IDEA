@@ -46,7 +46,7 @@ package actor WorkspaceTextEditCoordinator {
                   Dictionary(uniqueKeysWithValues: snapshots.map { ($0.path, $0) }).count == uniqueEdits.count,
                   uniqueEdits.allSatisfy({ edit in
                       snapshots.first(where: { $0.path == edit.path })?.text.utf8.elementsEqual(edit.sourceText.utf8) == true &&
-                          edit.sourceIdentity.isEmpty || snapshots.first(where: { $0.path == edit.path })?.identity == edit.sourceIdentity
+                          (edit.sourceIdentity.isEmpty || snapshots.first(where: { $0.path == edit.path })?.identity == edit.sourceIdentity)
                   }) else {
                 state = .failed
                 return WorkspaceTextEditTransactionResult(transactionID: transactionID, state: state, failedPaths: paths)

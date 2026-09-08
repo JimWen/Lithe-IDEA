@@ -4,6 +4,9 @@ import Foundation
 public struct ProjectReplacementApplyResult: Sendable {
     public let changedFiles: Int
     public let failedFiles: [String]
+    public init(changedFiles: Int, failedFiles: [String]) {
+        self.changedFiles = changedFiles; self.failedFiles = failedFiles
+    }
 }
 
 public struct SearchReplacementEdit: Sendable {

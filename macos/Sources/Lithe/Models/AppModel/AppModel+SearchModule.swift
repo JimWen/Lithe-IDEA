@@ -196,6 +196,18 @@ extension AppModel {
                 document.text = text
                 do { try self.saveDocument(document); return true }
                 catch { document.text = previousText; throw error }
+            },
+            applyTransaction: { [weak self] edits in
+                guard let self else { return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: edits.map(\.path)) }
+                let transactionEdits = edits.map {
+                    WorkspaceTextEdit(path: $0.path, sourceText: $0.sourceText, replacementText: $0.replacementText, sourceIdentity: "")
+                }
+                let result = await self.services.workspaceTextEditCoordinator.apply(
+                    transactionEdits,
+                    at: rootURL,
+                    operations: self.services.workspaceTextEditFileOperations
+                )
+                return ProjectReplacementApplyResult(changedFiles: result.changedPaths.count, failedFiles: result.failedPaths + result.recoveryPaths)
             }
         )
         try? services.moduleRuntime.markIdle(.search)
