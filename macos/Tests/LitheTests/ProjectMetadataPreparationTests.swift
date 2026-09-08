@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import LitheCoreContracts
 import Testing
@@ -252,6 +253,105 @@ struct ProjectMetadataPreparationTests {
         try session.validate()
         try write("module example.com/single\n\ngo 1.24\n// changed\n", to: manifestURL)
         #expect(throws: ProjectMetadataFailure.self) { try session.validate() }
+    }
+
+    @Test
+    func missingUseManifestDoesNotAllocateAnUnownedIsolationCopy() throws {
+        let root = temporaryRoot("missing-use")
+        defer { cleanupFixture(root) }
+        let workspace = root.appendingPathComponent("ws")
+        let goURL = root.appendingPathComponent("tools/go")
+        try writeFakeExecutable(goURL)
+        try write("module example.test/a\n", to: workspace.appendingPathComponent("a/go.mod"))
+        try write("go 1.24\nuse (\n./a\n./missing\n)\n", to: workspace.appendingPathComponent("go.work"))
+        let calls = IsolationCreationRecorder()
+        let preparer = MacGoMetadataPreparer(makeIsolation: { _, _ in
+            calls.record()
+            throw CocoaError(.featureUnsupported)
+        })
+        #expect(throws: ProjectMetadataFailure.self) {
+            try preparer.prepare(goRequest(workspaceURL: workspace,
+                manifestURL: workspace.appendingPathComponent("a/go.mod"), goURL: goURL))
+        }
+        #expect(calls.count == 0)
+    }
+
+    @Test
+    func regularFileAdmissionRejectsFIFOBeforeAnyOpen() throws {
+        let root = temporaryRoot("fifo-admission")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { cleanupFixture(root) }
+        let fifo = root.appendingPathComponent("go")
+        try #require(Darwin.mkfifo(fifo.path, 0o700) == 0)
+        // Exercise only stat-based admission: a regression fails immediately
+        // without entering a potentially blocking native executable read.
+        #expect(throws: ProjectMetadataFailure.self) {
+            try ProjectToolFileIdentity.regularFile(at: fifo, role: "Go executable")
+        }
+    }
+
+    @Test
+    func frozenFileIdentityRejectsSourceSymlinkRetargeting() throws {
+        let root = temporaryRoot("symlink-identity")
+        defer { cleanupFixture(root) }
+        let first = root.appendingPathComponent("first.mod")
+        let second = root.appendingPathComponent("second.mod")
+        let selected = root.appendingPathComponent("selected.mod")
+        try write("module example.test/a\n", to: first)
+        try write("module example.test/a\n", to: second)
+        try FileManager.default.createSymbolicLink(at: selected, withDestinationURL: first)
+        let identity = try ProjectToolFileIdentity.regularFile(at: selected, role: "manifest")
+        try identity.validate(role: "manifest")
+        try FileManager.default.removeItem(at: selected)
+        try FileManager.default.createSymbolicLink(at: selected, withDestinationURL: second)
+        #expect(throws: ProjectMetadataFailure.self) { try identity.validate(role: "manifest") }
+    }
+
+    @Test
+    func goValidateRejectsUseDirectoryRetargetingAndNewWorkspaceFile() throws {
+        let root = temporaryRoot("use-retarget")
+        defer { cleanupFixture(root) }
+        let workspace = root.appendingPathComponent("ws")
+        let goURL = root.appendingPathComponent("tools/go")
+        try writeFakeExecutable(goURL)
+        for name in ["a", "b"] { try write("module example.test/\(name)\n", to: workspace.appendingPathComponent("\(name)/go.mod")) }
+        let linked = workspace.appendingPathComponent("linked")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: workspace.appendingPathComponent("a"))
+        let input = goRequest(workspaceURL: workspace, manifestURL: workspace.appendingPathComponent("a/go.mod"), goURL: goURL)
+        let single = try MacGoMetadataPreparer().prepare(input)
+        try single.validate()
+        try write("go 1.24\nuse ./linked\n", to: workspace.appendingPathComponent("go.work"))
+        #expect(throws: ProjectMetadataFailure.self) { try single.validate() }
+        let session = try MacGoMetadataPreparer().prepare(input)
+        defer { #expect((session as? any ProjectMetadataSessionCleaning)?.cleanupSessionResources() == nil) }
+        try session.validate()
+        try FileManager.default.removeItem(at: linked)
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: workspace.appendingPathComponent("b"))
+        #expect(throws: ProjectMetadataFailure.self) { try session.validate() }
+    }
+
+    @Test
+    func implicitGoCacheInsideWorkspaceIsRejectedBeforeCapture() throws {
+        let root = temporaryRoot("implicit-cache")
+        defer { cleanupFixture(root) }
+        let goURL = root.appendingPathComponent("tools/go")
+        try writeFakeExecutable(goURL)
+        let fakeHome = root.appendingPathComponent("home")
+        for relative in ["go", "Library/Caches"] {
+            let workspace = fakeHome.appendingPathComponent(relative)
+            try write("module example.test/a\n", to: workspace.appendingPathComponent("go.mod"))
+            #expect(throws: ProjectMetadataFailure.self) {
+                try MacGoMetadataPreparer().prepare(.init(workspaceURL: workspace,
+                    manifestURL: workspace.appendingPathComponent("go.mod"), workspaceGeneration: 1,
+                    cargoCandidates: [goURL], rustupCandidates: [], customCargoURL: nil,
+                    environment: ["HOME": fakeHome.path], deadline: ContinuousClock.now.advanced(by: .seconds(30))))
+            }
+        }
+    }
+
+    private func cleanupFixture(_ root: URL) {
+        do { try FileManager.default.removeItem(at: root) }
+        catch { Issue.record("Fixture cleanup failed: \(error)") }
     }
 
     // MARK: - Isolation rewriting
@@ -572,4 +672,11 @@ struct ProjectMetadataPreparationTests {
             == resolvedCargo.resolvingSymlinksInPath().standardizedFileURL.path)
         #expect(metadataStage.commands[0].arguments.contains("--manifest-path"))
     }
+}
+
+private final class IsolationCreationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    var count: Int { lock.withLock { value } }
+    func record() { lock.withLock { value += 1 } }
 }

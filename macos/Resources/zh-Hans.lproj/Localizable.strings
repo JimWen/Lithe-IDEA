@@ -955,6 +955,12 @@
 "Reload Cargo workspace metadata" = "重新读取 Cargo 工作区元数据";
 "Cargo: Cancel Refresh" = "Cargo：取消刷新";
 "Stop reading Cargo workspace metadata" = "停止读取 Cargo 工作区元数据";
+"Go Tools" = "Go Tools";
+"Show or hide the Go Tools tool window" = "显示或隐藏 Go Tools 工具窗口";
+"Go: Refresh" = "Go：刷新";
+"Reload Go workspace metadata" = "重新读取 Go 工作区元数据";
+"Go: Cancel Refresh" = "Go：取消刷新";
+"Stop reading Go workspace metadata" = "停止读取 Go 工作区元数据";
 "Toggle Debug" = "切换调试窗口";
 "Toggle Line Breakpoint" = "切换行断点";
 "Add or remove a breakpoint at the caret" = "在光标所在行添加或移除断点";
@@ -1581,3 +1587,42 @@
 "Automatic activation requires an environment path without a colon." = "自动激活要求环境路径不含冒号。";
 "Use up to 16 unique relative virtual environment directories (512 bytes each), without empty, . or .. path segments." = "最多配置 16 个不重复的虚拟环境相对目录，每项不超过 512 字节，路径段不能是空、. 或 ..。";
 "Startup virtual environment" = "启动时虚拟环境";
+
+"Go Build" = "Go 构建";
+
+"Go Test" = "Go 测试";
+
+"Go Vet" = "Go 静态检查";
+
+"Check Formatting" = "检查格式";
+
+"Go Module" = "Go 模块";
+
+"Tidy" = "整理依赖";
+
+"Verify" = "校验";
+
+"Configurations" = "运行配置";
+
+"Stop task" = "停止任务";
+
+"Rerun task" = "重新运行任务";
+
+"Clear task output" = "清空任务输出";
+
+"Task output reached its size limit." = "任务输出已达到大小限制。";
+
+"Waiting for tool output…" = "等待工具输出…";
+
+"Preparing…" = "准备中…";
+
+"Stopping…" = "停止中…";
+
+"Succeeded" = "成功";
+
+"Cancelled" = "已取消";
+
+"Cleanup pending" = "等待清理";
+
+"Tool tasks" = "工具任务";
+"The tool produced no output." = "工具未产生输出。";

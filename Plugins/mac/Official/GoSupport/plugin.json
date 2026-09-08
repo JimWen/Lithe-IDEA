@@ -30,14 +30,28 @@
         "kind": "whenIdle",
         "afterSeconds": 600
       },
-      "moduleDependencies": ["dev.lithe.workspace"],
+      "moduleDependencies": [
+        "dev.lithe.workspace"
+      ],
       "capabilityDependencies": [],
       "providedCapabilities": [
         "dev.lithe.capability.language.go.execution",
         "dev.lithe.capability.language.go.testing",
         "dev.lithe.capability.language.go.project-tools"
       ],
-      "contributions": [],
+      "contributions": [
+        {
+          "id": "language.go.projecttools",
+          "kind": "toolWindow",
+          "title": "Go Tools",
+          "icon": "chevron.left.forwardslash.chevron.right",
+          "placement": "rightSidebar",
+          "order": 101,
+          "actionID": "go.toggle",
+          "rendererID": "go.project",
+          "visibility": {}
+        }
+      ],
       "required": false
     },
     {
@@ -50,9 +64,13 @@
         "kind": "whenIdle",
         "afterSeconds": 600
       },
-      "moduleDependencies": ["dev.lithe.workspace"],
+      "moduleDependencies": [
+        "dev.lithe.workspace"
+      ],
       "capabilityDependencies": [],
-      "providedCapabilities": ["dev.lithe.capability.language.go.language-server"],
+      "providedCapabilities": [
+        "dev.lithe.capability.language.go.language-server"
+      ],
       "contributions": [],
       "required": false
     }
@@ -61,9 +79,14 @@
     {
       "id": "go",
       "displayName": "Go",
-      "fileExtensions": ["go"],
+      "fileExtensions": [
+        "go"
+      ],
       "fileNames": [],
-      "projectFileNames": ["go.mod", "go.work"],
+      "projectFileNames": [
+        "go.mod",
+        "go.work"
+      ],
       "languageServerModuleID": "dev.lithe.language.go.language-server",
       "executionModuleID": "dev.lithe.language.go.execution",
       "testingModuleID": "dev.lithe.language.go.execution"

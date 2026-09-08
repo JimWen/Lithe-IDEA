@@ -16,6 +16,7 @@ enum WorkbenchModuleUIComposition {
                 languageRegistration,
                 executionRegistration,
                 cargoRegistration,
+                goRegistration,
                 debugRegistration
             ])
         } catch {
@@ -114,6 +115,18 @@ enum WorkbenchModuleUIComposition {
             isSelected: { $0.isCargoToolWindowSelected },
             content: { _ in AnyView(CargoToolWindowView()) },
             contentIdentity: { WorkbenchModuleUIRegistry.Renderer.featureIdentity($0.cargoProjectFeatureIfActive) }
+        )]
+    )
+
+    private static let goRegistration = WorkbenchModuleUIRegistry.Registration(
+        contributions: BundledLanguagePluginCatalog.executionContributions(languageID: "go"),
+        actions: [.init(id: "go.toggle", commandID: "toggle-go")],
+        renderers: [.init(
+            id: "go.project", ideaAssetPath: "toolwindows/toolWindowGo.svg",
+            isVisible: { $0.isGoAvailable },
+            isSelected: { $0.isGoToolWindowSelected },
+            content: { _ in AnyView(GoToolWindowView()) },
+            contentIdentity: { WorkbenchModuleUIRegistry.Renderer.featureIdentity($0.goProjectFeatureIfActive) }
         )]
     )
 

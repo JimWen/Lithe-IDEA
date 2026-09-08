@@ -3,7 +3,7 @@
 状态：c1 已完成（`8b8e7fe9`、`0b5dfcaa`），独立方案/代码审查 GO；Rust 346、
 Swift 1108、真实 C ABI 和 ARM64 构建通过。读取策略已完成 Go/Cargo 隔离探测；
 c2 的 Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已完成，见
-[B7a2c2 Cargo 工具窗口](goland-parity-b7a2c2-cargo-tool-window-done.md)；c3 Go 工作流仍待实施。
+[B7a2c2 Cargo 工具窗口](goland-parity-b7a2c2-cargo-tool-window-done.md)；c3 Go 工作流随 [B7a3](goland-parity-b7a3-go-tools-done.md) 完成并通过真实验收。
 本批承接已提交的 Rust normalizer 和插件 capture；Go Tools/Cargo 右栏、工具任务、
 运行配置和 GUI 对照仍按 [B7 总方案](goland-parity-b7a-go-cargo.md) 交付。
 Project 不改；已有三份语言方案的工作区修改保持原样。

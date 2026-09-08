@@ -1,10 +1,10 @@
 # B7a3：Go 元数据隔离读取、Go Tools 工具窗口与独立工具任务
 
-状态：基于 `3680935d`。**方案待独立审查；B7a3d 与 B7a3a 已实施并通过 §6 的自动验证
-（2026-09-08，记录见 §6.1），B7a3b / B7a3c 未实施。** 本文是
+状态：**B7a3a–d 已完成实现、代码审查、自动回归及 ARM64 真实编辑/运行/点击/截图验收。** 原始方案基于 `3680935d`，本轮修复基于
+`7e0887a1`。第 2 / 5 节保留实施前核查与执行清单；当前结果以 §6.5 为准。本文是
 [B7a Go/Cargo 方案](goland-parity-b7a-go-cargo.md)
 中 B7a2c3、B7a3 两项的实施细案，并把 B7a2c2 已交付的 Cargo 链路作为 Go 侧的实现模板。
-本文供实现方按第 5 节逐文件执行；第 2 节的每条现状都已在当前 HEAD 核对过。
+第 2 节的位置与行号属于历史基线，不代表当前 HEAD 仍有这些缺口。
 
 阅读顺序：第 2 节（现状）→ 第 3 节（分批）→ 第 4 节（契约变更，唯一需要改共享契约的地方）
 → 第 5 节（逐文件修改清单）→ 第 6/7 节（验证与验收）。
@@ -26,7 +26,8 @@
 - Go 语义重构 → [B6](goland-parity-b6-refactor.md)。
 - 实际格式化写回（`gofmt -w` 类）→ 依赖 B6b1 的编辑事务；本批只做**格式检查**并明确标注
   「检查，非格式化」，不得把检查结果标成格式化已交付。
-- Cargo 侧任何改动。B7a2c2 已结项，本批不回头改它，只复用其结构。
+- Cargo 命令和元数据语义保持 B7a2c2 的已验收契约；按用户要求统一 G/R 工具图标，并修复
+  对照验收发现的 Cargo 父菜单覆盖目标菜单问题。
 
 ## 2. 现状核查
 
@@ -269,7 +270,7 @@ MIT 且已归档 `LICENSE-MIT.txt` 与 NOTICE。Go Tools 图标须新绘或取�
 | --- | --- | --- |
 | 新建 | `macos/Sources/LitheExecutionModule/Application/ProjectToolTaskFeatureModel.swift` | 独立 task ID、workspace/provider generation、输出缓冲、状态机、停止/重跑 |
 | 新建 | `macos/Sources/LitheCoreContracts/Execution/ProjectToolTaskContracts.swift` | 任务 DTO、状态枚举、诊断来源标识 |
-| 改 | `RunView` / 输出视图 | 增加任务标签页；复用现有 ANSI 与位置链接投影 |
+| 改 | `RunView` / 输出视图 | 在现有 Run 左侧列表加入工具任务，复用详情、工具栏、ANSI 与位置链接投影 |
 | 改 | Go 能力 | 新增 `GoToolActionCapability`：build / test / vet / fmt 检查 / mod 的 argv 投影 |
 
 硬约束：
@@ -423,3 +424,106 @@ git diff --check
 - MINOR：补充 rustup 分支的 Cargo 序列测试；`ProjectToolFileIdentity` 的失败文案改为
   中性（Go 刷新不再提示 "Refresh Cargo"）；检测器测试按仓库惯例放在集中测试模块而非
   方案所写的「同文件 `#[cfg(test)]`」，在此记录偏差。
+
+### 6.3 B7a3b 实施记录（2026-09-08）
+
+- **交付物**：`GoProjectFeatureModel`（staged 循环 + 五路径会话资源清理 +
+  `.go(modules:packages:)` 归集）、`GoTreePresentation`（module→package→Targets
+  三层，顶层从不隐藏）、`AppModel+GoProject`（识别/附加/刷新/取消/事件失效，与
+  Cargo 同型）、`GoProjectView`、`MacGoProjectComposition`、`toolWindowGo.svg`
+  与 `_dark`（初版为原创双箭头，验收后按用户要求改成原创圆形 G；不含第三方素材）、workbench 注册、
+  `toggle-go` / `refresh-go` / `cancel-go-refresh` 命令、bundled catalog 与 Go
+  插件清单的 `language.go.projecttools` contribution、`startGoTarget` 与
+  `.goTarget` 生成意图、`loadProjectServices` 末尾 `prewarmGoProject()`。
+- **复用而非复制**：`CargoProjectWork.swift` 的通用工作类型（Worker/Scheduling/
+  Capture/RefreshOperation 等）更名为 `ProjectTool*` 后由两个 feature 共用；这
+  是组合而非基类抽取，符合本批「不抽公共基类」的约束。`ProjectMetadataCapture
+  Stage`/`Failure` 等既有契约不变。
+- **双击语义**：application 入口经 `goMainConfigurationID` 投影到检测器生成的
+  `go.main`/`go.command` 配置（与 B7a3d 的 id 规则一致，含 cmd/<name> 判定），
+  缺配置时沿用「生成后续跑」流；test 入口在 B7a3c 中启动独立 package 测试任务。
+- **测试**：`GoTreePresentationTests` 4 项（单 module 顶层保留、入口按
+  runnable/testable、id 投影镜像检测器、reconcile 剪枝与选择清理）。
+
+
+### 6.4 B7a3c 历史实现与修复过程（2026-09-08）
+
+本节保留中间测试与失败结论；最新验收结果见 §6.5，旧报告路径可能已被最终测试覆盖。
+
+- `ProjectToolTaskFeatureModel` 持有独立 ID、workspace/provider generation、准备任务、
+  原生会话、Execution lease 与停止期限。最多 4 个活跃任务、保留 32 个完成任务，
+  每任务最多 4 MiB 输出；原生输出先在有界缓冲中累积，再按 40 ms 合并发布。
+- `GoToolActionCapability` 通过现有 execution capability 的可选子协议提供参数数组，
+  不改已安装插件的 v1 manifest / entrypoint 协议。旧插件仍可 Run，工具任务入口提示升级。
+  build/test/vet 使用 `./...`，mod 支持 tidy/download/verify；格式检查使用所选 Go 同目录
+  的 `gofmt -l .`。不调用 shell，也不读写 Run 配置。
+- 原生准备器校验工作目录包含关系及目录/工具身份，设置变化或工作区切换使迟到准备失效。
+  停止失败保持 `cleanupRequired` 和 lease；真实退出后才释放。插件补齐 capability 退休、
+  延迟创建会话及旧 termination 回调的 generation 防护。
+- Go module/package 右键接入工具动作；test target 双击启动独立测试。Run 输出加入任务列表项，
+  不受配置缺失门槛限制；普通 Run 的替换语义保留。工具输出以捕获目录解析位置链接，
+  `go-tool` 来源与 LSP 诊断分离。停止、重跑、清空作用于选中任务。
+- 已通过针对性计时 37 项（含准备身份、并发停止隔离、准备取消、实际退出前持有 lease、
+  历史/输出预算）；产物 `.artifacts/test-stability/macos-project-tool-tasks.{json,html,junit.xml}`。
+  最慢新增测试为历史上限测试约 5 ms；真实 GUI、全量回归与安装验收仍在进行，不能据此标记完成。
+- 原生复查修正：旧 `MacStreamingProcess.stop()` 会提前清空引用，仅修复 Go 包装器不足以
+  保证 lease。插件执行宿主改为 `MacOwnedLanguageExecution`，复用现有进程组/管道驱动；
+  root reap、进程组清理和双路读端/写端关闭都确认后才结束。启动离开主线程，失败仍保留
+  原生所有权；输出支持分块 UTF-8，不因进程先退出而丢尾部输出。新增原生状态机与真实
+  `/bin/sleep` 关闭测试，首轮 29 项通过；补充流读取失败不能被根进程 exit 0 掩盖后，
+  全量 Swift **1167 项 / 128 suites 通过（36.583 s）**，计时产物
+  `.artifacts/test-stability/macos-plan-full.{json,html,junit.xml}`。ARM64 GUI 与安装仍待验收。
+- 元数据复查继续修复：隔离目录移到全部 `use` 清单/manifest 校验之后分配；源 symlink、
+  `use` 目录改指向、新建 go.work 和 workspace 改指向都会使刷新失效。明确检查隐式 macOS
+  Go 缓存目录，防止打开 `~/go` 或缓存目录时被默认缓存写入；go.work 限制为 1 MiB。
+  `regularFile` 使用真实文件类型，拒绝 FIFO/socket/device，避免工具头读取阻塞 worker。
+  首轮新增元数据/任务/Cargo 树回归 40 项通过，随后全量 1171 项通过（35.840 s）；
+  FIFO 准入回归补齐后，最新全量 **1172 项 / 128 suites 通过（35.429 s）**，
+  报告仍为 `macos-plan-full.{json,html,junit.xml}`。源码/任务标题更新后的包尚未进行 GUI 验收。
+- ARM64 包曾成功生成并通过 codesign/lipo 检查，但窗口接口对 Lithe、访达和 GoLand
+  均返回 `cgWindowNotFound`；未能执行有效的点击或截图，不能计为 GUI 通过。已关闭该测试
+  实例并确认无 Lithe 进程残留。待桌面恢复后继续验收，之后才提交和替换系统安装。
+- 桌面解锁后完成第一轮真实点击：多模块树与选择/展开保持正常；连续 3 次刷新后，13 个
+  fixture 文件 SHA-256 不变且无新增文件。双击普通 main 与两个独立测试成功；Stop 一个测试后，
+  另一个测试及普通 Run 的进程仍存活。证据在 `.artifacts/goland-parity/b7a3-gui/`。
+- 第一轮 GUI 未放行：父级 DisclosureGroup 菜单覆盖子节点、模板图标显示实心方块、右侧面板
+  遮住 Run 控件、Go 错误输出未生成链接。现已修复并按用户要求让 Go 任务复用 Cargo Run 的
+  列表/详情/工具栏样式，Go 与 Rust 工具图标统一为原创 G/R 轮廓。4 项输出链接回归已补齐，
+  最新完整 Swift **1176 项 / 129 suites 通过（34.640 s）**；修复后 ARM64 包正在重建，
+  必须重做真实编辑/运行/点击/截图才可提交与替换安装。
+
+
+<a id="go-tools-acceptance"></a>
+### 6.5 当前验收与代码复核（2026-09-08）
+
+- **复用结论**：保留已有 Go 元数据与检测器，复用 Cargo 分阶段捕获、现有 Run 列表和原生
+  进程驱动。修复生命周期、隔离准备和 GUI 缺口，没有整体回退 GLM 实现。
+- **自动验证**：最终完整 Swift 1176 项 / 129 suites，35.203 s；最后 Cargo 菜单修复后
+  27 项 / 5 suites，0.043 s；无配置任务行按钮修复后 18 项 / 3 suites，0.032 s。
+  Rust verifier、shared contracts、service/module boundaries、test stability 与 diff 检查通过。
+  报告位于 `.artifacts/test-stability/macos-plan-full.*`、`macos-cargo-go-final.*`、
+  `macos-go-row-final.*`；完整 Rust 日志为 `.artifacts/plan-implementation/go-tools-verify-rust-core.log`。
+- **实际编辑闭环**：Go Build 报错，点击 `check.go:3:28` 打开源文件；在编辑器内把
+  `missingValue` 改成 `42`，保存后点击重跑，构建成功。Check Formatting 只输出待格式化
+  文件名，文件 SHA-256 不变；Vet、Tidy、Download、Verify 全部真实执行成功。
+- **树与隔离**：多模块、同名包、任意文件名 main、build-tag 排除项和单模块均正确。
+  多模块连续三次 Refresh 后 13 文件 SHA-256 不变、无新增文件，选择与展开保持。
+  两个独立测试与普通 `go run .` 并发；停止一个测试后，另一个测试和普通 Run 进程仍存活。
+- **界面**：Go 任务使用 Cargo Run 的列表/详情/输出布局；无 generated.json 的单模块
+  Build/Test 成功，切到“当前运行”后可返回任务；终态空输出显示“工具未产生输出”。
+  Cargo 目标菜单含 Run / Go to Source，成员菜单含 Open Cargo.toml / Refresh，菜单 Run 成功。
+  右栏隐藏恢复、缩小窗口后 Run 控件仍可见。继续使用现有 split 容器，没有新增高频父视图
+  拖动状态或自定义 DragGesture；尺寸由可用空间限定。
+- **图标**：Go / Rust 工具窗口统一为原创圆形 G / R，模板渲染可读，深色与浅色实机截图均已核对，结束恢复原深色设置；
+  源文件为独立路径绘制，NOTICE 同步记录，未拷贝 RustRover 资源。
+- **证据**：`.artifacts/goland-parity/b7a3-gui/01-go-tree-refresh.png` 至
+  `12-cargo-light.png`、`metadata-after-three-refreshes.json`、
+  `stop-isolation-processes.txt`、`after-go-tool-actions.json`。中间失败截图不能作为最终通过证据。
+- **清理与范围**：每轮 Cmd-Q 后核实本批应用和子进程退出；预先存在的 RustRover 与用户
+  无关 Go 进程保留。gopls 未配置提示仍存在，本批验收的是 Go 工具任务，未声称 LSP 已验收。
+  实际格式化写回、gutter、语义编辑事务和 L0–L2 仍按各自计划推进。
+- **测试例外**：Go 旧 termination 回调回归通过 AsyncStream 控制顺序；唯一新增
+  `swift-real-sleep` 注解只提供 2 秒本地失败期限，不用真实休眠同步状态。
+- **最后复验通过**：无配置工具行的 Run/Stop 改为独立准入，新建任务后从列表点击 Run
+  生成新的成功任务，再从列表停止长测试，终态为已取消。单模块仍无 generated.json。
+  原创 G/R 在深浅色下均可读，应用和测试子进程退出干净。待按已验收源码提交并替换系统安装。

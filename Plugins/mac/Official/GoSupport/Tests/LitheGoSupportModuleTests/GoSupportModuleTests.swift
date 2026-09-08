@@ -19,7 +19,9 @@ struct GoSupportModuleTests {
         try runtime.register(ModuleFactory(manifest: GoLanguageServerModule.moduleManifest) {
             GoLanguageServerModule()
         })
-        try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest) {
+        try runtime.register(ModuleFactory(
+            manifest: GoExecutionModule.moduleManifest,
+            contributions: GoExecutionModule.moduleContributions) {
             GoExecutionModule(executionHost: executionHost, projectToolHost: GoProjectToolTestHost())
         })
         try runtime.validateGraph()
@@ -80,7 +82,9 @@ struct GoSupportModuleTests {
         try runtime.register(ModuleFactory(manifest: workspace) {
             GoTestWorkspaceModule(manifest: workspace)
         })
-        try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest) {
+        try runtime.register(ModuleFactory(
+            manifest: GoExecutionModule.moduleManifest,
+            contributions: GoExecutionModule.moduleContributions) {
             GoExecutionModule(executionHost: GoStuckExecutionHost(), projectToolHost: GoProjectToolTestHost())
         })
         try await runtime.setEnabled(true, for: .languageExecutionExtension("go"))
@@ -113,7 +117,9 @@ struct GoSupportModuleTests {
         try runtime.register(ModuleFactory(manifest: workspace) {
             GoTestWorkspaceModule(manifest: workspace)
         })
-        try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest) {
+        try runtime.register(ModuleFactory(
+            manifest: GoExecutionModule.moduleManifest,
+            contributions: GoExecutionModule.moduleContributions) {
             GoExecutionModule(executionHost: GoTestExecutionHost(), projectToolHost: GoProjectToolTestHost())
         })
         try await runtime.setEnabled(true, for: .languageExecutionExtension("go"))
@@ -143,6 +149,119 @@ struct GoSupportModuleTests {
 
         try await runtime.sleep(moduleID)
         #expect(try runtime.snapshot(for: moduleID).state == .sleeping)
+    }
+
+    @Test
+    func retainedGoCapabilitiesAndUnstartedSessionsCannotLaunchAfterDisable() async throws {
+        let runtime = ModuleRuntime()
+        let host = GoTestExecutionHost()
+        let workspace = BuiltInModuleCatalog.manifest(for: .workspace)!
+        try runtime.register(ModuleFactory(manifest: workspace) { GoTestWorkspaceModule(manifest: workspace) })
+        try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest,
+            contributions: GoExecutionModule.moduleContributions) {
+            GoExecutionModule(executionHost: host, projectToolHost: GoProjectToolTestHost())
+        })
+        let moduleID = ModuleID.languageExecutionExtension("go")
+        try await runtime.setEnabled(true, for: moduleID)
+        let capability = try #require(try await runtime.activateCapability(.languageExecutionExtension("go"))
+            as? any LanguageRunExtensionProviding)
+        let reserved = capability.makeExecutionSession()
+        #expect(host.sessions.isEmpty)
+        try await runtime.setEnabled(false, for: moduleID)
+        let late = capability.makeExecutionSession()
+        for session in [reserved, late] {
+            #expect(throws: (any Error).self) {
+                try session.start(LanguageExecutionProcessRequest(executablePath: "/fixture/go"))
+            }
+            #expect(!session.isRunning)
+        }
+        #expect(host.sessions.isEmpty)
+        #expect(try runtime.snapshot(for: moduleID).activity.activeResourceCount == 0)
+        #expect(try runtime.snapshot(for: moduleID).activity.activeLeaseCount == 0)
+    }
+
+    @Test
+    func requestingStopKeepsTheGoLeaseUntilTheProcessActuallyExits() async throws {
+        let runtime = ModuleRuntime()
+        let host = GoTestExecutionHost()
+        let workspace = BuiltInModuleCatalog.manifest(for: .workspace)!
+        try runtime.register(ModuleFactory(manifest: workspace) { GoTestWorkspaceModule(manifest: workspace) })
+        try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest,
+            contributions: GoExecutionModule.moduleContributions) {
+            GoExecutionModule(executionHost: host, projectToolHost: GoProjectToolTestHost())
+        })
+        let moduleID = ModuleID.languageExecutionExtension("go")
+        try await runtime.setEnabled(true, for: moduleID)
+        let capability = try #require(try await runtime.activateCapability(.languageExecutionExtension("go"))
+            as? any LanguageRunExtensionProviding)
+        let session = capability.makeExecutionSession()
+        try session.start(LanguageExecutionProcessRequest(operationID: "go-tool-stop", executablePath: "/fixture/go"))
+        let native = try #require(host.sessions.first)
+        native.stopCompletesImmediately = false
+        defer { native.stopCompletesImmediately = true; native.stop() }
+        session.stop()
+        #expect(session.isRunning)
+        #expect(try runtime.snapshot(for: moduleID).activity.activeLeaseCount == 1)
+        await #expect(throws: ModuleRuntimeError.activeLeasesPreventSleep(module: moduleID,
+            reasons: ["Language execution go-tool-stop"])) {
+            try await runtime.sleep(moduleID)
+        }
+        // Release the simulated native process through an explicit event,
+        // without real subprocesses, sleeps or polling for its exit.
+        native.stopCompletesImmediately = true
+        #expect(await session.stopAndWait())
+        #expect(try runtime.snapshot(for: moduleID).activity.activeLeaseCount == 0)
+        try await runtime.sleep(moduleID)
+        #expect(try runtime.snapshot(for: moduleID).state == .sleeping)
+    }
+
+    @Test
+    func queuedOldTerminationCannotReleaseRestartedSessionLease() async throws {
+        let runtime = ModuleRuntime()
+        let host = GoTestExecutionHost()
+        let workspace = BuiltInModuleCatalog.manifest(for: .workspace)!
+        try runtime.register(ModuleFactory(manifest: workspace) { GoTestWorkspaceModule(manifest: workspace) })
+        try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest,
+            contributions: GoExecutionModule.moduleContributions) {
+            GoExecutionModule(executionHost: host, projectToolHost: GoProjectToolTestHost())
+        })
+        let moduleID = ModuleID.languageExecutionExtension("go")
+        try await runtime.setEnabled(true, for: moduleID)
+        let capability = try #require(try await runtime.activateCapability(.languageExecutionExtension("go"))
+            as? any LanguageRunExtensionProviding)
+        let session = capability.makeExecutionSession()
+        defer { session.stop() }
+        let (delivered, delivery) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        defer { delivery.finish() }
+        session.onTermination = { _ in delivery.yield(()) }
+        try session.start(.init(operationID: "old", executablePath: "/fixture/go"))
+        let native = try #require(host.sessions.first)
+        let oldTermination = try #require(native.onTermination)
+        // Queue the old event, then restart before yielding the main actor.
+        // That event must notify its consumer without ending the new lease.
+        native.stop()
+        oldTermination(0)
+        session.stop()
+        session.onTermination = nil
+        try session.start(.init(operationID: "new", executablePath: "/fixture/go"))
+        let observed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await _ in delivered { return true }
+                return false
+            }
+            group.addTask {
+                // test-stability: allow(swift-real-sleep) reason: this is the local failure deadline for an event-driven callback assertion, not synchronization with native completion.
+                do { try await Task.sleep(for: .seconds(2)) } catch { return false }
+                return false
+            }
+            defer { group.cancelAll() }
+            return await group.next() ?? false
+        }
+        #expect(observed)
+        #expect(session.isRunning)
+        #expect(try runtime.snapshot(for: moduleID).activity.activeLeaseCount == 1)
+        #expect(await session.stopAndWait())
+        #expect(try runtime.snapshot(for: moduleID).activity.activeLeaseCount == 0)
     }
 
     @Test
@@ -368,6 +487,7 @@ private final class GoTestExecutionHost: LanguageExecutionHostProviding {
 @MainActor
 private final class GoTestExecutionSession: LanguageExecutionSession {
     var isRunning = false
+    var stopCompletesImmediately = true
     var onOutput: (@Sendable (String) -> Void)?
     var onTermination: (@Sendable (Int32) -> Void)?
     var onStateChange: (@Sendable (LanguageExecutionLifecycleEvent) -> Void)?
@@ -380,7 +500,7 @@ private final class GoTestExecutionSession: LanguageExecutionSession {
         ))
     }
 
-    func stop() { isRunning = false }
+    func stop() { if stopCompletesImmediately { isRunning = false } }
 }
 
 @MainActor

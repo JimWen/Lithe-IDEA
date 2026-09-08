@@ -27,9 +27,10 @@ Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已
 | B6 | [语义编辑事务与重构](goland-parity-b6-refactor.md) | 第二版待重审，未实施 |
 | B7a | [Go Tools / Cargo](goland-parity-b7a-go-cargo.md) | 部分完成 |
 | B7a2a / B7a2b | [进程清理、工具捕获与插件资源](goland-parity-b7a2b-project-tool-capture-done.md) | 已完成 |
-| B7a2c | [项目元数据读取与刷新](goland-parity-b7a2c-project-metadata-refresh.md) | c1/c2 完成，c3 未实施 |
+| B7a2c | [项目元数据读取与刷新](goland-parity-b7a2c-project-metadata-refresh.md) | c1/c2 完成，c3 随 B7a3 完成 |
 | B7a2c2 | [Cargo 工具窗口](goland-parity-b7a2c2-cargo-tool-window-done.md) | 已完成，含独立审查、修复复核及安装验证 |
-| B7a2c3 | [Go 元数据读取隔离](goland-parity-b7a2c3-go-metadata-isolation.md) | 实验完成，方案待审、未实施 |
+| B7a2c3 | [Go 元数据读取隔离](goland-parity-b7a2c3-go-metadata-isolation.md) | 实验和实现均完成，验收归 B7a3 |
+| B7a3 | [Go Tools 工具窗口与独立工具任务](goland-parity-b7a3-go-tools-done.md) | 已完成：自动回归、真实编辑/运行/点击和 G/R 深浅色截图通过 |
 
 B4 其他设置、B5 资源插件和 G1 Git 对照范围见本文；语言引擎以
 [L0–L8 分批方案](syntax-and-completion.md) 为准。
@@ -230,7 +231,8 @@ Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/
 | B4 | B4a0–B4a6 通过 | Terminal 启动、显示/输入、venv 完成；其他设置待实施 | 1032 项完整测试、42+3 个 shell 场景、边界、ARM64 包通过 | 真实设置、Python prefix、Restart、环境缺失/恢复、迟到确认焦点及清理通过 | B4a0–B4a6 通过 | 启动 `db44d036`；字体 `4f74218a`；输入 `266c0c52`；venv `3724ea20` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
 | B6 | 第二版细案待重审 | 未开始 | 未开始 | 未开始 | 未开始 | — |
-| B7 | B7a1/B7a2a–b/c1 通过；其余按子方案推进 | Cargo 只读刷新与右栏、双击运行和缺配置生成续跑已实现；Go Tools/任务/gutter/Structure/TODO 待实施 | 2026-09-08：Rust 354、Swift 1124、边界/契约/stability 通过 | Cargo 12 种真实对照运行；GUI 切换/刷新恢复/12 文件零写入通过；ARM64 已替换系统安装并复验 | c2 独立代码审查及修复复核通过 | 基线 `3d97c080`，本轮修复与验收记录一同提交；[Cargo 验收摘要](goland-parity-b7a2c2-cargo-tool-window-done.md#cargo-acceptance) |
+| B7 | B7a1/B7a2a–b/c1 通过；其余按子方案推进 | Cargo 只读刷新与右栏、双击运行和缺配置生成续跑已实现；Go Tools 与独立任务已完成（见 B7a3）；gutter/Structure/TODO 待实施 | 2026-09-08：Rust 354、Swift 1124、边界/契约/stability 通过 | Cargo 12 种真实对照运行；GUI 切换/刷新恢复/12 文件零写入通过；ARM64 已替换系统安装并复验 | c2 独立代码审查及修复复核通过 | 基线 `3d97c080`，本轮修复与验收记录一同提交；[Cargo 验收摘要](goland-parity-b7a2c2-cargo-tool-window-done.md#cargo-acceptance) |
+| B7a3 | 方案与代码复核通过 | Go 元数据隔离、工具窗口、独立任务和 G/R 图标完成 | Swift 1176 全量及最终 27+18 项回归、Rust/边界/契约/stability 通过 | 实际编辑修复、并发停止隔离、零写刷新、Go/Cargo 菜单运行及深浅色图标通过 | 通过 | [Go Tools 验收摘要](goland-parity-b7a3-go-tools-done.md#go-tools-acceptance)；系统安装随后执行 |
 | L0–L8 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 11.png 已核对 | 未开始 | — |
 | G1 | 设计基线复核通过 | 已有首轮基线 | 待最终复验 | 待 GoLand 对照 | 未开始 | — |
 

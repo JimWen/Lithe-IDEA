@@ -1,6 +1,6 @@
 # B7a：Go Tools / Cargo 工具窗口
 
-状态：B7a1 方案经两名独立 reviewer 放行；纯 Rust 基础实现已通过完整验证并提交 `4039f0f0`。B7a2a 原生进程清理亦已完成（`d6fb2d1f`）；B7a2b capture/插件资源完成（`daf43b7f`、`0003c624`）；B7a2c1 Swift 元数据消费/Unicode feature 完成（`8b8e7fe9`、`0b5dfcaa`）。B7a2c2 Cargo 只读刷新、右侧工具窗口及双击运行已完成本轮修复，2026-09-08 自动化、真实 Cargo 对照、GUI 刷新/运行和 ARM64 系统安装复验通过；独立代码审查及同名目标遗漏修复复核通过，B7a2c2 已结项，详见 [Cargo 验收摘要](goland-parity-b7a2c2-cargo-tool-window-done.md#cargo-acceptance)。a3–a4 尚未实施；Go Tools 窗口尚未实施；Project 保持现状。前置 Terminal B4a6 已完成。
+状态：B7a1 方案经两名独立 reviewer 放行；纯 Rust 基础实现已通过完整验证并提交 `4039f0f0`。B7a2a 原生进程清理亦已完成（`d6fb2d1f`）；B7a2b capture/插件资源完成（`daf43b7f`、`0003c624`）；B7a2c1 Swift 元数据消费/Unicode feature 完成（`8b8e7fe9`、`0b5dfcaa`）。B7a2c2 Cargo 只读刷新、右侧工具窗口及双击运行已完成本轮修复，2026-09-08 自动化、真实 Cargo 对照、GUI 刷新/运行和 ARM64 系统安装复验通过；独立代码审查及同名目标遗漏修复复核通过，B7a2c2 已结项，详见 [Cargo 验收摘要](goland-parity-b7a2c2-cargo-tool-window-done.md#cargo-acceptance)。Go 元数据隔离、Go Tools 窗口与独立工具任务已完成，见 [B7a3 验收摘要](goland-parity-b7a3-go-tools-done.md#go-tools-acceptance)；其他 a4 范围继续按本计划推进；Project 保持现状。前置 Terminal B4a6 已完成。
 
 B7a2c2 已完成部分：Rust execution module 的静态 Cargo contribution（catalog/factory/instance/renderer 四处一致）、`CargoProjectFeatureModel` 的单轮刷新所有权（期限、输出预算、取消与迟到清理）、`MacCargoMetadataPreparer` 的被动原生准备（拒绝脚本 shim、尊重显式 Cargo 选择、rustup proxy 经语言 capture 解析、环境白名单构造、按 typed metadata 授权 root）、`LanguageProjectToolResource.retire()` 的同步 retirement 事件，以及 execution graph 把刷新计入执行工作并在停止前关闭刷新闸门。
 

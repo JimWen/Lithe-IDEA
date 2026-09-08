@@ -107,12 +107,22 @@ public enum BundledLanguagePluginCatalog {
     /// Inert UI declarations are shared by the catalog, factory and instance.
     /// Reading them must not activate a language module or probe its toolchain.
     public static func executionContributions(languageID: String) -> [ModuleContribution] {
-        guard languageID == "rust" else { return [] }
-        return [ModuleContribution(
-            id: "language.rust.cargo", kind: .toolWindow, title: "Cargo",
-            icon: "shippingbox", placement: .rightSidebar, order: 100,
-            actionID: "cargo.toggle", rendererID: "cargo.project"
-        )]
+        switch languageID {
+        case "rust":
+            return [ModuleContribution(
+                id: "language.rust.cargo", kind: .toolWindow, title: "Cargo",
+                icon: "shippingbox", placement: .rightSidebar, order: 100,
+                actionID: "cargo.toggle", rendererID: "cargo.project"
+            )]
+        case "go":
+            return [ModuleContribution(
+                id: "language.go.projecttools", kind: .toolWindow, title: "Go Tools",
+                icon: "chevron.left.forwardslash.chevron.right", placement: .rightSidebar, order: 101,
+                actionID: "go.toggle", rendererID: "go.project"
+            )]
+        default:
+            return []
+        }
     }
 
     private static func makeManifest(_ specification: BundledLanguagePluginSpecification) -> PluginManifest {
@@ -186,7 +196,8 @@ public enum BundledLanguagePluginCatalog {
             providedCapabilities: Set<ModuleCapabilityID>([
                 .languageExecutionExtension(specification.id),
                 .languageTestingExtension(specification.id)
-            ]).union(specification.id == "rust" ? [.languageProjectTools(specification.id)] : [])
+            ]).union(specification.id == "rust" || specification.id == "go"
+                ? [.languageProjectTools(specification.id)] : [])
         )
     }
 }

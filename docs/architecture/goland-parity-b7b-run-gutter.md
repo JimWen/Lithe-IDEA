@@ -5,7 +5,7 @@
 参照基线为本机 RustRover **2026.2.1 / 262.9437.161** 与 GoLand **2025.2.4 / GO-252.27397.100**。
 
 本文只覆盖**编辑器 gutter 的运行入口与其右键配置**。右栏工具窗口见
-[B7a3 Go Tools](goland-parity-b7a3-go-tools.md) 与
+[B7a3 Go Tools](goland-parity-b7a3-go-tools-done.md) 与
 [B7a2c2 Cargo](goland-parity-b7a2c2-cargo-tool-window-done.md)。
 
 ## 1. 目标
@@ -180,7 +180,7 @@ Go 命名规则（写进 capability，附单测）：
   package 子句。正确来源是 B7a1 已交付的 `execution.normalizeProjectMetadata` Go 分支：
   它保留每个 package 的 import path 与其 `GoFiles` 列表，宿主按当前文档路径反查其所属
   package 即可判定是否为 `main`。因此 **B7b 的 Go 入口标记还依赖
-  [B7a3](goland-parity-b7a3-go-tools.md) 的元数据刷新链路已就绪**；
+  [B7a3](goland-parity-b7a3-go-tools-done.md) 的元数据刷新链路已就绪**；
   元数据不可用时不显示入口标记，不退化为读首行文本猜测。
 - 测试：`func Test<X>(t *testing.T)`，`X` 首字母非小写；文件名以 `_test.go` 结尾。
 - 基准：`func Benchmark<X>(b *testing.B)`；示例：`func Example<X>()`。
@@ -280,7 +280,7 @@ B6a2（documentSymbol 能力 + 白名单 + 解析）
 - **B7b 不能早于 B6a2**。这是硬约束，不是偏好。
 - B7b1 若走 Rust 的路径 B，会改 `client.rs` 的方法白名单——**与 B6a2 改同一文件同一函数**。
   两批不得并发实施，必须 B6a2 先落地并提交。
-- B7b 与 [B7a3](goland-parity-b7a3-go-tools.md) 无源文件交叠，可并行。
+- B7b 与 [B7a3](goland-parity-b7a3-go-tools-done.md) 无源文件交叠，可并行。
 
 ## 9. 诚实边界
 

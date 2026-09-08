@@ -16,6 +16,8 @@ extension AppModel {
 
     var runFeatureIfActive: RunFeatureModel? { executionCapability?.runFeature }
     var cargoProjectFeatureIfActive: CargoProjectFeatureModel? { executionCapability?.cargoProject }
+    var projectToolTasksIfActive: ProjectToolTaskFeatureModel? { executionCapability?.toolTasks }
+    var goProjectFeatureIfActive: GoProjectFeatureModel? { executionCapability?.goProject }
     var genericDebugFeatureIfActive: GenericDebugFeatureModel? {
         debugCapability?.genericFeature as? GenericDebugFeatureModel
     }
@@ -42,6 +44,9 @@ extension AppModel {
                 self?.scheduleObjectWillChangeRelay()
             })
             observeModuleFeature(.execution, observation: tests.objectWillChange.sink { [weak self] _ in
+                self?.scheduleObjectWillChangeRelay()
+            })
+            observeModuleFeature(.execution, observation: capability.toolTasks.objectWillChange.sink { [weak self] _ in
                 self?.scheduleObjectWillChangeRelay()
             })
             return ExecutionFeatureAccess(runFeature: runFeature, tests: tests, projectDevelopment: projectDevelopment)

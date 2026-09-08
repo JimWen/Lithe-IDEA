@@ -21,9 +21,9 @@ package final class CargoProjectFeatureModel: ObservableObject {
     private let makeInput: @MainActor (URL, Int, URL, ContinuousClock.Instant) throws -> CargoMetadataPreparationRequest
     private let providerModuleID: ModuleID
     private let activateProvider: @MainActor () async throws -> any LanguageProjectToolsProviding
-    private let scheduler: any CargoProjectScheduling
-    private let worker = CargoProjectWorker()
-    private var operation: CargoProjectRefreshOperation?
+    private let scheduler: any ProjectToolScheduling
+    private let worker = ProjectToolWorker()
+    private var operation: ProjectToolRefreshOperation?
     private var providerGeneration = 0
     private var retired = false
     private var context: ModuleContext?
@@ -35,14 +35,14 @@ package final class CargoProjectFeatureModel: ObservableObject {
         makeInput: @escaping @MainActor (URL, Int, URL, ContinuousClock.Instant) throws -> CargoMetadataPreparationRequest,
         providerModuleID: ModuleID,
         activateProvider: @escaping @MainActor () async throws -> any LanguageProjectToolsProviding,
-        scheduler: (any CargoProjectScheduling)? = nil
+        scheduler: (any ProjectToolScheduling)? = nil
     ) {
         self.nativePreparer = nativePreparer
         self.normalizer = normalizer
         self.makeInput = makeInput
         self.providerModuleID = providerModuleID
         self.activateProvider = activateProvider
-        self.scheduler = scheduler ?? CargoProjectClock()
+        self.scheduler = scheduler ?? ProjectToolClock()
     }
 
     package func activate(context: ModuleContext) { self.context = context }
@@ -53,7 +53,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
             errorMessage = "Cargo metadata is still running or cleaning up. Stop it before refreshing."
             return
         }
-        let owner = CargoProjectRefreshOperation(
+        let owner = ProjectToolRefreshOperation(
             workspaceURL: workspaceURL.standardizedFileURL,
             workspaceGeneration: workspaceGeneration,
             manifestURL: manifestURL.standardizedFileURL,
@@ -113,7 +113,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
         return await awaitStopped(owner)
     }
 
-    private func run(_ owner: CargoProjectRefreshOperation) async {
+    private func run(_ owner: ProjectToolRefreshOperation) async {
         defer {
             owner.pipelineFinished = true
             owner.pipelineTask = nil
@@ -132,7 +132,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
             let provider = try await activateProvider()
             try checkCurrent(owner)
             guard provider.languageID == "rust" else {
-                throw CargoProjectFailure(message: "The selected provider does not support Cargo metadata.")
+                throw ProjectToolFailure(message: "The selected provider does not support Cargo metadata.")
             }
             // Staged capture: each round runs its planned commands in order and
             // hands the stdouts back to the session, which decides the next
@@ -145,10 +145,10 @@ package final class CargoProjectFeatureModel: ObservableObject {
             while doneSource == nil {
                 rounds += 1
                 guard rounds <= 4 else {
-                    throw CargoProjectFailure(message: "Project metadata capture exceeded the staged round limit.")
+                    throw ProjectToolFailure(message: "Project metadata capture exceeded the staged round limit.")
                 }
                 guard stage.commands.count <= 512 else {
-                    throw CargoProjectFailure(message: "Project metadata capture issued an oversized command plan.")
+                    throw ProjectToolFailure(message: "Project metadata capture issued an oversized command plan.")
                 }
                 var outputs: [Data] = []
                 var roundResults: [LanguageProjectToolResult] = []
@@ -176,7 +176,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
                 }
             }
             guard let source = doneSource, let finalResult = lastRoundResults.last else {
-                throw CargoProjectFailure(message: "Project metadata capture produced no result.")
+                throw ProjectToolFailure(message: "Project metadata capture produced no result.")
             }
             let nativeInput = try await worker.perform {
                 try native.validate()
@@ -198,7 +198,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
             let currentInput = try makeInput(owner.workspaceURL, owner.workspaceGeneration, owner.manifestURL, owner.deadline)
             guard sameSelection(input, currentInput), normalized.operationID == normalizeID,
                   normalized.snapshot.language == .rust, normalized.snapshot.version == 1 else {
-                throw CargoProjectFailure(message: "The Cargo project or toolchain selection changed during refresh.")
+                throw ProjectToolFailure(message: "The Cargo project or toolchain selection changed during refresh.")
             }
             try checkCurrent(owner)
             snapshot = normalized.snapshot
@@ -215,10 +215,10 @@ package final class CargoProjectFeatureModel: ObservableObject {
     }
 
     private func capture(_ command: ProjectMetadataCommand, provider: any LanguageProjectToolsProviding,
-                         owner: CargoProjectRefreshOperation) async throws -> LanguageProjectToolResult {
+                         owner: ProjectToolRefreshOperation) async throws -> LanguageProjectToolResult {
         try checkCurrent(owner)
         guard owner.stdoutRemaining > 0, owner.stderrRemaining > 0 else {
-            throw CargoProjectFailure(message: "Cargo metadata exceeded the refresh output limit.")
+            throw ProjectToolFailure(message: "Cargo metadata exceeded the refresh output limit.")
         }
         let stageID = UUID().uuidString
         let request = LanguageProjectToolRequest(operationID: stageID,
@@ -226,7 +226,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
             workingDirectory: command.workingDirectory, environment: command.environment,
             timeoutMilliseconds: try remainingMilliseconds(owner),
             stdoutByteLimit: owner.stdoutRemaining, stderrByteLimit: owner.stderrRemaining)
-        let record = CargoProjectCapture(provider.makeProjectToolSession())
+        let record = ProjectToolCapture(provider.makeProjectToolSession())
         owner.captures.append(record)
         record.session.onStateChange = { [weak self, weak owner, weak record] state in
             guard let self, let owner, let record else { return }
@@ -248,28 +248,28 @@ package final class CargoProjectFeatureModel: ObservableObject {
         guard result.operationID == stageID, result.status == .succeeded, result.cause == nil,
               result.exitCode == 0, result.stdoutReachedEOF, result.stderrReachedEOF,
               result.cleanupConfirmed else {
-            throw CargoProjectFailure(message: result.message ?? "Cargo metadata command failed (\(result.cause?.rawValue ?? result.status.rawValue)).")
+            throw ProjectToolFailure(message: result.message ?? "Cargo metadata command failed (\(result.cause?.rawValue ?? result.status.rawValue)).")
         }
         guard result.stdout.count <= owner.stdoutRemaining, result.stderr.count <= owner.stderrRemaining else {
-            throw CargoProjectFailure(message: "Cargo metadata exceeded the refresh output limit.")
+            throw ProjectToolFailure(message: "Cargo metadata exceeded the refresh output limit.")
         }
         owner.stdoutRemaining -= result.stdout.count
         owner.stderrRemaining -= result.stderr.count
         return result
     }
 
-    private func checkCurrent(_ owner: CargoProjectRefreshOperation) throws {
+    private func checkCurrent(_ owner: ProjectToolRefreshOperation) throws {
         guard operation === owner, !retired, owner.cancellationMessage == nil,
               providerGeneration == owner.providerGeneration, !Task.isCancelled else {
-            throw CargoProjectFailure(message: owner.cancellationMessage ?? "Cargo metadata refresh is no longer current.")
+            throw ProjectToolFailure(message: owner.cancellationMessage ?? "Cargo metadata refresh is no longer current.")
         }
         _ = try remainingMilliseconds(owner)
     }
 
-    private func remainingMilliseconds(_ owner: CargoProjectRefreshOperation) throws -> Int {
+    private func remainingMilliseconds(_ owner: ProjectToolRefreshOperation) throws -> Int {
         let remaining = scheduler.now.duration(to: owner.deadline).components
         let milliseconds = remaining.seconds * 1_000 + remaining.attoseconds / 1_000_000_000_000_000
-        guard milliseconds > 0 else { throw CargoProjectFailure(message: "Cargo metadata refresh timed out.") }
+        guard milliseconds > 0 else { throw ProjectToolFailure(message: "Cargo metadata refresh timed out.") }
         return Int(min(30_000, milliseconds))
     }
 
@@ -280,7 +280,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
             && first.environment == last.environment
     }
 
-    private func requestStop(_ owner: CargoProjectRefreshOperation, message: String) {
+    private func requestStop(_ owner: ProjectToolRefreshOperation, message: String) {
         guard operation === owner else { return }
         if owner.cancellationMessage == nil { owner.cancellationMessage = message }
         owner.deadlineTimer?.cancel(); owner.deadlineTimer = nil
@@ -292,7 +292,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
         updateOwnership(owner)
     }
 
-    private func stopCapture(_ record: CargoProjectCapture, owner: CargoProjectRefreshOperation) {
+    private func stopCapture(_ record: ProjectToolCapture, owner: ProjectToolRefreshOperation) {
         guard record.stopTask == nil, !record.cleanupConfirmed else { return }
         record.stopTask = Task { @MainActor [self, owner, record] in
             let stopped = await record.session.stopAndWait()
@@ -302,7 +302,7 @@ package final class CargoProjectFeatureModel: ObservableObject {
         }
     }
 
-    private func ensureStopDeadline(_ owner: CargoProjectRefreshOperation) {
+    private func ensureStopDeadline(_ owner: ProjectToolRefreshOperation) {
         guard owner.stopTimer == nil else { return }
         owner.stopTimer = scheduler.schedule(at: scheduler.now.advanced(by: .seconds(3))) { [weak self, weak owner] in
             guard let self, let owner, self.operation === owner else { return }
@@ -313,13 +313,13 @@ package final class CargoProjectFeatureModel: ObservableObject {
         }
     }
 
-    private func awaitStopped(_ owner: CargoProjectRefreshOperation) async -> Bool {
+    private func awaitStopped(_ owner: ProjectToolRefreshOperation) async -> Bool {
         guard owner.isOwned else { return true }
         ensureStopDeadline(owner)
         return await withCheckedContinuation { owner.stopWaiters.append($0) }
     }
 
-    private func updateOwnership(_ owner: CargoProjectRefreshOperation) {
+    private func updateOwnership(_ owner: ProjectToolRefreshOperation) {
         guard operation === owner, !owner.isOwned else { return }
         owner.deadlineTimer?.cancel(); owner.deadlineTimer = nil
         owner.finishStopWaiters(true)

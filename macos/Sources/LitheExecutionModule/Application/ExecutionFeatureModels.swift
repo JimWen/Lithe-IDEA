@@ -10,6 +10,7 @@ package enum RunConfigurationGenerationIntent: Sendable, Equatable {
     case run
     case debug
     case cargoTarget(configurationID: String, name: String)
+    case goTarget(configurationID: String, name: String)
 }
 
 @MainActor
@@ -21,6 +22,7 @@ package final class RunFeatureModel: ObservableObject {
     /// Explicit launches focus their session even if the view is hidden;
     /// output updates must preserve a later manual selection.
     @Published package var selectedSessionID: String?
+    @Published package var selectedToolTaskID: UUID?
     package private(set) var generationIntent: RunConfigurationGenerationIntent = .identifyOnly
 
     package init(service: RunService) {
@@ -110,6 +112,7 @@ package final class RunFeatureModel: ObservableObject {
 
 
     package func runAllServices() {
+        selectedToolTaskID = nil
         service.runAllServices()
         selectedSessionID = service.moduleSessions.first?.id
     }
@@ -120,6 +123,7 @@ package final class RunFeatureModel: ObservableObject {
 
     package func startConfiguration(_ configuration: RunConfiguration) {
         guard configuration.kind != .currentFile else { return }
+        selectedToolTaskID = nil
         selectedSessionID = configuration.id
         service.startConfiguration(configuration)
     }
@@ -129,6 +133,7 @@ package final class RunFeatureModel: ObservableObject {
     }
 
     package func restartModule(_ session: RunSession) {
+        selectedToolTaskID = nil
         selectedSessionID = session.id
         service.restartModule(session)
     }
@@ -172,15 +177,18 @@ package final class RunFeatureModel: ObservableObject {
         service.unregisterLanguageRunExtension(languageID: languageID)
     }
     package func runSelected(currentFileURL: URL?) {
+        selectedToolTaskID = nil
         selectedSessionID = nil
         service.runSelected(currentFileURL: currentFileURL)
     }
     package func restart() {
+        selectedToolTaskID = nil
         selectedSessionID = nil
         service.restart()
     }
     package func stop() { service.stop() }
     package func reset() {
+        selectedToolTaskID = nil
         selectedSessionID = nil
         service.reset()
     }

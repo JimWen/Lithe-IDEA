@@ -15,7 +15,10 @@ import LitheCoreContracts
 final class AppModel: ObservableObject, Identifiable {
     let id = UUID()
     @Published private(set) var workspaceURL: URL? {
-        didSet { invalidateCargoWorkspace() }
+        didSet {
+            invalidateCargoWorkspace()
+            invalidateGoWorkspace()
+        }
     }
     @Published private(set) var standaloneFileURL: URL? {
         didSet { standaloneCommandGeneration += 1 }
@@ -43,6 +46,15 @@ final class AppModel: ObservableObject, Identifiable {
     var cargoCancellationTask: Task<Void, Never>?
     var cargoRequestGeneration = 0
     let cargoTreePresentation = CargoTreePresentation()
+    @Published var isGoVisible = false
+    @Published var isGoActivating = false
+    @Published var isGoCancelling = false
+    @Published var goActivationError: String?
+    @Published var selectedGoManifestURL: URL?
+    var goRefreshTask: Task<Void, Never>?
+    var goCancellationTask: Task<Void, Never>?
+    var goRequestGeneration = 0
+    let goTreePresentation = GoTreePresentation()
     @Published var editingRunConfiguration: RunConfiguration?
     @Published var pendingGitPushReference: GitReference?
     @Published var pendingNewBranchReference: GitReference?
@@ -373,6 +385,7 @@ final class AppModel: ObservableObject, Identifiable {
         moduleRuntimeObservationID = services.moduleRuntime.observeEvents { [weak self] event in
             guard let self else { return }
             handleCargoModuleEvent(event)
+            handleGoModuleEvent(event)
             if event.name == "module.sleeping" || event.name == "module.shutdown" {
                 if event.source == .database, selectedSidebar == .database {
                     selectedSidebar = .project
@@ -1758,43 +1771,4 @@ final class AppModel: ObservableObject, Identifiable {
         guard let gitFeature = await activateGitModule() else { return }
         await gitFeature.fetchGit()
     }
-
-    func checkoutReference(_ reference: GitReference) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.checkoutReference(reference)
-    }
-
-    func resolveCheckoutConflict(
-        _ request: GitCheckoutConflictRequest,
-        strategy: GitCheckoutConflictStrategy
-    ) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.resolveCheckoutConflict(request, strategy: strategy)
-    }
-
-    func checkoutRevision(_ rawRevision: String) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.checkoutRevision(rawRevision)
-    }
-
-    func cherryPick(_ commit: GitCommit) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.cherryPick(commit)
-    }
-
-    func revert(_ commit: GitCommit) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.revert(commit)
-    }
-
-    func resetCurrentBranch(to commit: GitCommit) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.resetCurrentBranch(to: commit)
-    }
-
-    func pushBranch(_ reference: GitReference) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.pushBranch(reference)
-    }
-
 }

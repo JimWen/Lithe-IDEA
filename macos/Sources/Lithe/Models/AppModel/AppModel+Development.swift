@@ -30,6 +30,7 @@ struct PendingRunAction: Equatable {
         case restart
         case editConfiguration
         case cargoTarget(configurationID: String, name: String, requestGenerationIfMissing: Bool)
+        case goTarget(configurationID: String, name: String, requestGenerationIfMissing: Bool)
     }
 
     let kind: Kind
@@ -222,6 +223,8 @@ extension AppModel {
         case .debug: startDebugging()
         case .cargoTarget(let configurationID, let name):
             startCargoTarget(configurationID: configurationID, name: name, requestGenerationIfMissing: false)
+        case .goTarget(let configurationID, let name):
+            startGoTarget(configurationID: configurationID, name: name, requestGenerationIfMissing: false)
         }
     }
 
@@ -249,6 +252,47 @@ extension AppModel {
             guard let configuration = feature.configurations.first(where: { $0.id == configurationID }) else {
                 if requestGenerationIfMissing {
                     feature.requestRunConfigurationGeneration(intent: .cargoTarget(configurationID: configurationID, name: name))
+                } else {
+                    // Generation completed but this target is still absent.
+                    // Report it once instead of reopening the setup dialog.
+                    showNotification(
+                        String(localized: "No run configuration was generated for this target. Regenerate run configurations and try again."),
+                        severity: .error, title: name
+                    )
+                }
+                return
+            }
+            showNotification(String(localized: "Running \(configuration.name)"))
+            selectRunConfiguration(configuration)
+            startRunConfiguration(configuration)
+        }
+    }
+
+    /// Go main launches use the same snapshot readiness and explicit setup
+    /// flow as Run, mirroring Cargo target launches. The detector-generated
+    /// `go run .` configuration id is resolved against the generated
+    /// inventory, regenerating it once when missing.
+    func startGoTarget(configurationID: String, name: String, requestGenerationIfMissing: Bool = true) {
+        Task { @MainActor [weak self] in
+            guard let self, let identity = currentWorkspaceIdentity else { return }
+            guard let feature = await activateExecutionModule()?.runFeature else {
+                showNotification(String(localized: "Go execution support is unavailable."), severity: .error, title: name)
+                return
+            }
+            switch await ensureRunProjectReady(feature, for: identity) {
+            case .ready: clearPendingRunAction(for: identity)
+            case .waitingForSnapshot(let waitingIdentity):
+                deferRunAction(.goTarget(
+                    configurationID: configurationID, name: name,
+                    requestGenerationIfMissing: requestGenerationIfMissing
+                ), for: waitingIdentity)
+                return
+            case .stale: return
+            }
+            revealRunToolWindow()
+            guard let configuration = feature.configurations.first(where: { $0.id == configurationID }) else {
+                if requestGenerationIfMissing {
+                    feature.requestRunConfigurationGeneration(intent: .goTarget(configurationID: configurationID, name: name))
                 } else {
                     // Generation completed but this target is still absent.
                     // Report it once instead of reopening the setup dialog.
@@ -331,6 +375,10 @@ extension AppModel {
         // tool window free of toolchain probes. It is a no-op unless Rust
         // support is present and nothing has been loaded or failed yet.
         prewarmCargoProject()
+        // Go metadata is a project service too, and recognizing its modules
+        // needs an applied scan. Same warm-up contract as Cargo: a no-op
+        // unless Go support is present and nothing has been loaded or failed.
+        prewarmGoProject()
         guard resumesDeferredRunAction else { return }
         resumeDeferredRunAction(
             execution.runFeature,
@@ -425,6 +473,8 @@ extension AppModel {
         case .editConfiguration: showRunConfigurationEditor()
         case .cargoTarget(let configurationID, let name, let requestGenerationIfMissing):
             startCargoTarget(configurationID: configurationID, name: name, requestGenerationIfMissing: requestGenerationIfMissing)
+        case .goTarget(let configurationID, let name, let requestGenerationIfMissing):
+            startGoTarget(configurationID: configurationID, name: name, requestGenerationIfMissing: requestGenerationIfMissing)
         }
     }
 

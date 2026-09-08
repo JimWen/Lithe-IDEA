@@ -48,7 +48,7 @@ struct OutputTextView: View {
 
     // MARK: - 渲染
 
-    fileprivate static func renderOutput(
+    static func renderOutput(
         _ source: String,
         searchRoots: [URL],
         fileExists: @escaping (URL) -> Bool,
@@ -194,6 +194,12 @@ struct OutputTextView: View {
         pattern: #"\bat\s+([\w.$]+(?:\$[\w$]+)?)\.([\w$<>]+)\(([\w$]+\.java):(\d+)\)"#
     )
 
+    // Go compiler/test and Rust compiler locations share this printed path
+    // shape. Resolve against the captured invocation directory before linking.
+    private static let fileLocationExpression = try! NSRegularExpression(
+        pattern: #"^\s*(?:-->\s*)?(.+?\.[A-Za-z0-9_+\-]+):([1-9]\d*)(?::([1-9]\d*))?(?::|\s|$)"#
+    )
+
     private static func matchLocations(in text: String, searchRoots: [URL], fileExists: @escaping (URL) -> Bool) -> [OutputLocation] {
         guard !searchRoots.isEmpty else { return [] }
         var locations: [OutputLocation] = []
@@ -201,6 +207,24 @@ struct OutputTextView: View {
         text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: [.byLines]) { substring, lineRange, _, _ in
             guard let line = substring, !line.isEmpty else { return }
             let lineNSRange = NSRange(line.startIndex..<line.endIndex, in: line)
+
+            if let match = fileLocationExpression.firstMatch(in: line, range: lineNSRange),
+               let path = capture(match, at: 1, in: line),
+               let lineNumber = capture(match, at: 2, in: line).flatMap(Int.init),
+               let url = resolvePath(path, searchRoots: searchRoots, fileExists: fileExists),
+               let pathRange = Range(match.range(at: 1), in: line) {
+                let columnText = capture(match, at: 3, in: line)
+                // An overflowing column is malformed, not an absent column.
+                guard columnText == nil || Int(columnText!) != nil else { return }
+                let lastField = match.range(at: columnText == nil ? 2 : 3)
+                guard let endRange = Range(lastField, in: line) else { return }
+                let start = text.index(lineRange.lowerBound, offsetBy: line.distance(from: line.startIndex, to: pathRange.lowerBound))
+                let end = text.index(lineRange.lowerBound, offsetBy: line.distance(from: line.startIndex, to: endRange.upperBound))
+                locations.append(OutputLocation(range: start..<end,
+                    kind: severity(ofLine: line) == .warning ? .warning : .error,
+                    url: url, line: lineNumber, column: columnText.flatMap(Int.init)))
+                return
+            }
 
             if let match = stackExpression.firstMatch(in: line, range: lineNSRange),
                let className = capture(match, at: 1, in: line),
@@ -435,6 +459,7 @@ private struct OutputTextStorageView: NSViewRepresentable {
         private var showingEmptyMessage = false
         private var renderedTheme: AppColorTheme?
         private var renderedIsDark: Bool?
+        private var renderedSearchRoots: [URL] = []
         private var isAtBottom = true
         private var boundsObserver: NSObjectProtocol?
 
@@ -462,6 +487,7 @@ private struct OutputTextStorageView: NSViewRepresentable {
             guard let storage = textView?.textStorage else { return }
             let wasAtBottom = isAtBottom
             let appearanceChanged = renderedTheme != theme || renderedIsDark != isDark
+                || renderedSearchRoots != searchRoots
             if output.isEmpty {
                 guard appearanceChanged || !showingEmptyMessage || storage.string != emptyMessage else { return }
                 storage.setAttributedString(NSAttributedString(
@@ -503,6 +529,7 @@ private struct OutputTextStorageView: NSViewRepresentable {
             }
             renderedTheme = theme
             renderedIsDark = isDark
+            renderedSearchRoots = searchRoots
             if wasAtBottom { scrollToBottom() }
             reportBottomState()
         }

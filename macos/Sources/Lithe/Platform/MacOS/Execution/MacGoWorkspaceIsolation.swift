@@ -67,10 +67,10 @@ struct MacGoWorkspaceIsolation: Sendable {
         let resolvedWorkspace = workspaceURL.resolvingSymlinksInPath().standardizedFileURL
         guard resolvedDirectory.path != resolvedWorkspace.path,
               !resolvedDirectory.path.hasPrefix(resolvedWorkspace.path + "/") else {
-            try? FileManager.default.removeItem(at: directory)
-            throw ProjectMetadataFailure.invalidInput(
-                message: "The Go workspace isolation directory must live outside the workspace."
-            )
+            var message = "The Go workspace isolation directory must live outside the workspace."
+            do { try FileManager.default.removeItem(at: directory) }
+            catch { message += " The rejected temporary directory could not be removed: \(error.localizedDescription)" }
+            throw ProjectMetadataFailure.invalidInput(message: message)
         }
 
         do {

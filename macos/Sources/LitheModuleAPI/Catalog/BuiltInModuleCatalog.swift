@@ -224,6 +224,15 @@ public enum OfficialPluginCatalog {
         providedCapabilities: [.languageServerExtension(goLanguageID)]
     )
 
+    /// The Go Tools sidebar entry. Declared by the current package's manifest
+    /// and factory together; the frozen v1 module manifest for already
+    /// distributed bundles deliberately stays without it.
+    public static let projectToolsContributions: [ModuleContribution] = [ModuleContribution(
+        id: "language.go.projecttools", kind: .toolWindow, title: "Go Tools",
+        icon: "chevron.left.forwardslash.chevron.right", placement: .rightSidebar, order: 101,
+        actionID: "go.toggle", rendererID: "go.project"
+    )]
+
     private static let goExecutionManifestV2 = ModuleManifest(
         id: goExecutionManifestV1.id,
         displayName: goExecutionManifestV1.displayName,
@@ -254,7 +263,10 @@ public enum OfficialPluginCatalog {
                 bundlePath: "GoSupport.bundle"
             ),
             modules: [
-                PluginModuleDeclaration(manifest: goExecutionManifestV2),
+                PluginModuleDeclaration(
+                    manifest: goExecutionManifestV2,
+                    contributions: OfficialPluginCatalog.projectToolsContributions
+                ),
                 PluginModuleDeclaration(manifest: goLanguageServerManifestV1)
             ],
             languageSupports: [LanguageSupportDeclaration(

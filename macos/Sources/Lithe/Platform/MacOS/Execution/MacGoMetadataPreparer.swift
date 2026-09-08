@@ -16,26 +16,16 @@ import LitheCoreContracts
 /// location round resolves through it. The single-module path needs no copy:
 /// `GOWORK=off` keeps the module directory untouched.
 struct MacGoMetadataPreparer: ProjectMetadataNativePreparing {
+    private let makeIsolation: @Sendable (URL, URL) throws -> MacGoWorkspaceIsolation
+    init(makeIsolation: @escaping @Sendable (URL, URL) throws -> MacGoWorkspaceIsolation = {
+        try MacGoWorkspaceIsolation.create(workspaceURL: $0, sourceGoWorkURL: $1)
+    }) { self.makeIsolation = makeIsolation }
     func prepare(_ request: CargoMetadataPreparationRequest) throws -> any ProjectMetadataNativeSession {
         let manifest = try ProjectToolFileIdentity.regularFile(at: request.manifestURL, role: "go.mod")
         let workspaceURL = request.workspaceURL.resolvingSymlinksInPath().standardizedFileURL
 
-        // A cache or module root inside the workspace would turn a metadata
-        // read into a workspace write no matter which flags are pinned, so it
-        // is rejected instead of silently redirected.
-        let workspacePrefix = workspaceURL.path.hasSuffix("/") ? workspaceURL.path : workspaceURL.path + "/"
-        for name in ["GOMODCACHE", "GOCACHE", "GOPATH"] {
-            guard let value = request.environment[name], !value.isEmpty else { continue }
-            let resolved = URL(fileURLWithPath: value)
-                .resolvingSymlinksInPath().standardizedFileURL.path
-            if resolved == workspaceURL.path || resolved.hasPrefix(workspacePrefix) {
-                throw ProjectMetadataFailure.invalidInput(
-                    message: name
-                        + " points inside the project, so a metadata read could write there."
-                        + " Move it outside the workspace and refresh Go again."
-                )
-            }
-        }
+        let environment = GoMetadataEnvironment.make(from: request.environment)
+        try GoMetadataEnvironment.validateLocations(environment, workspaceURL: workspaceURL)
 
         // An explicit user choice is authoritative: if it is unusable the refresh
         // fails instead of quietly falling back to a different toolchain.
@@ -46,7 +36,6 @@ struct MacGoMetadataPreparer: ProjectMetadataNativePreparing {
             go = try firstUsableExecutable(request.cargoCandidates, role: "Go")
         }
 
-        let environment = GoMetadataEnvironment.make(from: request.environment)
         var goWork: ProjectToolFileIdentity?
         var isolation: MacGoWorkspaceIsolation?
         var useManifests: [ProjectToolFileIdentity] = []
@@ -54,7 +43,9 @@ struct MacGoMetadataPreparer: ProjectMetadataNativePreparing {
         let goWorkURL = workspaceURL.appendingPathComponent("go.work")
         if FileManager.default.fileExists(atPath: goWorkURL.path) {
             goWork = try ProjectToolFileIdentity.regularFile(at: goWorkURL, role: "go.work")
-            isolation = try MacGoWorkspaceIsolation.create(workspaceURL: workspaceURL, sourceGoWorkURL: goWorkURL)
+            guard let goWork, (0...1_024 * 1_024).contains(goWork.size) else {
+                throw ProjectMetadataFailure.invalidInput(message: "go.work exceeds the 1 MiB metadata input limit.")
+            }
             // Every use module's manifest is frozen at preparation time, so no
             // edit made after the refresh started can silently become the new
             // baseline. The work-edit round later has to agree with this list.
@@ -65,8 +56,15 @@ struct MacGoMetadataPreparer: ProjectMetadataNativePreparing {
                 ))
             }
         }
+        try manifest.validate(role: "go.mod")
+        try goWork?.validate(role: "go.work")
+        try go.validate(role: "Go")
+        for useManifest in useManifests { try useManifest.validate(role: "a use module's go.mod") }
+        // Allocate only after every fallible manifest check. Until a session is
+        // returned there is no owner that could delete a partially prepared copy.
+        if goWork != nil { isolation = try makeIsolation(workspaceURL, goWorkURL) }
         return MacGoMetadataSession(
-            workspaceURL: workspaceURL,
+            sourceWorkspaceURL: request.workspaceURL.standardizedFileURL, workspaceURL: workspaceURL,
             manifestDirectory: manifest.resolvedURL.deletingLastPathComponent(),
             manifest: manifest,
             goWork: goWork,
@@ -108,6 +106,7 @@ private final class MacGoMetadataSession: ProjectMetadataNativeSession, ProjectM
     }
 
     private let lock = NSLock()
+    private let sourceWorkspaceURL: URL
     private let workspaceURL: URL
     private let manifestDirectory: URL
     private let manifest: ProjectToolFileIdentity
@@ -126,11 +125,12 @@ private final class MacGoMetadataSession: ProjectMetadataNativeSession, ProjectM
     private var modulesOutput: Data?
 
     init(
-        workspaceURL: URL, manifestDirectory: URL, manifest: ProjectToolFileIdentity,
+        sourceWorkspaceURL: URL, workspaceURL: URL, manifestDirectory: URL, manifest: ProjectToolFileIdentity,
         goWork: ProjectToolFileIdentity?, go: ProjectToolFileIdentity,
         environment: [String: String], isolation: MacGoWorkspaceIsolation?,
         useDirectories: [URL], useManifests: [ProjectToolFileIdentity]
     ) {
+        self.sourceWorkspaceURL = sourceWorkspaceURL
         self.workspaceURL = workspaceURL
         self.manifestDirectory = manifestDirectory
         self.manifest = manifest
@@ -145,7 +145,7 @@ private final class MacGoMetadataSession: ProjectMetadataNativeSession, ProjectM
     deinit {
         // Safety net only. The owning feature model deletes the isolation copy
         // on every exit path so the diagnostic from a failed deletion stays visible.
-        isolation?.cleanup()
+        if let diagnostic = isolation?.cleanup() { NSLog("Go metadata cleanup: %@", diagnostic) }
     }
 
     var initialStage: ProjectMetadataCaptureStage {
@@ -205,9 +205,19 @@ private final class MacGoMetadataSession: ProjectMetadataNativeSession, ProjectM
     func validate() throws {
         lock.lock()
         defer { lock.unlock() }
+        guard sourceWorkspaceURL.resolvingSymlinksInPath().standardizedFileURL == workspaceURL,
+              FileManager.default.fileExists(atPath: workspaceURL.appendingPathComponent("go.work").path) == (goWork != nil) else {
+            throw ProjectMetadataFailure.invalidInput(message: "The Go workspace changed. Refresh Go metadata again.")
+        }
+        try GoMetadataEnvironment.validateLocations(environment, workspaceURL: workspaceURL)
         try manifest.validate(role: "go.mod")
         try go.validate(role: "Go")
         try goWork?.validate(role: "go.work")
+        if let goWork {
+            guard try MacGoWorkspaceIsolation.useDirectories(sourceGoWorkURL: goWork.sourceURL) == frozenUseDirectories else {
+                throw ProjectMetadataFailure.invalidInput(message: "A Go workspace module path changed. Refresh Go metadata again.")
+            }
+        }
         for (index, useManifest) in frozenUseManifests.enumerated() {
             try useManifest.validate(role: "the go.mod of use module \(index + 1)")
         }
@@ -401,6 +411,36 @@ private enum GoMetadataEnvironment {
     private static let allowed = [
         "HOME", "PATH", "GOMODCACHE", "GOPATH", "GOCACHE"
     ]
+
+    /// These are the macOS defaults used by the supported Go toolchain when
+    /// GOENV=off. Checking only explicitly exported variables misses projects
+    /// opened at ~/go or ~/Library/Caches, where default caches would write.
+    static func validateLocations(_ environment: [String: String], workspaceURL: URL) throws {
+        let home = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
+        let goPath = environment["GOPATH"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? home.map { URL(fileURLWithPath: $0).appendingPathComponent("go").path }
+        let goCache = environment["GOCACHE"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? home.map { URL(fileURLWithPath: $0).appendingPathComponent("Library/Caches/go-build").path }
+        guard let goPath, let goCache else {
+            throw ProjectMetadataFailure.invalidInput(message: "Go cache locations could not be determined. Configure HOME or the Go cache paths.")
+        }
+        let paths = goPath.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+        let moduleCache = environment["GOMODCACHE"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? paths.first.map { URL(fileURLWithPath: $0).appendingPathComponent("pkg/mod").path }
+        var locations = paths.map { ("GOPATH", $0) }
+        if goCache != "off" { locations.append(("GOCACHE", goCache)) }
+        if let moduleCache { locations.append(("GOMODCACHE", moduleCache)) }
+        let prefix = workspaceURL.path.hasSuffix("/") ? workspaceURL.path : workspaceURL.path + "/"
+        for (name, path) in locations {
+            guard path.hasPrefix("/"), !path.contains("\0") else {
+                throw ProjectMetadataFailure.invalidInput(message: "\(name) must be an absolute path for a read-only metadata refresh.")
+            }
+            let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+            guard resolved != workspaceURL.path, !resolved.hasPrefix(prefix) else {
+                throw ProjectMetadataFailure.invalidInput(message: "\(name) points inside the project, so metadata could write there. Move it outside the workspace and refresh Go again.")
+            }
+        }
+    }
 
     static func make(from inherited: [String: String]) -> [String: String] {
         var environment: [String: String] = [:]

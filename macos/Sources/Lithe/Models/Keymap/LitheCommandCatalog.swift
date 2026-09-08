@@ -62,6 +62,9 @@ enum LitheCommandCatalog {
         command("toggle-cargo", "Cargo", "Show or hide the Cargo tool window", .window),
         command("refresh-cargo", "Cargo: Refresh", "Reload Cargo workspace metadata", .project),
         command("cancel-cargo-refresh", "Cargo: Cancel Refresh", "Stop reading Cargo workspace metadata", .project),
+        command("toggle-go", "Go Tools", "Show or hide the Go Tools tool window", .window),
+        command("refresh-go", "Go: Refresh", "Reload Go workspace metadata", .project),
+        command("cancel-go-refresh", "Go: Cancel Refresh", "Stop reading Go workspace metadata", .project),
         command("toggle-debug", "Toggle Debug", "Show or hide the Debug tool window", .window, "5", [.command]),
 
         command("local-history", "Local History", "Open history for the active file", .history),

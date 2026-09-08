@@ -3,7 +3,7 @@ import LitheCoreContracts
 
 @MainActor
 public final class GoExecutionCapability: NSObject,
-    LanguageRunExtensionProviding,
+    ProjectToolActionProviding,
     LanguageTestExtensionProviding {
     public let languageID = goLanguageID
     private let sessionFactory: @MainActor () -> any LanguageExecutionSession
@@ -14,6 +14,10 @@ public final class GoExecutionCapability: NSObject,
 
     init(sessionFactory: @escaping @MainActor () -> any LanguageExecutionSession) {
         self.sessionFactory = sessionFactory
+    }
+
+    public func toolPlan(for request: ProjectToolActionRequest) throws -> ProjectToolTaskPlan {
+        try GoToolActionCapability().plan(for: request)
     }
 
     public func makeExecutionSession() -> any LanguageExecutionSession {

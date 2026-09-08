@@ -7,10 +7,7 @@ https://github.com/JetBrains/intellij-community/tree/master/plugins/maven/src/ma
 The source project and these resources are distributed under the Apache License
 2.0. See LICENSE-APACHE-2.0.txt for the license text.
 
-toolwindows/toolWindowCargo.svg and its dark variant are taken from the MIT
-licensed IntelliJ Rust open-source plugin repository at commit
-c6657c02bb62075bf7b7ceb84d000f93dda34dc1:
-
-https://github.com/intellij-rust/intellij-rust/blob/c6657c02bb62075bf7b7ceb84d000f93dda34dc1/src/main/resources/icons/expui
-
-They are distributed under the MIT License in LICENSE-MIT.txt.
+toolwindows/toolWindowCargo.svg, toolwindows/toolWindowGo.svg and their dark
+variants are original Lithe drawings of outlined R and G letters. They replace
+the former IntelliJ Rust Cargo resource and use this repository's license.
+LICENSE-MIT.txt is retained for the historical IntelliJ Rust attribution.

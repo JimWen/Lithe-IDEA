@@ -275,6 +275,7 @@ private struct MacCargoMetadataSession: ProjectMetadataNativeSession {
 /// A file plus the identity fields that prove it is still the same file later.
 /// Shared by the project tool preparers; the role names appear in failures.
 struct ProjectToolFileIdentity: Sendable {
+    let sourceURL: URL
     let resolvedURL: URL
     let device: Int
     let inode: UInt64
@@ -287,7 +288,7 @@ struct ProjectToolFileIdentity: Sendable {
             throw ProjectMetadataFailure.invalidInput(message: "Could not read \(role) at \(resolved.path).")
         }
         return ProjectToolFileIdentity(
-            resolvedURL: resolved,
+            sourceURL: url.standardizedFileURL, resolvedURL: resolved,
             device: (attributes[.systemNumber] as? Int) ?? -1,
             inode: (attributes[.systemFileNumber] as? UInt64) ?? 0,
             size: (attributes[.size] as? Int) ?? -1,
@@ -297,9 +298,10 @@ struct ProjectToolFileIdentity: Sendable {
 
     static func regularFile(at url: URL, role: String) throws -> ProjectToolFileIdentity {
         let identity = try existing(at: url, role: role)
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: identity.resolvedURL.path, isDirectory: &isDirectory),
-              !isDirectory.boolValue else {
+        let attributes = try FileManager.default.attributesOfItem(atPath: identity.resolvedURL.path)
+        // A FIFO/socket/device is not a tool or manifest. In particular, opening
+        // a FIFO to inspect its executable header would block a worker forever.
+        guard attributes[.type] as? FileAttributeType == .typeRegular else {
             throw ProjectMetadataFailure.invalidInput(message: "\(role) is not a regular file.")
         }
         return identity
@@ -331,8 +333,8 @@ struct ProjectToolFileIdentity: Sendable {
     }
 
     func validate(role: String) throws {
-        let current = try Self.existing(at: resolvedURL, role: role)
-        guard current.isSameFile(as: self), current.size == size, current.modified == modified else {
+        let current = try Self.existing(at: sourceURL, role: role)
+        guard current.resolvedURL == resolvedURL, current.isSameFile(as: self), current.size == size, current.modified == modified else {
             throw ProjectMetadataFailure.invalidInput(
                 message: "\(role) changed during the refresh. Refresh the project metadata again."
             )

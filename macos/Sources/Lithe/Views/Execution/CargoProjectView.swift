@@ -262,11 +262,9 @@ private struct CargoProjectView: View {
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
+                .contextMenu { refreshButton }
             }
             .tag("project")
-            .contextMenu {
-                refreshButton
-            }
             diagnostics(snapshot.diagnostics)
         }
         .listStyle(.sidebar)
@@ -294,14 +292,15 @@ private struct CargoProjectView: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
+            // Limit the menu to this row, leaving descendant target menus intact.
+            .contextMenu {
+                Button("Open Cargo.toml") { openManifest(member) }
+                    .disabled(model.cargoFileURL(for: member.manifest) == nil)
+                refreshButton
+            }
         }
         .tag("member:" + member.id)
         .help(member.manifest.rootID + ": " + member.manifest.relativePath)
-        .contextMenu {
-            Button("Open Cargo.toml") { openManifest(member) }
-                .disabled(model.cargoFileURL(for: member.manifest) == nil)
-            refreshButton
-        }
     }
 
     /// The group row every member owns, rendered either under a member row or

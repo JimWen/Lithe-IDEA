@@ -411,6 +411,12 @@ extension AppModel {
             canRefreshCargoProject
         case "cancel-cargo-refresh":
             canCancelCargoRefresh
+        case "toggle-go":
+            isGoAvailable
+        case "refresh-go":
+            canRefreshGoProject
+        case "cancel-go-refresh":
+            canCancelGoRefresh
         case "save", "find-in-file", "replace-in-file", "go-to-line", "local-history", "reveal-in-finder", "toggle-breakpoint":
             activeDocument != nil
         case "find-next", "find-previous":

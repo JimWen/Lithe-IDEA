@@ -335,6 +335,12 @@ final class MacServiceContainer {
                         ),
                         cargoProject: MacCargoProjectComposition.makeFeature(
                             runtime: runtimeService, moduleRuntime: moduleRuntime, core: rustCore
+                        ),
+                        goProject: MacGoProjectComposition.makeFeature(
+                            runtime: runtimeService, moduleRuntime: moduleRuntime, core: rustCore
+                        ),
+                        toolTasks: MacProjectToolTaskComposition.makeFeature(
+                            runtime: runtimeService, moduleRuntime: moduleRuntime
                         )
                     )
                     return graph

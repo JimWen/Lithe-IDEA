@@ -4,6 +4,8 @@ import Foundation
 /// Failed cleanup retains the owner here even if a caller drops its session.
 final class MacProjectToolCoordinator: @unchecked Sendable {
     static let shared = MacProjectToolCoordinator()
+    private let maximumActive: Int
+    init(maximumActive: Int = 2) { self.maximumActive = maximumActive }
     private let lock = NSLock()
     private var owners: [UUID: AnyObject] = [:]
 
@@ -11,7 +13,7 @@ final class MacProjectToolCoordinator: @unchecked Sendable {
 
     func acquire(owner: AnyObject) -> UUID? {
         lock.withLock {
-            guard owners.count < 2 else { return nil }
+            guard owners.count < maximumActive else { return nil }
             let id = UUID()
             owners[id] = owner
             return id

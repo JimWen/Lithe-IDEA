@@ -9,6 +9,9 @@ package struct ProjectMetadataLocation: Decodable, Equatable, Sendable {
     package let rootID: String
     /// `.` denotes the mapped root, otherwise a slash-separated relative path.
     package let relativePath: String
+    package init(rootID: String, relativePath: String) {
+        self.rootID = rootID; self.relativePath = relativePath
+    }
 }
 
 package struct ProjectMetadataSnapshot: Decodable, Equatable, Sendable {

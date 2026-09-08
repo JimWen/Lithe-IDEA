@@ -90,6 +90,7 @@ struct ProjectLanguageSettingsView: View {
     private func saveExecutable() {
         do {
             try model.runtimeFeature.setCustomExecutablePath(executableDraft, for: command)
+            if command == "go" { model.goToolchainDidChange() }
             executableDraft = model.runtimeFeature.customExecutablePath(for: command) ?? ""
             errorMessage = nil
         } catch {

@@ -1,7 +1,7 @@
 # B7a2c3：Go 元数据读取隔离
 
 状态：基于 `feb1114e`。这是 [B7 Go/Cargo 方案](goland-parity-b7a-go-cargo.md) 中
-B7a2 明确要求先证明、否则不得接自动刷新的那一项的验证记录与结论。方案待独立审查，未实施。
+B7a2 明确要求先证明、否则不得接自动刷新的那一项的验证记录与结论。本文件保留隔离实验；生产实现、代码复核与真实验收已在 [B7a3](goland-parity-b7a3-go-tools-done.md#go-tools-acceptance) 完成。
 
 B7a2 原文：「以上 Go flags 只是候选读取策略，尚未证明 workspace 零写：Go modload 即使
 readonly 仍可能写 go.work.sum。B7a2 实施前必须以官方源码及缺 sum/有缓存依赖 fixture

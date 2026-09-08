@@ -4,7 +4,14 @@ import LitheGitModule
 
 enum WorkbenchLayoutMetrics {
     static let rightActivityBarWidth: CGFloat = 40
-    static let workspaceTrailingInset = rightActivityBarWidth
+    static let minimumDockedToolWidth: CGFloat = 240
+    static let minimumWorkspaceContentWidth: CGFloat = 640
+
+    static func dockedToolWidth(availableWidth: CGFloat, preferredWidth: CGFloat) -> CGFloat {
+        let budget = max(0, availableWidth - ActivityBarMetrics.width
+            - rightActivityBarWidth - minimumWorkspaceContentWidth)
+        return min(budget, max(minimumDockedToolWidth, preferredWidth))
+    }
 }
 
 private enum ActivityBarMetrics {
@@ -52,14 +59,17 @@ struct WorkbenchView: View {
                 projectTabBar
             }
 
-            HStack(spacing: 0) {
-                activityBar
-                workspaceArea
-                    .padding(.trailing, WorkbenchLayoutMetrics.workspaceTrailingInset)
-            }
-            .frame(maxHeight: .infinity)
-            .overlay(alignment: .trailing) {
-                rightHoverRegion
+            GeometryReader { geometry in
+                // Keep the project tree and editor usable at the minimum window
+                // width, while preserving the preferred tool width on larger windows.
+                let panelWidth = WorkbenchLayoutMetrics.dockedToolWidth(
+                    availableWidth: geometry.size.width, preferredWidth: rightSidebarWidth)
+                HStack(spacing: 0) {
+                    activityBar
+                    workspaceArea
+                    rightHoverRegion(panelWidth: panelWidth)
+                }
+                .frame(maxHeight: .infinity)
             }
 
             statusBar
@@ -949,7 +959,7 @@ struct WorkbenchView: View {
         model.notifications.lazy.filter { !$0.isRead }.count
     }
 
-    private var rightHoverRegion: some View {
+    private func rightHoverRegion(panelWidth: CGFloat) -> some View {
         HStack(spacing: 0) {
             if isRightSidebarVisible {
                 moduleUIRegistry.selectedToolContent(
@@ -957,7 +967,7 @@ struct WorkbenchView: View {
                     model: model
                 )
                 .equatable()
-                .frame(width: rightSidebarWidth)
+                .frame(width: panelWidth)
                 .frame(maxHeight: .infinity)
                 .workbenchPaneChrome(
                     background: model.workbenchBackgroundFeature.hasImage

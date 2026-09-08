@@ -1,4 +1,6 @@
 import SwiftUI
+import LitheCoreContracts
+import LitheExecutionModule
 
 struct RunView: View {
     @EnvironmentObject private var model: AppModel
@@ -6,7 +8,7 @@ struct RunView: View {
     @ObservedObject var feature: RunFeatureModel
     private var selectedSessionID: String? {
         get { feature.selectedSessionID }
-        nonmutating set { feature.selectedSessionID = newValue }
+        nonmutating set { feature.selectedToolTaskID = nil; feature.selectedSessionID = newValue }
     }
     @AppStorage("lithe.run.collapsedExecutions") private var collapsedExecutionIDs = ""
     @AppStorage("lithe.run.pinnedConfigurationIDs") private var pinnedConfigurationTokens = ""
@@ -25,19 +27,19 @@ struct RunView: View {
         VStack(spacing: 0) {
             toolWindowHeader
 
-            if !feature.portConflicts.isEmpty {
+            if selectedToolTask == nil, !feature.portConflicts.isEmpty {
                 portConflictBanner
                 Rectangle().fill(LitheTheme.warning.opacity(0.35)).frame(height: 1)
             }
 
-            if let notice = configurationNotice {
+            if selectedToolTask == nil, let notice = configurationNotice {
                 configurationNoticeBanner(notice)
                 Rectangle().fill(LitheTheme.divider).frame(height: 1)
             }
 
-            if feature.configurationStatus != .ready {
+            if model.projectToolTasksIfActive?.tasks.isEmpty != false, feature.configurationStatus != .ready {
                 configurationSetupView
-            } else if !hasRunnableConfigurations {
+            } else if !hasRunnableConfigurations && model.projectToolTasksIfActive?.tasks.isEmpty != false {
                 OutputTextView(
                     output: feature.output,
                     searchRoots: feature.sourceSearchRoots,
@@ -239,7 +241,24 @@ struct RunView: View {
         }
     }
 
+    private var selectedToolTask: ProjectToolTaskSnapshot? {
+        model.projectToolTasksIfActive?.tasks.first { $0.id == feature.selectedToolTaskID }
+    }
+
+    @ViewBuilder
     private var toolWindowHeader: some View {
+        if let task = selectedToolTask {
+            LitheToolWindowHeader(title: "Run", systemImage: "play.rectangle",
+                ideaAssetPath: "toolwindows/toolWindowRun.svg", subtitle: task.title,
+                onMinimize: { model.isRunVisible = false }) {
+                if let tasks = model.projectToolTasksIfActive {
+                    ProjectToolTaskToolbar(task: task, tasks: tasks)
+                }
+            }
+        } else { ordinaryToolWindowHeader }
+    }
+
+    private var ordinaryToolWindowHeader: some View {
         LitheToolWindowHeader(
             title: "Run",
             systemImage: "play.rectangle",
@@ -390,7 +409,12 @@ struct RunView: View {
 
     @ViewBuilder
     private var selectedConfigurationContent: some View {
-        if let configuration = selectedRunnableConfiguration {
+        if let task = selectedToolTask {
+            ProjectToolTaskOutputView(task: task)
+                .id(task.id)
+        } else if feature.configurationStatus != .ready {
+            configurationSetupView
+        } else if let configuration = selectedRunnableConfiguration {
             configurationContent(configuration)
         } else {
             OutputTextView(
@@ -491,6 +515,29 @@ struct RunView: View {
 
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 2) {
+                    if let tasks = model.projectToolTasksIfActive, !tasks.tasks.isEmpty {
+                        Text("Tool tasks")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(LitheTheme.secondaryText)
+                            .padding(6)
+                        ForEach(tasks.tasks) { task in
+                            sessionRow(title: task.title,
+                                subtitle: ProjectToolTaskPresentation.stateLabel(task.state),
+                                configurationKind: .process(provider: "go.tool"),
+                                isRunning: !task.state.isTerminal,
+                                exitCode: task.exitCode,
+                                isSelected: feature.selectedToolTaskID == task.id,
+                                toggleRequiresConfiguration: false,
+                                onToggle: !task.state.isTerminal || model.canRerunGoTool(task) ? {
+                                    if task.state.isTerminal { model.rerunGoTool(task) }
+                                    else { tasks.stop(task.id) }
+                                } : nil) {
+                                    feature.selectedToolTaskID = task.id
+                                }
+                                .accessibilityIdentifier("tool-task-" + task.id.uuidString)
+                        }
+                        Rectangle().fill(LitheTheme.divider).frame(height: 1).padding(.vertical, 5)
+                    }
                     let pinnedConfigurations = pinnedRunnableConfigurations
                     if !pinnedConfigurations.isEmpty {
                         pinnedSectionHeader(count: pinnedConfigurations.count)
@@ -505,7 +552,7 @@ struct RunView: View {
                         subtitle: feature.runningTitle ?? String(localized: "Primary configuration"),
                         isRunning: feature.isRunning,
                         exitCode: feature.lastExitCode,
-                        isSelected: selectedSessionID == nil,
+                        isSelected: selectedToolTask == nil && selectedSessionID == nil,
                         onToggle: nil
                     ) {
                         selectedSessionID = nil
@@ -560,7 +607,7 @@ struct RunView: View {
             configurationKind: configuration.kind,
             isRunning: session?.isRunning ?? false,
             exitCode: session?.exitCode,
-            isSelected: selectedSessionID == configuration.id,
+            isSelected: selectedToolTask == nil && selectedSessionID == configuration.id,
             isPinned: isPinned(configuration),
             onPin: { togglePinned(configuration) },
             onEdit: {
@@ -619,16 +666,7 @@ struct RunView: View {
                     .fill(LitheTheme.divider)
                     .frame(height: 1)
 
-                HStack(spacing: 6) {
-                    Image(systemName: "terminal")
-                    Text("Process output")
-                    Spacer(minLength: 0)
-                }
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(LitheTheme.secondaryText)
-                .padding(.horizontal, 12)
-                .frame(height: 28)
-                .background(LitheTheme.sidebar.opacity(0.45))
+                RunOutputSectionHeader()
 
                 OutputTextView(
                     output: session.output,
@@ -898,6 +936,7 @@ struct RunView: View {
         onEdit: (() -> Void)? = nil,
         isEditing: Binding<Bool> = .constant(false),
         editorConfiguration: RunConfiguration? = nil,
+        toggleRequiresConfiguration: Bool = true,
         onToggle: (() -> Void)?,
         action: @escaping () -> Void
     ) -> some View {
@@ -985,7 +1024,8 @@ struct RunView: View {
                     .litheIconButton()
                     .foregroundStyle(isRunning ? LitheTheme.warning : LitheTheme.success)
                     .help(isRunning ? "Stop" : "Run")
-                    .disabled(feature.configurationStatus != .ready || feature.isLoadingProject)
+                    .disabled(toggleRequiresConfiguration &&
+                        (feature.configurationStatus != .ready || feature.isLoadingProject))
                 }
         }
         .font(.system(size: 12))

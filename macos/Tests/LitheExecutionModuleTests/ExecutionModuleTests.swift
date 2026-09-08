@@ -448,7 +448,30 @@ private func makeTestGraph() -> ExecutionFeatureGraph {
         executableResolver: resolver,
         processFactory: { TestStreamingProcess() }
     )
-    return ExecutionFeatureGraph(run: run, tests: tests, cargoProject: makeTestCargoProject())
+    return ExecutionFeatureGraph(
+        run: run, tests: tests, cargoProject: makeTestCargoProject(), goProject: makeTestGoProject(),
+        toolTasks: ProjectToolTaskFeatureModel(activateProvider: { throw CocoaError(.featureUnsupported) },
+            makePreparation: { _, _, _ in throw CocoaError(.featureUnsupported) })
+    )
+}
+
+/// The graph only needs a constructed feature here; no refresh is started, so
+/// every port fails loudly rather than pretending a toolchain exists.
+@MainActor
+private func makeTestGoProject() -> GoProjectFeatureModel {
+    GoProjectFeatureModel(
+        nativePreparer: TestCargoMetadataPreparer(),
+        normalizer: TestProjectMetadataNormalizer(),
+        makeInput: { workspaceURL, generation, manifestURL, deadline in
+            CargoMetadataPreparationRequest(
+                workspaceURL: workspaceURL, manifestURL: manifestURL,
+                workspaceGeneration: generation, cargoCandidates: [], rustupCandidates: [],
+                customCargoURL: nil, environment: [:], deadline: deadline
+            )
+        },
+        providerModuleID: .languageExecutionExtension("go"),
+        activateProvider: { throw ProjectMetadataFailure.invalidInput(message: "No provider in tests.") }
+    )
 }
 
 /// The graph only needs a constructed feature here; no refresh is started, so

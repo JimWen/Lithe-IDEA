@@ -22,7 +22,9 @@ struct LanguageExtensionProcessLifecycleTests {
         try runtime.register(ModuleFactory(manifest: workspace) {
             ProcessLifecycleWorkspaceModule(manifest: workspace)
         })
-        try runtime.register(ModuleFactory(manifest: GoExecutionModule.moduleManifest) {
+        try runtime.register(ModuleFactory(
+            manifest: GoExecutionModule.moduleManifest,
+            contributions: GoExecutionModule.moduleContributions) {
             GoExecutionModule(executionHost: executionHost, projectToolHost: MacLanguageProjectToolHost(registry: processRegistry))
         })
         try await runtime.setEnabled(true, for: .languageExecutionExtension("go"))
@@ -32,11 +34,15 @@ struct LanguageExtensionProcessLifecycleTests {
                 as? any LanguageRunExtensionProviding
         )
         let executionSession = capability.makeExecutionSession()
+        let started = TestGate()
+        executionSession.onStateChange = { event in if event.state == .running { started.open() } }
+        defer { executionSession.stop() }
         try executionSession.start(LanguageExecutionProcessRequest(
             operationID: "go-process-lifecycle-test",
             executablePath: sleepURL.path,
             arguments: ["30"]
         ))
+        try #require(await started.waitUntilOpen())
         let moduleID = GoExecutionModule.moduleManifest.id
         let pid = try #require(processRegistry.processIDs(for: moduleID).first)
         #expect(Darwin.kill(pid, 0) == 0)

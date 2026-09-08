@@ -234,4 +234,42 @@ extension AppModel {
     func cancelDiscardChange() {
         gitFeatureIfActive?.cancelDiscardChange()
     }
+
+    func checkoutReference(_ reference: GitReference) async {
+        guard let gitFeature = await activateGitModule() else { return }
+        await gitFeature.checkoutReference(reference)
+    }
+
+    func resolveCheckoutConflict(
+        _ request: GitCheckoutConflictRequest,
+        strategy: GitCheckoutConflictStrategy
+    ) async {
+        guard let gitFeature = await activateGitModule() else { return }
+        await gitFeature.resolveCheckoutConflict(request, strategy: strategy)
+    }
+
+    func checkoutRevision(_ rawRevision: String) async {
+        guard let gitFeature = await activateGitModule() else { return }
+        await gitFeature.checkoutRevision(rawRevision)
+    }
+
+    func cherryPick(_ commit: GitCommit) async {
+        guard let gitFeature = await activateGitModule() else { return }
+        await gitFeature.cherryPick(commit)
+    }
+
+    func revert(_ commit: GitCommit) async {
+        guard let gitFeature = await activateGitModule() else { return }
+        await gitFeature.revert(commit)
+    }
+
+    func resetCurrentBranch(to commit: GitCommit) async {
+        guard let gitFeature = await activateGitModule() else { return }
+        await gitFeature.resetCurrentBranch(to: commit)
+    }
+
+    func pushBranch(_ reference: GitReference) async {
+        guard let gitFeature = await activateGitModule() else { return }
+        await gitFeature.pushBranch(reference)
+    }
 }

@@ -3,26 +3,26 @@ import LitheCoreContracts
 import LitheModuleAPI
 
 @MainActor
-package protocol CargoProjectDeadline: AnyObject {
+package protocol ProjectToolDeadline: AnyObject {
     func cancel()
 }
 
 @MainActor
-package protocol CargoProjectScheduling: AnyObject {
+package protocol ProjectToolScheduling: AnyObject {
     var now: ContinuousClock.Instant { get }
-    func schedule(at deadline: ContinuousClock.Instant, _ action: @escaping @MainActor @Sendable () -> Void) -> any CargoProjectDeadline
+    func schedule(at deadline: ContinuousClock.Instant, _ action: @escaping @MainActor @Sendable () -> Void) -> any ProjectToolDeadline
 }
 
 @MainActor
-package final class CargoProjectClock: CargoProjectScheduling {
+package final class ProjectToolClock: ProjectToolScheduling {
     package var now: ContinuousClock.Instant { ContinuousClock.now }
-    package func schedule(at deadline: ContinuousClock.Instant, _ action: @escaping @MainActor @Sendable () -> Void) -> any CargoProjectDeadline {
-        CargoProjectTimer(deadline: deadline, action: action)
+    package func schedule(at deadline: ContinuousClock.Instant, _ action: @escaping @MainActor @Sendable () -> Void) -> any ProjectToolDeadline {
+        ProjectToolTimer(deadline: deadline, action: action)
     }
 }
 
 @MainActor
-private final class CargoProjectTimer: CargoProjectDeadline {
+private final class ProjectToolTimer: ProjectToolDeadline {
     private var task: Task<Void, Never>?
     init(deadline: ContinuousClock.Instant, action: @escaping @MainActor @Sendable () -> Void) {
         task = Task { @MainActor in
@@ -36,7 +36,7 @@ private final class CargoProjectTimer: CargoProjectDeadline {
 
 /// Native preparation and synchronous Core calls share one non-cooperative
 /// worker. Cancelling the caller never mistakes a still-running call for cleanup.
-final class CargoProjectWorker: Sendable {
+final class ProjectToolWorker: Sendable {
     private let queue = DispatchQueue(label: "dev.lithe.cargo-metadata", qos: .utility)
 
     func perform<Value: Sendable>(_ body: @escaping @Sendable () throws -> Value) async throws -> Value {
@@ -47,7 +47,7 @@ final class CargoProjectWorker: Sendable {
 }
 
 @MainActor
-final class CargoProjectCompletion {
+final class ProjectToolCompletion {
     private var completed = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
     func wait() async {
@@ -64,7 +64,7 @@ final class CargoProjectCompletion {
 }
 
 @MainActor
-final class CargoProjectCapture {
+final class ProjectToolCapture {
     let session: any LanguageProjectToolSession
     var inFlight = true
     var cleanupConfirmed = false
@@ -74,25 +74,30 @@ final class CargoProjectCapture {
 }
 
 @MainActor
-final class CargoProjectRefreshOperation {
+final class ProjectToolRefreshOperation {
     let id = UUID()
     let workspaceURL: URL
     let workspaceGeneration: Int
     let manifestURL: URL
     let providerGeneration: Int
     let deadline: ContinuousClock.Instant
-    let result = CargoProjectCompletion()
+    let result = ProjectToolCompletion()
     var pipelineTask: Task<Void, Never>?
     var pipelineFinished = false
-    var captures: [CargoProjectCapture] = []
+    var captures: [ProjectToolCapture] = []
     var coreOperationID: String?
     var cancellationMessage: String?
     var stdoutRemaining = 16 * 1_024 * 1_024
     var stderrRemaining = 1_024 * 1_024
-    var deadlineTimer: (any CargoProjectDeadline)?
-    var stopTimer: (any CargoProjectDeadline)?
+    var deadlineTimer: (any ProjectToolDeadline)?
+    var stopTimer: (any ProjectToolDeadline)?
     var stopWaiters: [CheckedContinuation<Bool, Never>] = []
     var lease: ModuleLease?
+    /// The native session whose host resources must be released once this
+    /// operation stops being owned; Go's isolation copy uses this, Cargo's
+    /// session has nothing to release.
+    var session: (any ProjectMetadataNativeSession)?
+    var sessionResourcesReleased = false
 
     init(workspaceURL: URL, workspaceGeneration: Int, manifestURL: URL, providerGeneration: Int, deadline: ContinuousClock.Instant) {
         self.workspaceURL = workspaceURL
@@ -112,7 +117,8 @@ final class CargoProjectRefreshOperation {
     }
 }
 
-struct CargoProjectFailure: LocalizedError {
-    let message: String
-    var errorDescription: String? { message }
+package struct ProjectToolFailure: LocalizedError {
+    package let message: String
+    package init(message: String) { self.message = message }
+    package var errorDescription: String? { message }
 }
