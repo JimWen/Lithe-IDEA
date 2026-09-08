@@ -58,7 +58,12 @@ App 层另保留工作区/session 代际、文档 UUID/revision/URL、磁盘文�
 
 ### 所有权
 
-新增应用层 `WorkspaceTextEditCoordinator`，持有一次事务的状态、目标快照和恢复记录；通过 Core 端口调用 macOS 文件适配器，不在 Application/Services 创建 FileManager 或文件句柄。macOS 组合根创建适配器。Search 模块提交准备好的纯文本 edit 请求，不导入 AppKit，也不直接改 EditorDocument。
+新增 `WorkspaceTextEditCoordinator`，持有一次事务的状态、目标快照和恢复记录；通过 Core 端口调用 macOS 文件适配器，不在 Application/Services 创建 FileManager 或文件句柄。macOS 组合根创建适配器。Search 模块提交准备好的纯文本 edit 请求，不导入 AppKit，也不直接改 EditorDocument。
+
+**归属更正（2026-09-08）**：该协调器**归 Services 层**，不是本节原写的应用层，
+且**交付批次是 B6b1**，见 [B6 §6.1](goland-parity-b6-refactor.md)。
+理由是 SKILL 所有权表把「Product workflow orchestration」分给 `Services/`，
+且 `scripts/verify-service-boundaries.sh` 已经扫描 Services，选 Services 门禁天然生效。
 
 macOS 适配器在专属串行 worker 完成读取、目标检查、暂存、替换和回滚，异步端口桥接到应用层；不把同步 I/O 放进 MainActor 或 `Task.detached` 协作线程。事务状态为 preparing、committing、rollingBack、applied、cancelled、failed、recoveryRequired，包含 transaction ID 和所属 workspace identity。
 
@@ -86,6 +91,12 @@ macOS 适配器在专属串行 worker 完成读取、目标检查、暂存、替
 
 这一步不能仅添加 `UndoManager.registerUndo`：系统回调同步，而磁盘事务异步，且现有编辑器视图可能随切 tab 重建。实施前单独审查 macOS 文档级 undo 所有者、编辑器重新绑定、跨文件标记的顺序和原生菜单路由；明确异步失败后何时移动栈项，以及参与文档关闭/重开后的行为。测试证明这些规则之前，不接通新事务的正式 Apply，不宣称 B3b 完成。B6 的资源操作和 LSP versioned edits 仍独立扩展，不在此处预造全部重构能力。
 
+**范围澄清（2026-09-08）**：上句「不接通新事务的正式 Apply」只约束 **Search Replace 的
+Apply**，不约束 B6b1 的 LSP 编辑路径（completion / formatting / code action / rename）。
+事实依据：这四条路径今天本来就没有原生 undo——`CodeEditorView.swift:908-916` 的
+`textView.string = document.text` 不注册 undo——因此把它们接入尚无跨文件 undo 的事务
+不构成撤销能力回退。详见 [B6 §2.2](goland-parity-b6-refactor.md) 与 B6 §6.6。
+
 ## 6. 按依赖分批提交
 
 首个独立修复 B3b1a 使用现有 `regex` 依赖：literal query 经 `regex::escape` 编译，匹配位置直接来自原文；literal replacement 仍手动拼接，`$1` 等不展开，preserveCase 使用真正的匹配原文。wholeWords 保留当前 ASCII 字母/数字/`_`/`$` 边界定义，regex 模式保持现有捕获组与零长度语义。case-insensitive literal 统一到 Rust regex 的 Unicode simple case folding，不做区域相关大小写转换；这会修正 Kelvin sign/long s/final sigma 的匹配，也明确不把 Turkish dotted/dotless I 都等同于 ASCII i。
@@ -97,9 +108,10 @@ B3b1a 只改变 matcher/候选正确性，可在独立审查和完整验证后�
 | 子批 | 内容 | 提交边界/放行条件 |
 | --- | --- | --- |
 | B3b1a（已验收） | 原文 UTF-8 匹配位置、Unicode simple folding、索引候选与生命周期 | 23 个共享场景、4 项 Rust 回归、完整 Rust/Swift 检查与 ARM64 查找/替换预览；独立方案与代码审查通过 |
-| B3b1 | 明确 scope、空文件集合、override 候选、typed 错误、原文/匹配范围及预算契约 | Rust/Swift 同步消费者与 shared fixture；独立方案及代码审查；尚不替换旧 Apply |
-| B3b2 | 文本事务协调器、文件适配器、文档租约、版本校验、准备/回滚/恢复 | 先通过协议故障注入与真实临时文件测试；不接通不完整的正式事务 UI |
-| B3b3 | 文档级原生 Undo/Redo、顺序、异步失败栈恢复与 Search Apply 集成 | 先补充 undo 设计并独立审查，再实现；完整替换链路通过真实点击/截图才可替换安装 |
+| B3b1 | 明确 scope、空文件集合、override 候选、typed 错误、原文/匹配范围及预算契约 | Rust/Swift 同步消费者与 shared fixture；独立方案及代码审查；尚不替换旧 Apply。**归属 B3b 批次自身（Search owner），不由 B6 带做**；与 B6 的文件集不重叠，可并行 |
+| B3b2 | ~~文本事务协调器、文件适配器、文档租约、版本校验、准备/回滚/恢复~~ | **交付物并入 [B6b1](goland-parity-b6-refactor.md)（2026-09-08 定案）。** 本批不再单独排期；B6b1 只依赖 B6a2，不依赖 B3b1 |
+| B3b3a | 文档级原生 Undo/Redo、顺序、异步失败栈恢复 | **并入 [B6b2](goland-parity-b6-refactor.md)**；仍须先补 undo 设计并独立审查 |
+| B3b3b | Search Apply 接入统一事务 | 留在 B3b；依赖 B6b1 已交付协调器；完整替换链路通过真实点击/截图才可替换安装 |
 | B3b4 | 所有 scope 与 occurrence 选择/排除接入统一请求；错误/冲突/取消呈现 | Find/Replace 数据一致；B3d 再统一完整弹窗排版，不重复重做 Project |
 
 B3b1–B3b2 可以作为准备性代码提交，但不能将总体状态标为完成或作为完整事务能力交付。已验收的菜单、键盘归属、Terminal 连接隔离不重复实施。源码准备提交均遵循独立 review → 实现 → 自动验证 → code review → commit，改变产品交互的批次还需 ARM64 实际验收。
