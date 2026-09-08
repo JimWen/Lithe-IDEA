@@ -29,6 +29,7 @@ struct PendingRunAction: Equatable {
         case runAllServices
         case restart
         case editConfiguration
+        case cargoTarget(configurationID: String, name: String, requestGenerationIfMissing: Bool)
     }
 
     let kind: Kind
@@ -60,8 +61,11 @@ extension AppModel {
 
 
     func toggleRun() {
-        isRunVisible.toggle()
-        guard isRunVisible else { return }
+        if isRunVisible {
+            isRunVisible = false
+            return
+        }
+        revealRunToolWindow()
         Task { [weak self] in
             guard let self else { return }
             guard await activateExecutionModule() != nil else { return }
@@ -69,6 +73,12 @@ extension AppModel {
                 await loadProjectServicesForAppliedSnapshot(at: workspaceURL)
             }
         }
+    }
+
+    /// Run shares its surface with the other bottom tools. Explicit launches
+    /// must select that surface as well as mark Run visible.
+    func revealRunToolWindow() {
+        isRunVisible = true
         isTestsVisible = false
         isGitLogVisible = false
         isTerminalVisible = false
@@ -193,6 +203,65 @@ extension AppModel {
             runFeature.reportGenerationProjectNotReady()
         case .stale:
             return
+        }
+    }
+
+    /// Resumes the explicit launch after setup, using the current inventory and
+    /// the same workspace opening that owned the confirmation.
+    func continueAfterRunConfigurationGeneration() async {
+        guard let identity = currentWorkspaceIdentity,
+              let feature = runFeatureIfActive else { return }
+        let intent = feature.generationIntent
+        feature.isGenerationConfirmationPresented = false
+        await generateRunConfigurations()
+        guard isCurrentWorkspace(identity), runFeatureIfActive === feature,
+              case .succeeded = feature.generationState else { return }
+        switch intent {
+        case .identifyOnly: break
+        case .run: runSelectedConfiguration()
+        case .debug: startDebugging()
+        case .cargoTarget(let configurationID, let name):
+            startCargoTarget(configurationID: configurationID, name: name, requestGenerationIfMissing: false)
+        }
+    }
+
+    /// Cargo binary launches use the same snapshot readiness and explicit setup
+    /// flow as Run. Retaining the target ID avoids running the generator's
+    /// default entry instead of the binary that was double-clicked.
+    func startCargoTarget(configurationID: String, name: String, requestGenerationIfMissing: Bool = true) {
+        Task { @MainActor [weak self] in
+            guard let self, let identity = currentWorkspaceIdentity else { return }
+            guard let feature = await activateExecutionModule()?.runFeature else {
+                showNotification(String(localized: "Rust execution support is unavailable."), severity: .error, title: name)
+                return
+            }
+            switch await ensureRunProjectReady(feature, for: identity) {
+            case .ready: clearPendingRunAction(for: identity)
+            case .waitingForSnapshot(let waitingIdentity):
+                deferRunAction(.cargoTarget(
+                    configurationID: configurationID, name: name,
+                    requestGenerationIfMissing: requestGenerationIfMissing
+                ), for: waitingIdentity)
+                return
+            case .stale: return
+            }
+            revealRunToolWindow()
+            guard let configuration = feature.configurations.first(where: { $0.id == configurationID }) else {
+                if requestGenerationIfMissing {
+                    feature.requestRunConfigurationGeneration(intent: .cargoTarget(configurationID: configurationID, name: name))
+                } else {
+                    // Generation completed but this target is still absent.
+                    // Report it once instead of reopening the setup dialog.
+                    showNotification(
+                        String(localized: "No run configuration was generated for this target. Regenerate run configurations and try again."),
+                        severity: .error, title: name
+                    )
+                }
+                return
+            }
+            showNotification(String(localized: "Running \(configuration.name)"))
+            selectRunConfiguration(configuration)
+            startRunConfiguration(configuration)
         }
     }
 
@@ -354,6 +423,8 @@ extension AppModel {
         case .runAllServices: runAllServiceConfigurations()
         case .restart: restartSelectedRun()
         case .editConfiguration: showRunConfigurationEditor()
+        case .cargoTarget(let configurationID, let name, let requestGenerationIfMissing):
+            startCargoTarget(configurationID: configurationID, name: name, requestGenerationIfMissing: requestGenerationIfMissing)
         }
     }
 

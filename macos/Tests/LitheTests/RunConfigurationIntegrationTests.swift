@@ -3388,6 +3388,85 @@ struct RunConfigurationIntegrationTests {
         #expect(fixture.processFactory.processes.count == 1)
     }
 
+    @Test
+    func explicitRunLaunchesFocusTheirOutputWithoutStealingLaterManualSelection() async throws {
+        let configurations = ["alpha", "beta"].map {
+            RunConfiguration(id: "cargo.binary:" + $0, name: $0,
+                             kind: .process(provider: "cargo.binary"), execution: .application,
+                             modulePath: nil, mainClass: nil)
+        }
+        let alpha = configurations[0]
+        let beta = configurations[1]
+        let fixture = makeFixture(
+            status: .ready,
+            effective: configurations.map { EffectiveRunConfiguration(configuration: $0, options: RunOptions()) },
+            plans: Dictionary(uniqueKeysWithValues: configurations.map {
+                ($0.id, SharedLaunchPlan(executable: .command("cargo"),
+                                         arguments: ["run", "--bin", $0.name], workingDirectory: "."))
+            })
+        )
+        let feature = RunFeatureModel(service: fixture.service)
+        defer { feature.reset() }
+        await feature.loadProject(at: fixture.root, files: [])
+
+        // These launches happen without a RunView, as when the Cargo tree
+        // opens the hidden tool window. The second click must focus beta.
+        feature.startConfiguration(alpha)
+        #expect(feature.selectedSessionID == alpha.id)
+        feature.startConfiguration(beta)
+        #expect(feature.selectedSessionID == beta.id)
+        #expect(feature.moduleSessions.map(\.id) == configurations.map(\.id))
+
+        feature.selectedSessionID = alpha.id
+        let betaProcess = try #require(fixture.processFactory.processes.last)
+        betaProcess.onOutput?("beta output\n")
+        #expect(await awaitChange(on: feature, timeout: .seconds(1)) {
+            feature.moduleSessions.contains { $0.id == beta.id && $0.output.contains("beta output") }
+        })
+        #expect(feature.selectedSessionID == alpha.id, "Log updates must preserve a manual selection")
+
+        // Re-running an existing session must focus it too, even though no new
+        // session id is inserted into the list.
+        feature.startConfiguration(beta)
+        #expect(feature.selectedSessionID == beta.id)
+        #expect(feature.moduleSessions.count == 2)
+        feature.selectedSessionID = alpha.id
+        feature.restartModule(try #require(feature.moduleSessions.first { $0.id == beta.id }))
+        #expect(feature.selectedSessionID == beta.id)
+
+        // Configuration removal also prunes hidden-window selection, without
+        // relying on a view's onChange handler being mounted.
+        fixture.service.reset()
+        #expect(feature.selectedSessionID == nil)
+        #expect(feature.moduleSessions.isEmpty)
+        #expect(fixture.processFactory.processes.allSatisfy { !$0.isRunning })
+    }
+
+    @Test
+    func failedRunLaunchFocusesItsDiagnosticSession() async throws {
+        let configuration = RunConfiguration(
+            id: "cargo.binary:broken", name: "broken", kind: .process(provider: "cargo.binary"),
+            modulePath: nil, mainClass: nil
+        )
+        let fixture = makeFixture(
+            status: .ready,
+            effective: [EffectiveRunConfiguration(configuration: configuration, options: RunOptions())],
+            diagnostics: [RunConfigurationDiagnostic(configurationID: configuration.id,
+                code: "missingToolchain", message: "Cargo toolchain is unavailable")]
+        )
+        let feature = RunFeatureModel(service: fixture.service)
+        defer { feature.reset() }
+        await feature.loadProject(at: fixture.root, files: [])
+        feature.selectedSessionID = "cargo.binary:previous"
+        feature.startConfiguration(configuration)
+
+        #expect(feature.selectedSessionID == configuration.id)
+        let session = try #require(feature.moduleSessions.first)
+        #expect(session.exitCode == 1)
+        #expect(session.output.contains("Cargo toolchain is unavailable"))
+        #expect(fixture.processFactory.processes.isEmpty)
+    }
+
     /// Services start individually, not only as an all-at-once batch.
     @Test
     func startingASingleProcessServiceCreatesItsOwnSession() async throws {

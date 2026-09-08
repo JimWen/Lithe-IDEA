@@ -1016,19 +1016,8 @@ struct WorkbenchView: View {
     }
 
     private func continueAfterRunConfigurationGeneration() {
-        guard let runFeature = model.runFeatureIfActive else { return }
-        let intent = runFeature.generationIntent
         Task {
-            await runFeature.generateRunConfigurations()
-            guard runFeature.configurationStatus == .ready else { return }
-            switch intent {
-            case .identifyOnly:
-                break
-            case .run:
-                model.runSelectedConfiguration()
-            case .debug:
-                model.startDebugging()
-            }
+            await model.continueAfterRunConfigurationGeneration()
         }
     }
 

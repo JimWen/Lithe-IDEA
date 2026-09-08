@@ -140,56 +140,6 @@ extension AppModel {
         }
     }
 
-    /// Runs a Cargo binary target through its generated run configuration.
-    ///
-    /// Resolution happens here rather than in the tree because the execution
-    /// module is activated asynchronously and its generated entries only exist
-    /// once it has consumed the applied workspace scan. A synchronous lookup
-    /// during a double-click finds nothing whenever either step is still
-    /// pending, which is what made a runnable binary appear inert.
-    ///
-    /// A binary that still cannot be resolved is reported rather than ignored:
-    /// unlike a library or a build script, the tree offered it as runnable, so
-    /// silence there would hide a real defect instead of matching RustRover's
-    /// "no launch command for this kind" case.
-    func startCargoTarget(configurationID: String, name: String) {
-        Task { @MainActor [weak self] in
-            guard let self, let identity = currentWorkspaceIdentity else { return }
-            guard let runFeature = await activateExecutionModule()?.runFeature else {
-                showNotification(
-                    String(localized: "Rust execution support is unavailable."),
-                    severity: .error, title: name
-                )
-                return
-            }
-            guard currentWorkspaceIdentity == identity else { return }
-            if runFeature.configurations.first(where: { $0.id == configurationID }) == nil {
-                // A module woken by this click has not necessarily applied the
-                // current scan yet, and generated entries arrive with it.
-                await loadProjectServicesForAppliedSnapshot(at: identity.url)
-                guard currentWorkspaceIdentity == identity else { return }
-            }
-            guard let configuration = runFeature.configurations
-                .first(where: { $0.id == configurationID }) else {
-                showNotification(
-                    String(localized: """
-                        No run configuration was generated for this target. \
-                        Regenerate run configurations and try again.
-                        """),
-                    severity: .error, title: name
-                )
-                return
-            }
-            showNotification(String(localized: "Running \(configuration.name)"))
-            selectRunConfiguration(configuration)
-            // RustRover opens its Run tool window on a double-click; without
-            // this the process runs headless and the click reads as if
-            // nothing happened.
-            isRunVisible = true
-            startRunConfiguration(configuration)
-        }
-    }
-
     func cancelCargoRefresh() {
         guard canCancelCargoRefresh else { return }
         cargoRequestGeneration += 1

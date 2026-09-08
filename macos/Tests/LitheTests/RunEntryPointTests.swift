@@ -52,6 +52,38 @@ struct RunEntryPointTests {
         }
     }
 
+    @Test
+    func cargoLaunchReplacesOtherBottomToolsAndSelectsItsOutput() async throws {
+        let workspace = try JavaWorkspaceFixture()
+        defer { workspace.remove() }
+        // The existing configuration stub stops at launch-plan resolution, so
+        // this tests Cargo's UI routing without starting a real toolchain.
+        let operations = ReadyRunConfigurationOperations()
+        let model = makeAppModel(
+            workspaceOperations: SequencedWorkspaceOperations(snapshots: [workspace.snapshot]),
+            runConfigurationOperations: operations
+        )
+        model.openProjectDirectly(workspace.root)
+        model.isTerminalVisible = true
+        model.isGitLogVisible = true
+        model.isReferencesVisible = true
+        model.isProblemsVisible = true
+        model.isTestsVisible = true
+        model.isDebugVisible = true
+        let configuration = ReadyRunConfigurationOperations.entryPoint
+        model.startCargoTarget(configurationID: configuration.id, name: configuration.name)
+
+        #expect(await awaitChange(on: model) {
+            model.runFeatureIfActive?.moduleSessions.contains { $0.id == configuration.id } == true
+        }, "Cargo must reach the run session after asynchronous activation")
+        #expect(model.isRunVisible)
+        #expect(!model.isTerminalVisible && !model.isGitLogVisible && !model.isReferencesVisible)
+        #expect(!model.isProblemsVisible && !model.isTestsVisible && !model.isDebugVisible)
+        #expect(model.runFeatureIfActive?.selectedSessionID == configuration.id)
+        #expect(operations.launchPlanCallCount == 1)
+        await model.shutdownProjectSession()
+    }
+
     private func withToolCommandModel(
         _ body: (AppModel, JavaWorkspaceFixture) async throws -> Void
     ) async throws {
@@ -64,6 +96,65 @@ struct RunEntryPointTests {
             await model.shutdownProjectSession()
             throw error
         }
+        await model.shutdownProjectSession()
+    }
+
+    @Test
+    func cargoLaunchWaitsForInventoryThenGeneratesAndRunsTheRequestedTarget() async throws {
+        let workspace = try JavaWorkspaceFixture()
+        defer { workspace.remove() }
+        let operations = ReadyRunConfigurationOperations(initiallyReady: false)
+        let model = makeAppModel(
+            workspaceOperations: SequencedWorkspaceOperations.unavailableThenReady(workspace.snapshot),
+            runConfigurationOperations: operations
+        )
+        // The requested entry deliberately differs from the generator's default.
+        let target = ReadyRunConfigurationOperations.serviceEntryPoint
+        model.openProjectDirectly(workspace.root)
+        model.startCargoTarget(configurationID: target.id, name: target.name)
+        #expect(await awaitLoadDrivenChange(on: model) {
+            model.pendingRunAction?.kind == .cargoTarget(
+                configurationID: target.id, name: target.name, requestGenerationIfMissing: true
+            )
+        })
+        #expect(operations.generationCallCount == 0)
+        #expect(model.runFeatureIfActive?.isGenerationConfirmationPresented == false)
+        await model.workspaceFeature.refreshCurrent()
+        #expect(await awaitLoadDrivenChange(on: model) {
+            model.runFeatureIfActive?.isGenerationConfirmationPresented == true
+        })
+        #expect(model.isRunVisible)
+        #expect(model.runFeatureIfActive?.generationIntent == .cargoTarget(configurationID: target.id, name: target.name))
+        #expect(operations.launchPlanCallCount == 0)
+        await model.continueAfterRunConfigurationGeneration()
+        #expect(await operations.launchPlanRequested(1))
+        #expect(operations.generationCallCount == 1)
+        #expect(model.runFeatureIfActive?.selectedSessionID == target.id)
+        #expect(model.runFeatureIfActive?.selectedConfigurationID == target.id)
+        #expect(model.runFeatureIfActive?.isGenerationConfirmationPresented == false)
+        await model.shutdownProjectSession()
+    }
+
+    @Test
+    func cargoGenerationFailureDoesNotLaunchOrRepeatConfirmation() async throws {
+        let workspace = try JavaWorkspaceFixture()
+        defer { workspace.remove() }
+        let operations = ReadyRunConfigurationOperations(initiallyReady: false, failsGeneration: true)
+        let model = makeAppModel(
+            workspaceOperations: SequencedWorkspaceOperations(snapshots: [workspace.snapshot]),
+            runConfigurationOperations: operations
+        )
+        let target = ReadyRunConfigurationOperations.entryPoint
+        model.openProjectDirectly(workspace.root)
+        model.startCargoTarget(configurationID: target.id, name: target.name)
+        #expect(await awaitLoadDrivenChange(on: model) {
+            model.runFeatureIfActive?.isGenerationConfirmationPresented == true
+        })
+        await model.continueAfterRunConfigurationGeneration()
+        #expect(operations.generationCallCount == 1)
+        #expect(operations.launchPlanCallCount == 0)
+        #expect(model.runFeatureIfActive?.isGenerationConfirmationPresented == false)
+        #expect(model.runFeatureIfActive?.moduleSessions.isEmpty == true)
         await model.shutdownProjectSession()
     }
 
@@ -814,9 +905,20 @@ private final class ReadyRunConfigurationOperations: RunConfigurationOperations,
     private let lock = NSLock()
     private var launchPlanCalls = 0
     private let launchPlanRequests: [TestGate]
+    private var configurationReady: Bool
+    private var generationCalls = 0
+    private let failsGeneration: Bool
 
-    init(capacity: Int = 8) {
+    init(capacity: Int = 8, initiallyReady: Bool = true, failsGeneration: Bool = false) {
         launchPlanRequests = (0..<capacity).map { _ in TestGate() }
+        configurationReady = initiallyReady
+        self.failsGeneration = failsGeneration
+    }
+
+    var generationCallCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return generationCalls
     }
 
     var launchPlanCallCount: Int {
@@ -840,11 +942,18 @@ private final class ReadyRunConfigurationOperations: RunConfigurationOperations,
     }
 
     func inspect(at projectURL: URL) -> ProjectRunConfigurationInspection {
-        ProjectRunConfigurationInspection(status: .ready, diagnostics: [])
+        lock.lock()
+        defer { lock.unlock() }
+        return ProjectRunConfigurationInspection(status: configurationReady ? .ready : .missing, diagnostics: [])
     }
 
     func generate(at projectURL: URL, files: [URL], modulePaths: [String]) throws -> RunConfigurationGenerationResult {
-        RunConfigurationGenerationResult(entryCount: 1)
+        lock.lock()
+        defer { lock.unlock() }
+        generationCalls += 1
+        if failsGeneration { throw RunConfigurationOperationFailure(message: "Generation failed in the fixture") }
+        configurationReady = true
+        return RunConfigurationGenerationResult(entryCount: 2)
     }
 
     /// A configuration that does not depend on the active editor file, so a

@@ -5,24 +5,34 @@ import LitheModuleAPI
 
 
 /// UI-facing projection for language-neutral run configurations and process sessions.
-package enum RunConfigurationGenerationIntent: Sendable {
+package enum RunConfigurationGenerationIntent: Sendable, Equatable {
     case identifyOnly
     case run
     case debug
+    case cargoTarget(configurationID: String, name: String)
 }
 
 @MainActor
 package final class RunFeatureModel: ObservableObject {
     private let service: RunService
-    private var observation: AnyCancellable?
+    private var observations: Set<AnyCancellable> = []
     @Published package var isGenerationConfirmationPresented = false
+    /// The output shown in Run, independent of the toolbar's configuration.
+    /// Explicit launches focus their session even if the view is hidden;
+    /// output updates must preserve a later manual selection.
+    @Published package var selectedSessionID: String?
     package private(set) var generationIntent: RunConfigurationGenerationIntent = .identifyOnly
 
     package init(service: RunService) {
         self.service = service
-        observation = service.objectWillChange.sink { [weak self] _ in
+        service.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
-        }
+        }.store(in: &observations)
+        service.$configurations.sink { [weak self] configurations in
+            guard let self, let selectedSessionID,
+                  !configurations.contains(where: { $0.id == selectedSessionID }) else { return }
+            self.selectedSessionID = nil
+        }.store(in: &observations)
     }
 
     package var selectedConfigurationID: String {
@@ -101,6 +111,7 @@ package final class RunFeatureModel: ObservableObject {
 
     package func runAllServices() {
         service.runAllServices()
+        selectedSessionID = service.moduleSessions.first?.id
     }
 
     package func stopAllServices() {
@@ -108,6 +119,8 @@ package final class RunFeatureModel: ObservableObject {
     }
 
     package func startConfiguration(_ configuration: RunConfiguration) {
+        guard configuration.kind != .currentFile else { return }
+        selectedSessionID = configuration.id
         service.startConfiguration(configuration)
     }
 
@@ -116,6 +129,7 @@ package final class RunFeatureModel: ObservableObject {
     }
 
     package func restartModule(_ session: RunSession) {
+        selectedSessionID = session.id
         service.restartModule(session)
     }
 
@@ -157,10 +171,19 @@ package final class RunFeatureModel: ObservableObject {
     package func unregisterLanguageRunExtension(languageID: String) {
         service.unregisterLanguageRunExtension(languageID: languageID)
     }
-    package func runSelected(currentFileURL: URL?) { service.runSelected(currentFileURL: currentFileURL) }
-    package func restart() { service.restart() }
+    package func runSelected(currentFileURL: URL?) {
+        selectedSessionID = nil
+        service.runSelected(currentFileURL: currentFileURL)
+    }
+    package func restart() {
+        selectedSessionID = nil
+        service.restart()
+    }
     package func stop() { service.stop() }
-    package func reset() { service.reset() }
+    package func reset() {
+        selectedSessionID = nil
+        service.reset()
+    }
 }
 
 /// Coordinates project-scoped build and run loading without making AppModel

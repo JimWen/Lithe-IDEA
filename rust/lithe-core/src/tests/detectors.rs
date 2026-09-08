@@ -540,37 +540,25 @@ fn cargo_detector_finds_binaries_under_src_bin() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Cargo keeps discovering `src/bin` after a `[[bin]]` section appears, so
-/// treating a declaration as an opt-out would drop the conventional targets of
-/// any package that declares one custom path.
+/// Modern editions keep discovering `src/bin` after a `[[bin]]` section appears.
 #[test]
 fn cargo_detector_unions_declared_and_discovered_binaries() {
-    let root = temporary_root("detect-cargo-union");
-    fs::create_dir_all(root.join("src/bin")).unwrap();
-    fs::write(
-        root.join("Cargo.toml"),
-        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n\
+    let project = CargoDetectorProject::new(
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
          [[bin]]\nname = \"custom\"\npath = \"other/entry.rs\"\n",
-    )
-    .unwrap();
-    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
-    fs::write(root.join("src/bin/helper.rs"), "fn main() {}\n").unwrap();
+    );
+    project.write("src/main.rs", "fn main() {}\n");
+    project.write("src/bin/helper.rs", "fn main() {}\n");
+    project.write("other/entry.rs", "fn main() {}\n");
 
-    let ids: Vec<_> = generated_configurations(&root)
-        .into_iter()
-        .filter(|item| item["provider"] == "cargo.binary")
-        .map(|item| item["id"].as_str().unwrap().to_string())
-        .collect();
     assert_eq!(
-        ids,
+        project.binary_ids(),
         vec![
             "cargo.binary:app",
             "cargo.binary:custom",
             "cargo.binary:helper"
         ]
     );
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 /// `autobins = false` is the manifest's explicit statement that only declared
@@ -596,6 +584,161 @@ fn cargo_detector_honours_autobins_opt_out() {
     assert_eq!(ids, vec!["cargo.binary:custom"]);
 
     fs::remove_dir_all(root).unwrap();
+}
+
+/// A renamed conventional source belongs only to its explicit target, even
+/// when its inferred name differs. Name-only de-duplication invents binaries.
+#[test]
+fn cargo_detector_does_not_rediscover_explicit_binary_sources() {
+    let project = CargoDetectorProject::new(
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [[bin]]\nname = \"renamed-main\"\npath = \"./src/main.rs\"\n\
+         [[bin]]\nname = \"renamed-helper\"\npath = \"src/bin/helper.rs\"\n\
+         [[bin]]\nname = \"renamed-worker\"\npath = \"src/bin/worker/main.rs\"\n",
+    );
+    project.write("src/main.rs", "fn main() {}\n");
+    project.write("src/bin/helper.rs", "fn main() {}\n");
+    project.write("src/bin/worker/main.rs", "fn main() {}\n");
+    project.write("src/bin/other.rs", "fn main() {}\n");
+    assert_eq!(
+        project.binary_ids(),
+        [
+            "cargo.binary:other",
+            "cargo.binary:renamed-helper",
+            "cargo.binary:renamed-main",
+            "cargo.binary:renamed-worker"
+        ]
+    );
+}
+
+#[test]
+fn cargo_detector_retains_same_named_candidates_after_explicit_path_filtering() {
+    for (renamed_path, automatic_path) in [
+        ("src/main.rs", "src/bin/app.rs"),
+        ("src/main.rs", "src/bin/app/main.rs"),
+        ("src/bin/app.rs", "src/bin/app/main.rs"),
+        ("src/bin/app/main.rs", "src/bin/app.rs"),
+    ] {
+        let project = CargoDetectorProject::new(&format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+             [[bin]]\nname = \"renamed\"\npath = \"{renamed_path}\"\n"
+        ));
+        project.write(renamed_path, "fn main() {}\n");
+        project.write(automatic_path, "fn main() {}\n");
+        // Filtering the explicitly renamed source must not discard a different
+        // automatic source that originally had the same inferred binary name.
+        assert_eq!(
+            project.binary_ids(),
+            ["cargo.binary:app", "cargo.binary:renamed"],
+            "{renamed_path} and {automatic_path}"
+        );
+    }
+}
+
+#[test]
+fn cargo_detector_uses_edition_specific_autobins_defaults() {
+    for (edition, setting, expected) in [
+        ("", "", vec!["cargo.binary:custom"]),
+        ("edition = \"2015\"\n", "", vec!["cargo.binary:custom"]),
+        (
+            "edition = \"2015\"\n",
+            "autobins = true\n",
+            vec![
+                "cargo.binary:app",
+                "cargo.binary:custom",
+                "cargo.binary:helper",
+            ],
+        ),
+        (
+            "edition = \"2021\"\n",
+            "",
+            vec![
+                "cargo.binary:app",
+                "cargo.binary:custom",
+                "cargo.binary:helper",
+            ],
+        ),
+        (
+            "edition = \"2021\"\n",
+            "autobins = false\n",
+            vec!["cargo.binary:custom"],
+        ),
+    ] {
+        let project = CargoDetectorProject::new(&format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n{edition}{setting}\n\
+             [[bin]]\nname = \"custom\"\npath = \"custom.rs\"\n"
+        ));
+        project.write("custom.rs", "fn main() {}\n");
+        project.write("src/main.rs", "fn main() {}\n");
+        project.write("src/bin/helper.rs", "fn main() {}\n");
+        assert_eq!(project.binary_ids(), expected, "{edition}{setting}");
+    }
+
+    // An explicit empty bin list also disables discovery in edition 2015.
+    let project =
+        CargoDetectorProject::new("bin = []\n[package]\nname = \"app\"\nversion = \"0.1.0\"\n");
+    project.write("src/main.rs", "fn main() {}\n");
+    assert!(project.binary_ids().is_empty());
+}
+
+#[test]
+fn cargo_detector_resolves_inherited_edition_for_autobins() {
+    for edition in ["2015", "2021"] {
+        for workspace in ["", "workspace = \"..\"\n"] {
+            let project = CargoDetectorProject::new(&format!(
+                "[workspace]\nmembers = [\"member\"]\n[workspace.package]\nedition = \"{edition}\"\n"
+            ));
+            project.write("member/Cargo.toml", &format!(
+                "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition.workspace = true\n{workspace}\n\
+                 [[bin]]\nname = \"custom\"\npath = \"custom.rs\"\n"
+            ));
+            project.write("member/custom.rs", "fn main() {}\n");
+            project.write("member/src/main.rs", "fn main() {}\n");
+            let expected = if edition == "2015" {
+                vec!["cargo.binary:member/custom"]
+            } else {
+                vec!["cargo.binary:member/app", "cargo.binary:member/custom"]
+            };
+            assert_eq!(project.binary_ids(), expected, "{edition} {workspace}");
+        }
+    }
+}
+
+/// Owns the regression fixtures so assertion failures still remove their files.
+struct CargoDetectorProject {
+    root: std::path::PathBuf,
+}
+
+impl CargoDetectorProject {
+    fn new(manifest: &str) -> Self {
+        let project = Self {
+            root: temporary_root("cargo-detector"),
+        };
+        project.write("Cargo.toml", manifest);
+        project
+    }
+
+    fn write(&self, relative: &str, content: &str) {
+        let path = self.root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+
+    fn binary_ids(&self) -> Vec<String> {
+        generated_configurations(&self.root)
+            .into_iter()
+            .filter(|item| item["provider"] == "cargo.binary")
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+}
+
+impl Drop for CargoDetectorProject {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir_all(&self.root) {
+            eprintln!("Could not remove Cargo detector fixture: {error}");
+        }
+    }
 }
 
 /// A Gradle application is runnable through its declared application plugin.
