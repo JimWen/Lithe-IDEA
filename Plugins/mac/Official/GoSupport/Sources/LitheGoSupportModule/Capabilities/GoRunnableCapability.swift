@@ -6,7 +6,7 @@ import LitheCoreContracts
 /// package init or test code.
 @MainActor
 public final class GoRunnableCapability: NSObject, DocumentRunnableProviding {
-    public init() {}
+    public override init() {}
 
     public func runnables(documentURL: URL, text: String, revision: Int,
                            completion: @escaping (Result<DocumentRunnableSet, Error>) -> Void) {
