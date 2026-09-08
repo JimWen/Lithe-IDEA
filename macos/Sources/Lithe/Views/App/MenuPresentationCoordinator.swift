@@ -49,6 +49,22 @@ final class MenuPresentationCoordinator: ObservableObject {
     private var wasTrackingMenu = false
     private static let hostAttachmentTimeout: TimeInterval = 5
 
+    var canUndoWorkspaceEdit: Bool {
+        host?.model.services.workspaceTextEditUndoController.sharedUndoManager.canUndo == true
+    }
+
+    var canRedoWorkspaceEdit: Bool {
+        host?.model.services.workspaceTextEditUndoController.sharedUndoManager.canRedo == true
+    }
+
+    func undoWorkspaceEdit() {
+        host?.model.services.workspaceTextEditUndoController.sharedUndoManager.undo()
+    }
+
+    func redoWorkspaceEdit() {
+        host?.model.services.workspaceTextEditUndoController.sharedUndoManager.redo()
+    }
+
     init(
         windows: ProjectWindowManager,
         presentation: ProjectWindowPresentation,

@@ -2106,20 +2106,6 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         super.keyDown(with: event)
     }
 
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard modifiers.contains(.command), event.keyCode == 6 else {
-            return super.performKeyEquivalent(with: event)
-        }
-        if modifiers.contains(.shift) {
-            guard externalUndoManager?.canRedo == true || super.undoManager?.canRedo == true else { return false }
-            (externalUndoManager?.canRedo == true ? externalUndoManager : super.undoManager)?.redo()
-        } else {
-            guard externalUndoManager?.canUndo == true || super.undoManager?.canUndo == true else { return false }
-            (externalUndoManager?.canUndo == true ? externalUndoManager : super.undoManager)?.undo()
-        }
-        return true
-    }
     override var isOpaque: Bool { false }
     var onCaretPresentationChanged: (() -> Void)?
     var onLayoutGeometryChanged: (() -> Void)?
@@ -2316,6 +2302,16 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let character = event.charactersIgnoringModifiers
+        if modifiers.contains(.command), event.keyCode == 6 {
+            if modifiers.contains(.shift) {
+                guard externalUndoManager?.canRedo == true || super.undoManager?.canRedo == true else { return false }
+                (externalUndoManager?.canRedo == true ? externalUndoManager : super.undoManager)?.redo()
+            } else {
+                guard externalUndoManager?.canUndo == true || super.undoManager?.canUndo == true else { return false }
+                (externalUndoManager?.canUndo == true ? externalUndoManager : super.undoManager)?.undo()
+            }
+            return true
+        }
         if languageServerFeatures.contains(.completion),
            (modifiers == .control && character == " "
             || modifiers == .option && character == "\u{1B}") {

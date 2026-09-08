@@ -14,6 +14,12 @@ struct LitheProjectCommands: Commands {
         LitheFindCommands(items: items)
         LitheToolCommands(items: items)
         LitheViewCommands(items: items)
+        CommandGroup(replacing: .undoRedo) {
+            Button("Undo") { presentation.undoWorkspaceEdit() }
+                .keyboardShortcut("z", modifiers: .command)
+            Button("Redo") { presentation.redoWorkspaceEdit() }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+        }
         CommandGroup(replacing: .appSettings) {
             items.button("Settings…", .settings)
         }
