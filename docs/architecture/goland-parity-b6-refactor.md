@@ -1,6 +1,6 @@
 # B6 重构：语义编辑事务与 Refactor This
 
-状态：基于 `3680935d`。**第四版，B6a1a 能力纠正与报文快照已实现并通过 Rust 计时及真实 gopls 协议回归；真实编辑/点击及独立候选复验通过；系统替换待提交后执行，其余功能未实施（见 §3.4–3.6）。** 第一版因「只核查 LSP 解析侧」被否；
+状态：基于 `3680935d`。**第四版，B6a1a 能力纠正与报文快照已实现并通过 Rust 计时及真实 gopls 协议回归；真实编辑/点击及独立候选复验通过；`94af8e89` 已替换系统安装并复验，其余功能未实施（见 §3.4–3.6）。** 第一版因「只核查 LSP 解析侧」被否；
 第二版补上协商侧与反向请求侧后仍被独立审查**不放行**，列出 9 条阻塞问题。本版按那 9 条
 逐条修订，并采纳其对 B3b 归属冲突的处置建议。承接
 [B6 设计基线](goland-parity-implementation.md) 与
@@ -274,7 +274,16 @@ test stability、ARM64 release build、codesign 和 diff 检查通过。目录�
 不增加按键或拖动时的全页面刷新；UI 继续使用已有布局组件。
 
 代码复核通过：静态识别保持惰性，插件启动配置、工具发现与设置页一致；注销后不借用旧
-候选，延迟验证被取消/作废后不重启插件；能力声明仍遵守 §3.1。系统替换在本批提交后执行。
+候选，延迟验证被取消/作废后不重启插件；能力声明仍遵守 §3.1。
+
+实现提交 **`94af8e89`** 已从干净检出打包并替换 `/Applications/Lithe.app`，dirty=false。
+安装包与系统二进制 SHA-256 一致，deep/strict codesign 通过。安装版首次打开无误报，
+再次执行 `salutation` → `welcomeMessage` 跨文件 Rename，保存后的项目由实际
+`go test ./...` 验证通过（0.433 s）。本批应用内 Go Test 点击结果见前述 `04` 截图；
+安装复验使用的 CLI 输出保存在 `installed-edit-go-test.log`，不混称为安装版按钮验收。
+窗口同时操作打断了安装版 Go Test 菜单复验，未把该点击尝试记为通过。
+`07-installed-rename.png` 与 `installation.json` 保存安装证据；最终 Cmd-Q 后确认无 Lithe
+或本批 gopls 进程残留。原系统安装保留于 `.artifacts/plan-implementation/b6-install-backup/`。
 本节不代表 B6a2/B6b1/B6b2 已完成。
 
 ## 4. B6a1b：`workspace/applyEdit` 反向请求
