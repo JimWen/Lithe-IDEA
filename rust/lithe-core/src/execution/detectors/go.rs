@@ -50,27 +50,10 @@ fn is_go_source(name: &str) -> bool {
     name.ends_with(".go") && !name.ends_with("_test.go")
 }
 
-/// Reports whether the file's package clause is `package main`.
-///
-/// Go only honors the clause as the first content of the file, so matching
-/// stops at the first line with any code outside comments: a clause with a
-/// trailing comment counts, while a clause buried in line or block comments,
-/// or one after the real clause, never does.
-fn declares_main_package(text: &str) -> bool {
-    let mut in_block_comment = false;
-    for line in text.lines() {
-        let code = without_comments(line, &mut in_block_comment);
-        if code.trim().is_empty() {
-            continue;
-        }
-        let mut words = code.split_whitespace();
-        return words.next() == Some("package") && words.next() == Some("main");
-    }
-    false
-}
-
 /// Removes `//` line comments and `/* */` block comments from one line.
 /// `in_block_comment` carries an open block comment into the following lines.
+/// A removed block comment is replaced by one space so the tokens around it
+/// stay separate, matching how the Go scanner treats comments as whitespace.
 fn without_comments(line: &str, in_block_comment: &mut bool) -> String {
     let mut code = String::with_capacity(line.len());
     let mut chars = line.chars().peekable();
@@ -79,6 +62,7 @@ fn without_comments(line: &str, in_block_comment: &mut bool) -> String {
             if c == '*' && chars.peek() == Some(&'/') {
                 chars.next();
                 *in_block_comment = false;
+                code.push(' ');
             }
             continue;
         }
@@ -87,9 +71,32 @@ fn without_comments(line: &str, in_block_comment: &mut bool) -> String {
             '/' if chars.peek() == Some(&'*') => {
                 chars.next();
                 *in_block_comment = true;
+                code.push(' ');
             }
             _ => code.push(c),
         }
     }
     code
+}
+
+/// Reports whether the file's package clause is `package main`.
+///
+/// Go only honors the clause as the first content of the file, so matching
+/// stops at the first line with any code outside comments: a clause with a
+/// trailing comment counts, while a clause buried in line or block comments,
+/// or one after the real clause, never does. An explicit semicolon after the
+/// name is accepted, as the scanner allows it.
+fn declares_main_package(text: &str) -> bool {
+    let mut in_block_comment = false;
+    for line in text.lines() {
+        let code = without_comments(line, &mut in_block_comment);
+        if code.trim().is_empty() {
+            continue;
+        }
+        let mut words = code.split_whitespace();
+        let keyword = words.next();
+        let name = words.next().map(|word| word.trim_end_matches(';'));
+        return keyword == Some("package") && name == Some("main");
+    }
+    false
 }

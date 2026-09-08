@@ -87,3 +87,15 @@ package protocol ProjectMetadataNativeSession: Sendable {
     /// Rechecks every file and tool identity frozen so far before publication.
     func validate() throws
 }
+
+/// A session that owns host resources — a temporary workspace copy, for
+/// example — which must be released on every owner exit path, completion and
+/// failure alike. The owning feature model calls this after its pipeline ends
+/// and surfaces any returned diagnostic; a session without host resources
+/// simply does not conform.
+package protocol ProjectMetadataSessionCleaning: AnyObject {
+    /// Releases the session's host resources. Returns a user-visible
+    /// diagnostic when the release failed; `nil` means everything is gone.
+    @discardableResult
+    func cleanupSessionResources() -> String?
+}

@@ -20,6 +20,23 @@ struct MacGoMetadataPreparer: ProjectMetadataNativePreparing {
         let manifest = try ProjectToolFileIdentity.regularFile(at: request.manifestURL, role: "go.mod")
         let workspaceURL = request.workspaceURL.resolvingSymlinksInPath().standardizedFileURL
 
+        // A cache or module root inside the workspace would turn a metadata
+        // read into a workspace write no matter which flags are pinned, so it
+        // is rejected instead of silently redirected.
+        let workspacePrefix = workspaceURL.path.hasSuffix("/") ? workspaceURL.path : workspaceURL.path + "/"
+        for name in ["GOMODCACHE", "GOCACHE", "GOPATH"] {
+            guard let value = request.environment[name], !value.isEmpty else { continue }
+            let resolved = URL(fileURLWithPath: value)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+            if resolved == workspaceURL.path || resolved.hasPrefix(workspacePrefix) {
+                throw ProjectMetadataFailure.invalidInput(
+                    message: name
+                        + " points inside the project, so a metadata read could write there."
+                        + " Move it outside the workspace and refresh Go again."
+                )
+            }
+        }
+
         // An explicit user choice is authoritative: if it is unusable the refresh
         // fails instead of quietly falling back to a different toolchain.
         let go: ProjectToolFileIdentity
@@ -32,10 +49,21 @@ struct MacGoMetadataPreparer: ProjectMetadataNativePreparing {
         let environment = GoMetadataEnvironment.make(from: request.environment)
         var goWork: ProjectToolFileIdentity?
         var isolation: MacGoWorkspaceIsolation?
+        var useManifests: [ProjectToolFileIdentity] = []
+        var useDirectories: [URL] = []
         let goWorkURL = workspaceURL.appendingPathComponent("go.work")
         if FileManager.default.fileExists(atPath: goWorkURL.path) {
             goWork = try ProjectToolFileIdentity.regularFile(at: goWorkURL, role: "go.work")
             isolation = try MacGoWorkspaceIsolation.create(workspaceURL: workspaceURL, sourceGoWorkURL: goWorkURL)
+            // Every use module's manifest is frozen at preparation time, so no
+            // edit made after the refresh started can silently become the new
+            // baseline. The work-edit round later has to agree with this list.
+            useDirectories = try MacGoWorkspaceIsolation.useDirectories(sourceGoWorkURL: goWorkURL)
+            for directory in useDirectories {
+                useManifests.append(try ProjectToolFileIdentity.regularFile(
+                    at: directory.appendingPathComponent("go.mod"), role: "a use module's go.mod"
+                ))
+            }
         }
         return MacGoMetadataSession(
             workspaceURL: workspaceURL,
@@ -44,7 +72,9 @@ struct MacGoMetadataPreparer: ProjectMetadataNativePreparing {
             goWork: goWork,
             go: go,
             environment: environment,
-            isolation: isolation
+            isolation: isolation,
+            useDirectories: useDirectories,
+            useManifests: useManifests
         )
     }
 
@@ -65,7 +95,8 @@ struct MacGoMetadataPreparer: ProjectMetadataNativePreparing {
 /// modules discovered by the `go work edit` round are frozen when that round's
 /// output arrives. The feature model calls every method on one serial worker;
 /// the lock defends the `Sendable` contract, not a concurrency strategy.
-private final class MacGoMetadataSession: ProjectMetadataNativeSession, @unchecked Sendable {
+private final class MacGoMetadataSession: ProjectMetadataNativeSession, ProjectMetadataSessionCleaning,
+    @unchecked Sendable {
     private enum Mode {
         case workspace
         case singleModule
@@ -88,13 +119,17 @@ private final class MacGoMetadataSession: ProjectMetadataNativeSession, @uncheck
 
     private var state: State = .locating
     private var moduleDirectories: [URL] = []
-    private var useManifests: [ProjectToolFileIdentity] = []
+    /// Frozen at preparation from the go.work text; `go work edit -json` must
+    /// agree with this list before any package capture is planned.
+    private let frozenUseManifests: [ProjectToolFileIdentity]
+    private let frozenUseDirectories: [URL]
     private var modulesOutput: Data?
 
     init(
         workspaceURL: URL, manifestDirectory: URL, manifest: ProjectToolFileIdentity,
         goWork: ProjectToolFileIdentity?, go: ProjectToolFileIdentity,
-        environment: [String: String], isolation: MacGoWorkspaceIsolation?
+        environment: [String: String], isolation: MacGoWorkspaceIsolation?,
+        useDirectories: [URL], useManifests: [ProjectToolFileIdentity]
     ) {
         self.workspaceURL = workspaceURL
         self.manifestDirectory = manifestDirectory
@@ -103,6 +138,8 @@ private final class MacGoMetadataSession: ProjectMetadataNativeSession, @uncheck
         self.go = go
         self.environment = environment
         self.isolation = isolation
+        self.frozenUseDirectories = useDirectories
+        self.frozenUseManifests = useManifests
     }
 
     deinit {
@@ -171,21 +208,23 @@ private final class MacGoMetadataSession: ProjectMetadataNativeSession, @uncheck
         try manifest.validate(role: "go.mod")
         try go.validate(role: "Go")
         try goWork?.validate(role: "go.work")
-        for (index, useManifest) in useManifests.enumerated() {
+        for (index, useManifest) in frozenUseManifests.enumerated() {
             try useManifest.validate(role: "the go.mod of use module \(index + 1)")
         }
     }
 
-    /// Deletes the isolated workspace copy. Every owner exit path — cancel,
-    /// timeout, failure, project close and completion — must call this; the
-    /// returned diagnostic is nonempty when deletion failed visibly.
-    func cleanupIsolation() -> String? {
+    // MARK: Stage transitions
+
+    /// Deletes the isolated workspace copy, conforming to
+    /// `ProjectMetadataSessionCleaning`. Every owner exit path — cancel,
+    /// timeout, failure, project close and completion — must call this through
+    /// the protocol; the returned diagnostic is nonempty when deletion failed
+    /// visibly. The deinit below is only a last-resort safety net.
+    func cleanupSessionResources() -> String? {
         lock.lock()
         defer { lock.unlock() }
         return isolation?.cleanup()
     }
-
-    // MARK: Stage transitions
 
     /// `go env -json GOWORK GOMOD` decides the mode. The discovered workspace
     /// must be the go.work this refresh froze; anything else means the tree
@@ -215,8 +254,10 @@ private final class MacGoMetadataSession: ProjectMetadataNativeSession, @uncheck
         return .more(workspaceStage())
     }
 
-    /// `go work edit -json` names the workspace's modules. Each use module's
-    /// go.mod is frozen here, at the moment the plan first learns of it.
+    /// The `go work edit -json` round must name exactly the module set that
+    /// was frozen from the go.work text at preparation time. A different set
+    /// means the workspace changed mid-refresh, so nothing captured after it
+    /// can be trusted.
     private func advanceWorkspace(_ output: Data) throws -> ProjectMetadataStageOutcome {
         let document: GoWorkDocument
         do { document = try JSONDecoder().decode(GoWorkDocument.self, from: output) }
@@ -230,12 +271,17 @@ private final class MacGoMetadataSession: ProjectMetadataNativeSession, @uncheck
         }
         var directories: [URL] = []
         for entry in document.Use {
-            let directory = URL(fileURLWithPath: entry.DiskPath, relativeTo: workspaceURL)
-                .resolvingSymlinksInPath().standardizedFileURL
-            useManifests.append(
-                try ProjectToolFileIdentity.regularFile(at: directory.appendingPathComponent("go.mod"), role: "a use module's go.mod")
+            directories.append(
+                URL(fileURLWithPath: entry.DiskPath, relativeTo: workspaceURL)
+                    .resolvingSymlinksInPath().standardizedFileURL
             )
-            directories.append(directory)
+        }
+        let frozen = Set(frozenUseDirectories.map(\.path))
+        guard directories.count == frozenUseDirectories.count,
+              Set(directories.map(\.path)) == frozen else {
+            throw ProjectMetadataFailure.invalidInput(
+                message: "The Go workspace's module list changed during the refresh. Refresh Go again."
+            )
         }
         moduleDirectories = directories
         return .more(modulesStage(mode: .workspace))
@@ -362,6 +408,10 @@ private enum GoMetadataEnvironment {
             guard let value = inherited[name], !value.contains("\0") else { continue }
             environment[name] = value
         }
+        // GOENV=off makes the process environment the only configuration
+        // source: values a user once saved with `go env -w` (proxy bypass,
+        // cache programs) must not resurrect themselves behind the whitelist.
+        environment["GOENV"] = "off"
         environment["GOTOOLCHAIN"] = "local"
         environment["GOFLAGS"] = "-mod=readonly"
         environment["GOPROXY"] = "off"

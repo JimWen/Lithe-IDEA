@@ -1260,6 +1260,7 @@ fn python_detector_labels_a_declared_django_project() {
 #[test]
 fn go_detector_finds_main_packages_under_any_file_name() {
     let root = temporary_root("detect-go-any-file");
+    let _cleanup = super::support::TemporaryRootGuard::keep(&root);
     for directory in ["app", "cmd/migrate", "tools/seed"] {
         fs::create_dir_all(root.join(directory)).unwrap();
     }
@@ -1291,8 +1292,6 @@ fn go_detector_finds_main_packages_under_any_file_name() {
             "missing {expected} in {ids:?}"
         );
     }
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 /// The clause often carries a trailing comment such as a build-tag note.
@@ -1300,6 +1299,7 @@ fn go_detector_finds_main_packages_under_any_file_name() {
 #[test]
 fn go_detector_reads_a_package_clause_with_a_trailing_comment() {
     let root = temporary_root("detect-go-clause-comment");
+    let _cleanup = super::support::TemporaryRootGuard::keep(&root);
     fs::create_dir_all(root.join("runner")).unwrap();
     fs::write(
         root.join("runner/entry.go"),
@@ -1315,8 +1315,6 @@ fn go_detector_reads_a_package_clause_with_a_trailing_comment() {
         ids.contains(&"go.main:runner/runner".to_string()),
         "missing go.main:runner/runner in {ids:?}"
     );
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 /// Disabled entry points are usually left behind as comments. A clause inside
@@ -1325,6 +1323,7 @@ fn go_detector_reads_a_package_clause_with_a_trailing_comment() {
 #[test]
 fn go_detector_ignores_commented_out_package_clauses() {
     let root = temporary_root("detect-go-commented-clause");
+    let _cleanup = super::support::TemporaryRootGuard::keep(&root);
     fs::create_dir_all(root.join("lib")).unwrap();
     fs::write(
         root.join("lib/a.go"),
@@ -1337,8 +1336,6 @@ fn go_detector_ignores_commented_out_package_clauses() {
         .filter(|item| item["provider"].as_str().unwrap_or("").starts_with("go."))
         .count();
     assert_eq!(go_items, 0, "commented clauses must not look runnable");
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 /// A directory holding only `*_test.go` files with `package main` exists to
@@ -1346,6 +1343,7 @@ fn go_detector_ignores_commented_out_package_clauses() {
 #[test]
 fn go_detector_ignores_test_only_main_packages() {
     let root = temporary_root("detect-go-test-only");
+    let _cleanup = super::support::TemporaryRootGuard::keep(&root);
     fs::create_dir_all(root.join("suites")).unwrap();
     fs::write(
         root.join("suites/main_test.go"),
@@ -1358,8 +1356,6 @@ fn go_detector_ignores_test_only_main_packages() {
         .filter(|item| item["provider"].as_str().unwrap_or("").starts_with("go."))
         .count();
     assert_eq!(go_items, 0, "test-only main packages must not be launched");
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 /// A main package split across several files is one program. The union of the
@@ -1368,6 +1364,7 @@ fn go_detector_ignores_test_only_main_packages() {
 #[test]
 fn go_detector_emits_one_entry_for_a_multi_file_main_package() {
     let root = temporary_root("detect-go-multi-file");
+    let _cleanup = super::support::TemporaryRootGuard::keep(&root);
     fs::create_dir_all(root.join("worker")).unwrap();
     fs::write(
         root.join("worker/main.go"),
@@ -1386,6 +1383,50 @@ fn go_detector_emits_one_entry_for_a_multi_file_main_package() {
         .collect::<Vec<_>>();
     assert_eq!(go_items.len(), 1, "one directory, one entry: {go_items:?}");
     assert_eq!(go_items[0]["id"], "go.main:worker/worker");
+}
 
-    fs::remove_dir_all(root).unwrap();
+/// A block comment squeezed between the keyword and the name acts as
+/// whitespace in Go's scanner, so `package/* named */main` is a real main
+/// package and must not be glued into one unknown token.
+#[test]
+fn go_detector_reads_a_clause_split_by_a_block_comment() {
+    let root = temporary_root("detect-go-comment-between");
+    let _cleanup = super::support::TemporaryRootGuard::keep(&root);
+    fs::create_dir_all(root.join("split")).unwrap();
+    // Assembled from pieces because a literal block-comment marker inside a
+    // Rust string trips the comment gate's line scanner.
+    let clause = ["package/", "* named *", "/main\nfunc main() {}\n"].concat();
+    fs::write(root.join("split/entry.go"), clause).unwrap();
+
+    let ids = generated_configurations(&root)
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"go.main:split/split".to_string()),
+        "missing go.main:split/split in {ids:?}"
+    );
+}
+
+/// An explicit semicolon after the package name is scanner-legal and must
+/// still read as `package main`.
+#[test]
+fn go_detector_accepts_an_explicit_semicolon_after_the_clause() {
+    let root = temporary_root("detect-go-semicolon");
+    let _cleanup = super::support::TemporaryRootGuard::keep(&root);
+    fs::create_dir_all(root.join("terse")).unwrap();
+    fs::write(
+        root.join("terse/main.go"),
+        "package main;\nfunc main() {}\n",
+    )
+    .unwrap();
+
+    let ids = generated_configurations(&root)
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"go.main:terse/terse".to_string()),
+        "missing go.main:terse/terse in {ids:?}"
+    );
 }

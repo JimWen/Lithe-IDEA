@@ -56,6 +56,7 @@ struct ProjectMetadataPreparationTests {
     /// credential variables never reach a metadata read.
     private func assertPinnedFlags(_ environment: [String: String]) {
         #expect(environment["GOFLAGS"] == "-mod=readonly")
+        #expect(environment["GOENV"] == "off")
         #expect(environment["GOTOOLCHAIN"] == "local")
         #expect(environment["GOPROXY"] == "off")
         #expect(environment["GOSUMDB"] == "off")
@@ -290,7 +291,11 @@ struct ProjectMetadataPreparationTests {
         let resolvedWorkspace = workspace.resolvingSymlinksInPath().standardizedFileURL
         let resolvedA = workspace.appendingPathComponent("a").resolvingSymlinksInPath().standardizedFileURL
         let resolvedB = workspace.appendingPathComponent("b").resolvingSymlinksInPath().standardizedFileURL
+        let resolvedX = root.appendingPathComponent("x").resolvingSymlinksInPath().standardizedFileURL
         let copied = try String(contentsOf: isolation.goWorkURL, encoding: .utf8)
+        // The relative replace target follows the relocation: Go resolves it
+        // against the go.work directory, and a rewritten use list without a
+        // rewritten replace would silently change dependency resolution.
         #expect(copied == """
         go 1.24
 
@@ -303,7 +308,7 @@ struct ProjectMetadataPreparationTests {
 
         godebug default=go1.21
 
-        replace example.com/x => ../x
+        replace example.com/x => \(resolvedX.path)
 
         // keep this comment
         """)
@@ -421,5 +426,150 @@ struct ProjectMetadataPreparationTests {
         }
         #expect(stage.id == id)
         return stage
+    }
+
+    /// `use .` is the most common workspace layout, and CRLF files must keep
+    /// their terminators while every use path still follows the relocation.
+    @Test
+    func isolationRewritesUseDotAndPreservesCRLFLineEndings() throws {
+        let root = temporaryRoot("iso-use-dot")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("ws")
+        try write("module example.com/dot\n\ngo 1.24\n", to: workspace.appendingPathComponent("go.mod"))
+        let goWorkURL = workspace.appendingPathComponent("go.work")
+        let original = "go 1.24\r\n\r\nuse .\r\n"
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try original.data(using: .utf8)!.write(to: goWorkURL)
+
+        let isolation = try MacGoWorkspaceIsolation.create(workspaceURL: workspace, sourceGoWorkURL: goWorkURL)
+        defer { _ = isolation.cleanup() }
+
+        let resolvedWorkspace = workspace.resolvingSymlinksInPath().standardizedFileURL
+        let copied = try String(contentsOf: isolation.goWorkURL, encoding: .utf8)
+        #expect(copied == "go 1.24\r\n\r\nuse \(resolvedWorkspace.path)\r\n")
+    }
+
+    /// The module list frozen from the go.work text at preparation is the
+    /// contract; a work-edit round naming a different set must fail the
+    /// refresh instead of capturing modules nobody validated.
+    @Test
+    func goWorkspaceRejectsAChangedModuleList() throws {
+        let root = temporaryRoot("ws-changed")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("ws")
+        try write("module example.com/a\n\ngo 1.24\n", to: workspace.appendingPathComponent("a/go.mod"))
+        try write("module example.com/b\n\ngo 1.24\n", to: workspace.appendingPathComponent("b/go.mod"))
+        let goWorkURL = workspace.appendingPathComponent("go.work")
+        try write("go 1.24\n\nuse (\n\t./a\n\t./b\n)\n", to: goWorkURL)
+        let goURL = root.appendingPathComponent("tools/go")
+        try writeFakeExecutable(goURL)
+
+        let session = try MacGoMetadataPreparer().prepare(
+            goRequest(workspaceURL: workspace, manifestURL: workspace.appendingPathComponent("a/go.mod"), goURL: goURL)
+        )
+        defer { _ = session }
+        let initial = session.initialStage
+        let locateOutput = try JSONSerialization.data(withJSONObject: [
+            "GOWORK": goWorkURL.resolvingSymlinksInPath().standardizedFileURL.path, "GOMOD": ""
+        ])
+        let workStage = try expectMore(session.advance(stage: initial, outputs: [locateOutput]), id: "go-work")
+        let workOutput = try JSONSerialization.data(withJSONObject: [
+            "Go": "1.24",
+            "Use": [["DiskPath": "./a"], ["DiskPath": "./c"]]
+        ])
+        #expect(throws: ProjectMetadataFailure.self) {
+            _ = try session.advance(stage: workStage, outputs: [workOutput])
+        }
+    }
+
+    /// A cache variable pointing into the workspace would turn the metadata
+    /// read into a workspace write no matter which flags are pinned.
+    @Test
+    func goPrepareRejectsACacheInsideTheWorkspace() throws {
+        let root = temporaryRoot("ws-cache-inside")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("ws")
+        try write("module example.com/single\n\ngo 1.24\n", to: workspace.appendingPathComponent("go.mod"))
+        let goURL = root.appendingPathComponent("tools/go")
+        try writeFakeExecutable(goURL)
+
+        var environment = fakeEnvironment
+        environment["GOCACHE"] = workspace.appendingPathComponent(".cache/go-build").path
+        #expect(throws: ProjectMetadataFailure.self) {
+            _ = try MacGoMetadataPreparer().prepare(CargoMetadataPreparationRequest(
+                workspaceURL: workspace, manifestURL: workspace.appendingPathComponent("go.mod"),
+                workspaceGeneration: 1, cargoCandidates: [goURL], rustupCandidates: [],
+                customCargoURL: nil, environment: environment,
+                deadline: ContinuousClock().now.advanced(by: .seconds(30))
+            ))
+        }
+    }
+
+    /// The isolation copy is released through the cleaning protocol, so an
+    /// owning model can delete it and surface failures without knowing the
+    /// concrete session type.
+    @Test
+    func goSessionExposesCleanupThroughTheCleaningProtocol() throws {
+        let root = temporaryRoot("ws-cleanup")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("ws")
+        try write("module example.com/a\n\ngo 1.24\n", to: workspace.appendingPathComponent("a/go.mod"))
+        try write("go 1.24\n\nuse ./a\n", to: workspace.appendingPathComponent("go.work"))
+        let goURL = root.appendingPathComponent("tools/go")
+        try writeFakeExecutable(goURL)
+
+        let session = try MacGoMetadataPreparer().prepare(
+            goRequest(workspaceURL: workspace, manifestURL: workspace.appendingPathComponent("a/go.mod"), goURL: goURL)
+        )
+        let cleaner = session as? any ProjectMetadataSessionCleaning
+        #expect(cleaner != nil)
+        #expect(cleaner?.cleanupSessionResources() == nil)
+    }
+
+    /// The rustup branch of the Cargo sequence is part of the byte-identical
+    /// guarantee: two `which` probes through the rustup proxy, then one
+    /// metadata command executed by the resolved cargo.
+    @Test
+    func cargoSessionKeepsItsTwoPhaseSequenceThroughRustup() throws {
+        let root = temporaryRoot("cargo-rustup")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("ws")
+        let manifestURL = workspace.appendingPathComponent("Cargo.toml")
+        try write("[workspace]\nmembers = []\n", to: manifestURL)
+        let rustupURL = root.appendingPathComponent("tools/rustup")
+        try writeFakeExecutable(rustupURL)
+        let toolchainDir = root.appendingPathComponent("tools/toolchain/bin")
+        let resolvedCargo = toolchainDir.appendingPathComponent("cargo")
+        let resolvedRustc = toolchainDir.appendingPathComponent("rustc")
+        try writeFakeExecutable(resolvedCargo)
+        try writeFakeExecutable(resolvedRustc)
+
+        let request = CargoMetadataPreparationRequest(
+            workspaceURL: workspace, manifestURL: manifestURL, workspaceGeneration: 1,
+            cargoCandidates: [rustupURL], rustupCandidates: [], customCargoURL: nil,
+            environment: fakeEnvironment, deadline: ContinuousClock().now.advanced(by: .seconds(30))
+        )
+        let session = try MacCargoMetadataPreparer().prepare(request)
+        defer { _ = session }
+
+        let initial = session.initialStage
+        #expect(initial.id == "cargo-resolution")
+        #expect(initial.commands.count == 2)
+        #expect(initial.commands.map(\.arguments) == [["which", "cargo"], ["which", "rustc"]])
+        #expect(initial.commands.map(\.executablePath)
+            == [rustupURL, rustupURL].map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
+
+        let resolvedPath = { (url: URL) in Data(url.resolvingSymlinksInPath().standardizedFileURL.path.utf8) + Data([0x0A]) }
+        guard case .more(let metadataStage) = try session.advance(
+            stage: initial, outputs: [try resolvedPath(resolvedCargo), try resolvedPath(resolvedRustc)]
+        ) else {
+            Issue.record("The resolution round must plan the metadata round")
+            return
+        }
+        #expect(metadataStage.id == "cargo-metadata")
+        #expect(metadataStage.commands.count == 1)
+        #expect(metadataStage.commands[0].executablePath
+            == resolvedCargo.resolvingSymlinksInPath().standardizedFileURL.path)
+        #expect(metadataStage.commands[0].arguments.contains("--manifest-path"))
     }
 }

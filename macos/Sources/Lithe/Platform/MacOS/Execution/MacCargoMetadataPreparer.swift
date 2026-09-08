@@ -334,7 +334,7 @@ struct ProjectToolFileIdentity: Sendable {
         let current = try Self.existing(at: resolvedURL, role: role)
         guard current.isSameFile(as: self), current.size == size, current.modified == modified else {
             throw ProjectMetadataFailure.invalidInput(
-                message: "\(role) changed during the refresh. Refresh Cargo again."
+                message: "\(role) changed during the refresh. Refresh the project metadata again."
             )
         }
     }
