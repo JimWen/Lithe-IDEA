@@ -848,6 +848,7 @@ struct CodeEditorView: NSViewRepresentable {
         context.coordinator.updateCodeVisionAndBlame()
         context.coordinator.updateGitLineChanges()
         context.coordinator.updateDiagnostics()
+        context.coordinator.applyInitialRunnableMarkers()
         context.coordinator.shouldFocus = shouldFocus
         context.coordinator.requestInitialFocusIfNeeded()
         let debugFeature = model.genericDebugFeatureIfActive
@@ -1608,9 +1609,18 @@ struct CodeEditorView: NSViewRepresentable {
                 model?.resolveJavaNavigation(marker, in: document.url)
             }
             let runnableMarkers = Self.discoverGoRunnables(in: textView?.string ?? "", url: document.url)
-            gutter?.updateRunnableMarkers(runnableMarkers) { [weak model] runnable in
-                model?.showNotification("Runnable: \(runnable.displayName)", severity: .information)
-            }
+            gutter?.updateRunnableMarkers(
+                runnableMarkers,
+                onRun: { [weak model] runnable in
+                    model?.showNotification("Run ‘\(runnable.displayName)’", severity: .information)
+                },
+                onDebug: { [weak model] runnable in
+                    model?.showNotification("Debug ‘\(runnable.displayName)’", severity: .information)
+                },
+                onModify: { [weak model] runnable in
+                    model?.showNotification("Modify Run Configuration for ‘\(runnable.displayName)’", severity: .information)
+                }
+            )
             scheduleEditorOverlayRelayout()
         }
 
@@ -1634,6 +1644,10 @@ struct CodeEditorView: NSViewRepresentable {
                 let position = LanguageServerPosition(line: index, utf16Column: 0)
                 return DocumentRunnable(id: "go:\(kind.rawValue):\(name):\(index + 1)", configurationID: nil, displayName: name, kind: kind, line: index + 1, symbolRange: LanguageServerRange(start: position, end: position))
             }
+        }
+
+        func applyInitialRunnableMarkers() {
+            applyFoldState()
         }
 
         func updateCodeVisionAndBlame() {
@@ -4053,7 +4067,9 @@ final class LineNumberGutterView: NSView {
     private var onToggleFold: ((JavaFoldRegion) -> Void)?
     private var implementationMarkers: [JavaImplementationMarker] = []
     private var runnableMarkers: [DocumentRunnable] = []
-    private var onSelectRunnable: ((DocumentRunnable) -> Void)?
+    private var onRunRunnable: ((DocumentRunnable) -> Void)?
+    private var onDebugRunnable: ((DocumentRunnable) -> Void)?
+    private var onModifyRunnable: ((DocumentRunnable) -> Void)?
     private var contextRunnable: DocumentRunnable?
     private var onSelectImplementation: ((JavaImplementationMarker) -> Void)?
     private var debugBreakpointLines: Set<Int> = []
@@ -4226,9 +4242,16 @@ final class LineNumberGutterView: NSView {
         needsDisplay = true
     }
 
-    func updateRunnableMarkers(_ markers: [DocumentRunnable], onSelect: @escaping (DocumentRunnable) -> Void) {
+    func updateRunnableMarkers(
+        _ markers: [DocumentRunnable],
+        onRun: @escaping (DocumentRunnable) -> Void,
+        onDebug: @escaping (DocumentRunnable) -> Void,
+        onModify: @escaping (DocumentRunnable) -> Void
+    ) {
         runnableMarkers = markers
-        onSelectRunnable = onSelect
+        onRunRunnable = onRun
+        onDebugRunnable = onDebug
+        onModifyRunnable = onModify
         needsDisplay = true
     }
 
@@ -5052,7 +5075,7 @@ final class LineNumberGutterView: NSView {
             onToggleFold?(region)
         case .implementation:
             if let runnable = runnableMarkers.first(where: { $0.line == line }) {
-                onSelectRunnable?(runnable)
+                onRunRunnable?(runnable)
                 return
             }
             let markers = implementationMarkers.filter { $0.line == line }
@@ -5148,9 +5171,9 @@ final class LineNumberGutterView: NSView {
         return nil
     }
 
-    @objc private func runRunnableFromGutterMenu() { if let contextRunnable { onSelectRunnable?(contextRunnable) } }
-    @objc private func debugRunnableFromGutterMenu() { if let contextRunnable { onSelectRunnable?(contextRunnable) } }
-    @objc private func modifyRunnableFromGutterMenu() { if let contextRunnable { onSelectRunnable?(contextRunnable) } }
+    @objc private func runRunnableFromGutterMenu() { if let contextRunnable { onRunRunnable?(contextRunnable) } }
+    @objc private func debugRunnableFromGutterMenu() { if let contextRunnable { onDebugRunnable?(contextRunnable) } }
+    @objc private func modifyRunnableFromGutterMenu() { if let contextRunnable { onModifyRunnable?(contextRunnable) } }
 
     func debugBreakpointContextMenu(forLine line: Int) -> NSMenu? {
         contextDebugBreakpointLine = line
