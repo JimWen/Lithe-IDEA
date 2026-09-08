@@ -27,6 +27,18 @@ final class WorkspaceTextEditUndoController {
         undoManager.setActionName("Replace Text")
     }
 
+    func registerOpenDocuments(_ edits: [(document: EditorDocument, before: String, after: String)]) {
+        guard !edits.isEmpty else { return }
+        undoManager.registerUndo(withTarget: self) { target in
+            for edit in edits { edit.document.text = edit.before }
+            target.undoManager.registerUndo(withTarget: target) { _ in
+                for edit in edits { edit.document.text = edit.after }
+            }
+            target.undoManager.setActionName("Redo Replace Text")
+        }
+        undoManager.setActionName("Replace Text")
+    }
+
     private func applyInverse(_ edits: [WorkspaceTextEdit], workspaceURL: URL, transactionID: UUID) async {
         let inverse = edits.map {
             WorkspaceTextEdit(path: $0.path, sourceText: $0.replacementText,

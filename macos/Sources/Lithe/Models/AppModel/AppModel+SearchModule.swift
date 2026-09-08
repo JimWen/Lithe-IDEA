@@ -234,8 +234,10 @@ extension AppModel {
                 guard result.state == .applied else {
                     return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: result.failedPaths + result.recoveryPaths)
                 }
+                var openUndoEdits: [(document: EditorDocument, before: String, after: String)] = []
                 for edit in openEdits {
                     guard let document = leasedDocuments.first(where: { relativeDocumentPath($0.url) == edit.path }) else { continue }
+                    openUndoEdits.append((document: document, before: edit.sourceText, after: edit.replacementText))
                     document.applyLiveEditorText(edit.replacementText)
                 }
                 if !transactionEdits.isEmpty {
@@ -245,6 +247,7 @@ extension AppModel {
                         transactionID: result.transactionID
                     )
                 }
+                self.services.workspaceTextEditUndoController.registerOpenDocuments(openUndoEdits)
                 return ProjectReplacementApplyResult(changedFiles: transactionEdits.count, failedFiles: [])
             }
         )
