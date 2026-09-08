@@ -10,6 +10,10 @@ struct ProjectLanguageSettingsView: View {
     @State private var executableDraft = ""
     @State private var errorMessage: String?
 
+    private var candidates: [RuntimeToolCandidate] {
+        model.runtimeFeature.executableCandidates(command)
+    }
+
     private var command: String { category.runtimeCommand ?? "" }
     private var providerID: String { category.languageProviderID ?? "" }
 
@@ -32,13 +36,25 @@ struct ProjectLanguageSettingsView: View {
                 } label: { Image(systemName: "folder") }
                 .litheIconButton()
                 .help("Choose executable")
+                if !candidates.isEmpty {
+                    Menu("Detected environments") {
+                        ForEach(candidates) { candidate in
+                            Button {
+                                executableDraft = candidate.executableURL.path
+                                saveExecutable()
+                            } label: {
+                                Text("\(candidate.source.displayName): \(candidate.executableURL.path)")
+                            }
+                        }
+                    }
+                }
                 Button("Apply", action: saveExecutable)
                 Button("Auto-detect") {
                     executableDraft = ""
                     saveExecutable()
                 }
             }
-            if let candidate = model.runtimeFeature.executableCandidates(command).first {
+            if let candidate = candidates.first {
                 Text(candidate.executableURL.path)
                     .font(.system(size: 12))
                     .foregroundStyle(LitheTheme.secondaryText)

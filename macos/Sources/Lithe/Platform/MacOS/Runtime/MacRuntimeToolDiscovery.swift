@@ -62,6 +62,17 @@ struct MacRuntimeToolDiscovery: RuntimeToolDiscovery {
             }
         }
 
+        // Go's own environment is authoritative when it is available.  Keep
+        // the `go env`-derived GOROOT ahead of PATH so a project opened from
+        // Finder resolves the same toolchain as a terminal session.
+        if command == "go", let goRoot = environment["GOROOT"], !goRoot.isEmpty {
+            add(
+                URL(fileURLWithPath: goRoot).appendingPathComponent("bin/go"),
+                source: .environment,
+                detail: "go env GOROOT"
+            )
+        }
+
         // An explicit per-tool override is useful for adapters distributed as
         // an archive or a standalone script.  It is still only inspected.
         for key in environmentKeys(for: command) {

@@ -309,6 +309,35 @@ extension AppModel {
         }
     }
 
+    /// Debug a generated Go main using the same selected configuration as Run.
+    func debugGoTarget(configurationID: String, name: String) {
+        Task { @MainActor [weak self] in
+            guard let self, let identity = currentWorkspaceIdentity,
+                  let feature = await activateExecutionModule()?.runFeature else { return }
+            guard case .ready = await ensureRunProjectReady(feature, for: identity),
+                  let configuration = feature.configurations.first(where: { $0.id == configurationID }) else {
+                showNotification("Go 运行配置尚未生成，请先运行一次或打开运行配置。", severity: .warning, title: name)
+                return
+            }
+            selectRunConfiguration(configuration)
+            startDebugging()
+        }
+    }
+
+    func debugCargoTarget(configurationID: String, name: String) {
+        Task { @MainActor [weak self] in
+            guard let self, let identity = currentWorkspaceIdentity,
+                  let feature = await activateExecutionModule()?.runFeature else { return }
+            guard case .ready = await ensureRunProjectReady(feature, for: identity),
+                  let configuration = feature.configurations.first(where: { $0.id == configurationID }) else {
+                showNotification("Rust 运行配置尚未生成，请先运行一次或打开运行配置。", severity: .warning, title: name)
+                return
+            }
+            selectRunConfiguration(configuration)
+            startDebugging()
+        }
+    }
+
     func openRunConfiguration(relativePath: String?) {
         guard let workspaceURL else { return }
         let url = workspaceURL.appendingPathComponent(relativePath ?? ".lithe/run/generated.json")

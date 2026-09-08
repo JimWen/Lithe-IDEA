@@ -977,6 +977,7 @@ final class AppModel: ObservableObject, Identifiable {
         gitLogSearchQuery = ""
         projectHistoryFeatureIfActive?.reset()
         workspaceURL = normalizedURL
+        scheduleGoRuntimeEnvironmentPrompt(for: normalizedURL)
         standaloneFileURL = nil
         let visibilityRules = settings.fileVisibilityRules
         workspaceFeature.beginWorkspace(at: normalizedURL, visibilityRules: visibilityRules)
@@ -1000,6 +1001,23 @@ final class AppModel: ObservableObject, Identifiable {
                     self?.workspaceURL == normalizedURL
                         && self?.workspaceFeature.workspaceGeneration == generation
                 }
+            )
+        }
+    }
+
+    private func scheduleGoRuntimeEnvironmentPrompt(for projectURL: URL) {
+        guard goManifestURLs.contains(where: { $0.standardizedFileURL.path.hasPrefix(projectURL.path) }),
+              runtimeFeature.customExecutablePath(for: "go") == nil else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.workspaceURL == projectURL else { return }
+            await self.runtimeFeature.refreshAvailableRuntimes()
+            guard self.workspaceURL == projectURL,
+                  self.runtimeFeature.customExecutablePath(for: "go") == nil else { return }
+            self.showNotification(
+                "检测到 Go 项目，但尚未设置项目运行环境。可从 go env 和 PATH 中选择。",
+                severity: .warning,
+                title: "设置 Go 环境",
+                action: .configureGoRuntime
             )
         }
     }

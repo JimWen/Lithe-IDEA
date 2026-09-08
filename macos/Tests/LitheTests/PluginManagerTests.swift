@@ -41,9 +41,15 @@ struct PluginManagerTests {
         let officialLanguagePlugins = OfficialPluginCatalog.manifests.filter {
             !($0.languageSupports ?? []).isEmpty
         }
-        #expect(officialLanguagePlugins.flatMap(\.modules).allSatisfy {
-            $0.manifest.defaultState == .disabled
-        })
+        let officialModuleStates = Dictionary(uniqueKeysWithValues: officialLanguagePlugins
+            .flatMap(\.modules)
+            .map { ($0.manifest.id, $0.manifest.defaultState) })
+        #expect(officialModuleStates[.languageExecutionExtension("go")] == .enabled)
+        #expect(officialModuleStates[.languageServerExtension("go")] == .enabled)
+        #expect(officialModuleStates
+            .filter { $0.key != .languageExecutionExtension("go") && $0.key != .languageServerExtension("go") }
+            .values
+            .allSatisfy { $0 == .disabled })
         _ = try ValidatedPluginCatalog(
             manifests: BuiltInPluginCatalog.manifests
                 + BundledLanguagePluginCatalog.manifests

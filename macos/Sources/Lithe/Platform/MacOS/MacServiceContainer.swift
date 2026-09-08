@@ -6,7 +6,6 @@ import LitheDatabaseModule
 import LitheDebugModule
 import LitheExecutionModule
 import LitheGitModule
-import LitheGoSupportModule
 import LitheLocalHistoryModule
 import LitheLanguageIntelligenceModule
 import LitheModuleAPI
@@ -136,17 +135,11 @@ final class MacServiceContainer {
             launchMode: moduleLaunchMode
         ))
         let bundledLanguageManifests = BundledLanguagePluginCatalog.manifests
-        let activeNativeManifests = pluginStartup.activeNativeManifests
-        let hasPackagedGoSupport = activeNativeManifests.contains {
-            $0.id == PluginID("dev.lithe.plugin.go-support")
-        }
-        let pluginManifests = BuiltInPluginCatalog.manifests
-            + bundledLanguageManifests
-            + activeNativeManifests
-            + (hasPackagedGoSupport ? [] : OfficialPluginCatalog.manifests)
         let moduleRegistry = ModuleRegistry(
             runtime: moduleRuntime,
-            pluginManifests: pluginManifests
+            pluginManifests: BuiltInPluginCatalog.manifests
+                + bundledLanguageManifests
+                + pluginStartup.activeNativeManifests
         )
         do {
             try moduleRegistry.register(ModuleFactory(manifest: WorkspaceFoundationModule.moduleManifest) {
@@ -468,20 +461,6 @@ final class MacServiceContainer {
             })
             for pluginID in pluginStartup.factoriesByPlugin.keys.sorted() {
                 for factory in pluginStartup.factoriesByPlugin[pluginID] ?? [] {
-                    try moduleRegistry.register(factory)
-                }
-            }
-            // Go is shipped with the host as an official module as well as a
-            // separately installable native bundle. Keep a working execution
-            // provider when an older/system installation has the manifest but
-            // not the bundle resource; an installed bundle still wins above.
-            if !moduleRegistry.registeredModuleIDs.contains(.languageExecutionExtension("go")) {
-                let goExecutionID = ModuleID.languageExecutionExtension("go")
-                moduleStore.setQuarantined(false, for: goExecutionID)
-                moduleStore.setEnabledState(true, for: goExecutionID)
-                let fallback = GoSupportPluginEntrypoint()
-                let context = PluginHostContext(resolver: pluginHostServices)
-                for factory in try fallback.moduleFactories(context: context) {
                     try moduleRegistry.register(factory)
                 }
             }

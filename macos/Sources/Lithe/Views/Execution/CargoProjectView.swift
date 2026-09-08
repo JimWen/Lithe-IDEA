@@ -354,6 +354,16 @@ private struct CargoProjectView: View {
                 memberDirectory: member.directory.relativePath, target: target
             ) != nil {
                 Button("Run \(target.name)") { activateTarget(target, member: member) }
+                if let configurationID = CargoTreePresentation.cargoBinaryConfigurationID(
+                    memberDirectory: member.directory.relativePath, target: target
+                ) {
+                    Button("Debug \(target.name)") {
+                        model.debugCargoTarget(configurationID: configurationID, name: target.name)
+                    }
+                }
+                Button("Modify Run Configuration…") {
+                    model.showRunConfigurationEditor()
+                }
             }
             Button("Go to Source") { openSource(target) }
                 .disabled(target.sources.first.map { model.cargoFileURL(for: $0.location) } == nil)

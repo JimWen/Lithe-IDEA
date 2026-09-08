@@ -401,6 +401,18 @@ private struct GoProjectView: View {
             Button(entry.kind == .application ? "Run \(entry.name)" : "Run Tests") {
                 activateEntry(entry, target: target, member: member)
             }
+            if entry.kind == .application,
+               let configurationID = GoTreePresentation.goMainConfigurationID(
+                   member: member, target: target,
+                   workspaceName: model.workspaceURL?.lastPathComponent ?? "Workspace"
+               ) {
+                Button("Debug \(entry.name)") {
+                    model.debugGoTarget(configurationID: configurationID, name: entry.name)
+                }
+                Button("Modify Run Configuration…") {
+                    model.showRunConfigurationEditor()
+                }
+            }
             Button("Go to Source") { openSource(target) }
                 .disabled(target.sources.first.map { model.goFileURL(for: $0.location) } == nil)
         }
