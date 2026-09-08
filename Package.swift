@@ -111,6 +111,7 @@ let package = Package(
                 "LitheDebugModule",
                 "LitheLanguageIntelligenceModule",
                 "LitheWorkspaceModule",
+                "LitheGoSupportModule",
                 "LitheRustCore",
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
