@@ -211,22 +211,41 @@ extension AppModel {
                     leases.append((document, lease))
                 }
                 defer { leases.forEach { $0.0.releaseMutationLease($0.1) } }
+                let relativeDocumentPath: (URL) -> String = { url in
+                    let root = rootURL.standardizedFileURL.path.hasSuffix("/") ? rootURL.standardizedFileURL.path : rootURL.standardizedFileURL.path + "/"
+                    return url.standardizedFileURL.path.replacingOccurrences(of: root, with: "")
+                }
+                let openPaths = Set(leasedDocuments.map { relativeDocumentPath($0.url) })
                 let transactionEdits = edits.map {
                     WorkspaceTextEdit(path: $0.path, sourceText: $0.sourceText, replacementText: $0.replacementText, sourceIdentity: "")
                 }
+                let openEdits = transactionEdits.filter { openPaths.contains($0.path) }
+                guard openEdits.allSatisfy({ edit in
+                    leasedDocuments.first { relativeDocumentPath($0.url) == edit.path }?.text.utf8.elementsEqual(edit.sourceText.utf8) == true
+                }) else {
+                    return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: edits.map(\.path))
+                }
+                let closedEdits = transactionEdits.filter { !openPaths.contains($0.path) }
                 let result = await self.services.workspaceTextEditCoordinator.apply(
-                    transactionEdits,
+                    closedEdits,
                     at: rootURL,
                     operations: self.services.workspaceTextEditFileOperations
                 )
-                if result.state == .applied {
+                guard result.state == .applied else {
+                    return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: result.failedPaths + result.recoveryPaths)
+                }
+                for edit in openEdits {
+                    guard let document = leasedDocuments.first(where: { relativeDocumentPath($0.url) == edit.path }) else { continue }
+                    document.applyLiveEditorText(edit.replacementText)
+                }
+                if !transactionEdits.isEmpty {
                     self.services.workspaceTextEditUndoController.register(
                         edits: transactionEdits,
                         workspaceURL: rootURL,
                         transactionID: result.transactionID
                     )
                 }
-                return ProjectReplacementApplyResult(changedFiles: result.changedPaths.count, failedFiles: result.failedPaths + result.recoveryPaths)
+                return ProjectReplacementApplyResult(changedFiles: transactionEdits.count, failedFiles: [])
             }
         )
         try? services.moduleRuntime.markIdle(.search)
