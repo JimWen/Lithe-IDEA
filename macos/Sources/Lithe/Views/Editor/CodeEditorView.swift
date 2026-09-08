@@ -4025,6 +4025,7 @@ final class LineNumberGutterView: NSView {
     private var collapsedFoldIDs: Set<String> = []
     private var onToggleFold: ((JavaFoldRegion) -> Void)?
     private var implementationMarkers: [JavaImplementationMarker] = []
+    private var runnableMarkers: [DocumentRunnable] = []
     private var onSelectImplementation: ((JavaImplementationMarker) -> Void)?
     private var debugBreakpointLines: Set<Int> = []
     private var debugBreakpointStatesByLine: [Int: EditorDebugBreakpointState] = [:]
@@ -4475,6 +4476,10 @@ final class LineNumberGutterView: NSView {
                       canAddDebugBreakpoint?(lineNumber - 1) == true {
                 drawDebugBreakpointHover(y: y, height: lineRect.height)
             } else {
+                let runnableMarkers = runnableMarkers.filter { $0.line == lineNumber - 1 }
+                if !runnableMarkers.isEmpty {
+                    drawRunnableMarker(y: y, height: lineRect.height)
+                }
                 let markers = implementationMarkers.filter { $0.line == lineNumber - 1 }
                 for marker in markers {
                     drawImplementationMarker(
@@ -4655,6 +4660,20 @@ final class LineNumberGutterView: NSView {
         let path = NSBezierPath(ovalIn: rect)
         path.lineWidth = 1.2
         path.stroke()
+    }
+
+    private func drawRunnableMarker(y: CGFloat, height: CGFloat) {
+        let size: CGFloat = 13
+        let rect = NSRect(x: editorGutterOriginX + gutterLayout.implementationRange.lowerBound
+            + (EditorGutterLayout.width(of: gutterLayout.implementationRange) - size) / 2,
+            y: y + max(0, (height - size) / 2), width: size, height: size)
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: rect.minX + 3, y: rect.minY + 2))
+        path.line(to: NSPoint(x: rect.maxX - 2, y: rect.midY))
+        path.line(to: NSPoint(x: rect.minX + 3, y: rect.maxY - 2))
+        path.close()
+        NSColor.systemGreen.setFill()
+        path.fill()
     }
 
     private func drawDebugBreakpoint(
