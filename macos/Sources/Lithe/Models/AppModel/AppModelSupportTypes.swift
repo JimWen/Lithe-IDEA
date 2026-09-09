@@ -69,12 +69,14 @@ enum WorkbenchNotificationAction: Equatable {
     case installLanguageServer(providerID: String)
     case identifyRunConfiguration
     case configureGoRuntime
+    case configureRustRuntime
 
     var title: String {
         switch self {
         case .installLanguageServer: "Install"
         case .identifyRunConfiguration: "Configure"
         case .configureGoRuntime: "Configure Go"
+        case .configureRustRuntime: "Configure Rust"
         }
     }
 }

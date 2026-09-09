@@ -72,6 +72,21 @@ struct MacRuntimeToolDiscovery: RuntimeToolDiscovery {
                 detail: "go env GOROOT"
             )
         }
+        if command == "go" {
+            add(homeDirectoryURL.appendingPathComponent(".g/go/bin/go"), source: .environment, detail: "Go version manager")
+            add(URL(fileURLWithPath: "/usr/local/go/bin/go"), source: .environment, detail: "Go SDK")
+            let versions = homeDirectoryURL.appendingPathComponent(".g/versions")
+            for root in (try? FileManager.default.contentsOfDirectory(at: versions, includingPropertiesForKeys: nil)) ?? [] {
+                add(root.appendingPathComponent("bin/go"), source: .environment, detail: "Go \(root.lastPathComponent)")
+            }
+            let goPaths = (environment["GOPATH"] ?? homeDirectoryURL.appendingPathComponent("go").path).split(separator: ":")
+            for path in goPaths {
+                let cache = URL(fileURLWithPath: String(path)).appendingPathComponent("pkg/mod/golang.org")
+                for root in (try? FileManager.default.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil)) ?? [] where root.lastPathComponent.hasPrefix("toolchain@") {
+                    add(root.appendingPathComponent("bin/go"), source: .environment, detail: "Go toolchain cache")
+                }
+            }
+        }
 
         // An explicit per-tool override is useful for adapters distributed as
         // an archive or a standalone script.  It is still only inspected.

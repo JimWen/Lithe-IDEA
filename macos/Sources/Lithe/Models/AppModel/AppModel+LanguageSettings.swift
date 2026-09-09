@@ -2,6 +2,34 @@ import Foundation
 import LitheLanguageIntelligenceModule
 
 extension AppModel {
+    func scheduleProjectRuntimeEnvironmentPrompt(for projectURL: URL) {
+        let command: String
+        let language: String
+        let action: WorkbenchNotificationAction
+        if !goManifestURLs.isEmpty {
+            command = "go"
+            language = "Go"
+            action = .configureGoRuntime
+        } else if !cargoManifestURLs.isEmpty {
+            command = "cargo"
+            language = "Rust"
+            action = .configureRustRuntime
+        } else { return }
+        guard runtimeFeature.customExecutablePath(for: command) == nil else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.workspaceURL == projectURL else { return }
+            await self.runtimeFeature.refreshAvailableRuntimes()
+            guard self.workspaceURL == projectURL,
+                  self.runtimeFeature.customExecutablePath(for: command) == nil else { return }
+            self.showNotification(
+                "检测到 \(language) 项目，但尚未设置项目运行环境。请选择已检测到的工具链。",
+                severity: .warning,
+                title: "设置 \(language) 环境",
+                action: action
+            )
+        }
+    }
+
     func chooseProjectExecutable(language: String) -> URL? {
         platformUI.chooseFile(
             title: settings.language == .simplifiedChinese

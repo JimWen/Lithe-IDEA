@@ -182,7 +182,8 @@ final class MacServiceContainer {
         let runtimeService = ProjectRuntimeService(
             runtimeLocator: MacRuntimeLocator(),
             store: store,
-            toolDiscovery: MacRuntimeToolDiscovery()
+            toolDiscovery: MacRuntimeToolDiscovery(),
+            fileStorage: fileStorage
         )
         let rustLanguageProviderCatalogSource = RustLanguageProviderCatalogSource(core: rustCore)
         // Installation owns the process-backed language boundary even when a

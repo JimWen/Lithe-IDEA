@@ -4,6 +4,10 @@ import LitheGitModule
 
 @MainActor
 extension AppModel {
+    func resumeGitObservationAfterActivation() async {
+        await workspaceFeature.resumeObservationAfterActivation()
+    }
+
     var gitFeatureIfActive: GitFeatureModel? {
         gitCapability?.feature
     }

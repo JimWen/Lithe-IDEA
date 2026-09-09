@@ -50,6 +50,8 @@ extension AppModel {
             Task { await generateRunConfigurations() }
         case .configureGoRuntime:
             showSettings(category: .go)
+        case .configureRustRuntime:
+            showSettings(category: .rust)
         }
     }
 

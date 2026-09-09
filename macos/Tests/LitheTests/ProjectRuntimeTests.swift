@@ -65,13 +65,13 @@ struct ProjectRuntimeTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let service = ProjectRuntimeService(runtimeLocator: SelectedToolRuntimeLocator(), store: EmptyKeyValueStore())
+        let service = ProjectRuntimeService(runtimeLocator: SelectedToolRuntimeLocator(), store: EmptyKeyValueStore(), fileStorage: MacFileStorage())
         service.openProject(at: root)
         try service.setCustomExecutablePath(executable.path, for: "go")
 
         let settings = root.appendingPathComponent(".lithe/runtime.json")
         #expect(FileManager.default.fileExists(atPath: settings.path))
-        let reloaded = ProjectRuntimeService(runtimeLocator: SelectedToolRuntimeLocator(), store: EmptyKeyValueStore())
+        let reloaded = ProjectRuntimeService(runtimeLocator: SelectedToolRuntimeLocator(), store: EmptyKeyValueStore(), fileStorage: MacFileStorage())
         reloaded.openProject(at: root)
         #expect(reloaded.customExecutablePath(for: "go") == executable.path)
     }

@@ -36,6 +36,7 @@ final class ProjectRuntimeService: ObservableObject {
 
     private let runtimeLocator: any RuntimeLocator
     private let store: any KeyValueStore
+    private let fileStorage: (any FileStorage)?
     private var executableOverrides: [String: String] = [:]
     private var executableOverridesKey: String? {
         projectURL.map { "lithe.project-runtime-executables." + $0.standardizedFileURL.path }
@@ -51,10 +52,12 @@ final class ProjectRuntimeService: ObservableObject {
     init(
         runtimeLocator: any RuntimeLocator,
         store: any KeyValueStore,
-        toolDiscovery: (any RuntimeToolDiscovery)? = nil
+        toolDiscovery: (any RuntimeToolDiscovery)? = nil,
+        fileStorage: (any FileStorage)? = nil
     ) {
         self.runtimeLocator = runtimeLocator
         self.store = store
+        self.fileStorage = fileStorage
         self.toolDiscovery = toolDiscovery ?? DefaultRuntimeToolDiscovery()
     }
 
@@ -67,9 +70,9 @@ final class ProjectRuntimeService: ObservableObject {
         activeDiscoveryID = nil
         let normalizedURL = url.standardizedFileURL
         projectURL = normalizedURL
-        executableOverrides = loadProjectRuntimeFile()
-            ?? executableOverridesKey.flatMap { store.object(forKey: $0) as? [String: String] }
-            ?? [:]
+        executableOverrides = fileStorage == nil
+            ? (executableOverridesKey.flatMap { store.object(forKey: $0) as? [String: String] } ?? [:])
+            : (loadProjectRuntimeFile() ?? [:])
         javaRuntimes = []
         javaEnvironmentReport = .checking(for: normalizedURL)
         javaLanguageServerRuntimePreparation = .unprepared
@@ -257,37 +260,32 @@ final class ProjectRuntimeService: ObservableObject {
     func setCustomExecutablePath(_ path: String, for command: String) throws {
         guard let key = executableOverridesKey, !command.isEmpty, !command.contains("/") else { return }
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        var nextOverrides = executableOverrides
         if trimmed.isEmpty {
-            executableOverrides[command] = nil
+            nextOverrides[command] = nil
         } else {
             guard let url = executableURL(at: trimmed) else {
                 throw RunExecutableResolutionError(message: "Choose an executable file for \(command).")
             }
-            executableOverrides[command] = url.path
+            nextOverrides[command] = url.path
         }
+        try persistProjectRuntimeFile(nextOverrides)
+        executableOverrides = nextOverrides
         store.set(executableOverrides, forKey: key)
-        persistProjectRuntimeFile()
     }
 
     private func loadProjectRuntimeFile() -> [String: String]? {
-        guard let url = projectRuntimeFileURL,
-              let data = try? Data(contentsOf: url),
+        guard let fileStorage, let url = projectRuntimeFileURL,
+              let data = try? fileStorage.readData(from: url, options: []),
               let file = try? JSONDecoder().decode(ProjectRuntimeFile.self, from: data) else { return nil }
         return file.executables
     }
 
-    private func persistProjectRuntimeFile() {
-        guard let url = projectRuntimeFileURL,
-              let data = try? JSONEncoder().encode(ProjectRuntimeFile(executables: executableOverrides)) else { return }
-        do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
-            )
-            try data.write(to: url, options: .atomic)
-        } catch {
-            // The injected store remains the compatibility fallback when a
-            // read-only workspace cannot create its project-local settings.
-        }
+    private func persistProjectRuntimeFile(_ overrides: [String: String]) throws {
+        guard let fileStorage, let url = projectRuntimeFileURL else { return }
+        let data = try JSONEncoder().encode(ProjectRuntimeFile(executables: overrides))
+        try fileStorage.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileStorage.writeData(data, to: url, options: .atomic)
     }
 
     /// Returns all known candidates in preference order.  The platform
