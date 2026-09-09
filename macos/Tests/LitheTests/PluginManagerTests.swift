@@ -212,6 +212,38 @@ struct PluginManagerTests {
         #expect(enabled.requiresRestart)
     }
 
+    @Test
+    func quarantinedLoadedPluginCanBeReEnabledDirectly() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preferences = PluginManagerKeyValueStore()
+        let configuration = MacModuleConfigurationStore(store: preferences)
+        configuration.setEnabledState(true, for: pluginManagerModuleManifest.id)
+        configuration.setQuarantined(true, for: pluginManagerModuleManifest.id)
+        let runtime = ModuleRuntime(configurationStore: configuration, recoveryStore: configuration)
+        try runtime.register(ModuleFactory(manifest: pluginManagerModuleManifest) {
+            PluginManagerTestModule(recorder: PluginManagerModuleRecorder())
+        })
+        let installed = installedPlugin(defaultState: .enabled)
+        let manager = MacPluginManager(
+            packageStore: MacPluginPackageStore(rootURL: root),
+            moduleRuntime: runtime,
+            configurationStore: configuration,
+            launchMode: .normal,
+            startup: MacPluginStartupResult(
+                installedPlugins: [installed],
+                activeNativeManifests: [installed.manifest],
+                factoriesByPlugin: [:],
+                issues: []
+            )
+        )
+
+        try await manager.setEnabled(true, for: installed.manifest.id)
+
+        #expect(!configuration.isQuarantined(pluginManagerModuleManifest.id))
+        #expect(try #require(manager.snapshots.first { $0.id == installed.manifest.id }).isEnabled)
+    }
+
     private func temporaryRoot() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("lithe-plugin-manager-\(UUID().uuidString)", isDirectory: true)

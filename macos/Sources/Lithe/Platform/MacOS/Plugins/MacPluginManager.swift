@@ -76,13 +76,17 @@ final class MacPluginManager: PluginManaging {
             : Array(manifest.modules.reversed())
         for declaration in declarations {
             let moduleID = declaration.manifest.id
+            if enabled {
+                // A module can already be registered when the manager is
+                // recovering a previous native-plugin load. Clear the
+                // quarantine marker before toggling the runtime state so a
+                // user action can actually re-enable that module.
+                configurationStore.setQuarantined(false, for: moduleID)
+            }
             if registeredIDs.contains(moduleID) {
                 try await moduleRuntime.setEnabled(enabled, for: moduleID)
             } else {
                 configurationStore.setEnabledState(enabled, for: moduleID)
-                if enabled {
-                    configurationStore.setQuarantined(false, for: moduleID)
-                }
             }
         }
 
