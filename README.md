@@ -44,7 +44,7 @@ Codex, Claude Code, and other AI coding tools can now handle much of the impleme
 
 ## Meet Lithe
 
-This fork keeps Lithe’s macOS workbench for browsing, editing, navigation, search, run and debug, Git diff review, local history, and databases. The default package omits JDK/JDTLS and Java Debug/Test resources. Maven, Spring, Windows, and Linux.do integration have been removed; Go, Rust, Python, and other existing language integrations remain available.
+This fork keeps Lithe’s macOS workbench for browsing, editing, navigation, search, run and debug, Git diff review, local history, and databases. The default package omits JDK/JDTLS and Java Debug/Test resources. Maven, Spring, Windows, and Linux.do integration have been removed; Go, Rust, Python, and other existing language integrations remain available. The upstream v0.4.4 Windows preview and Java/Maven extensions were evaluated and intentionally left out of this fork; its macOS release metadata and Homebrew checksums are synchronized.
 
 The Lithe application typically uses about **300–400 MB of baseline memory** after opening a regular project. Language servers, terminals, build tools, debuggers, and database helpers start on demand. Actual usage varies with the project and active services.
 

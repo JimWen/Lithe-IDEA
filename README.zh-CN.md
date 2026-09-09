@@ -44,7 +44,7 @@ Codex、Claude Code 等 AI 编程工具已经可以承担大量编码工作，�
 
 ## Lithe 是什么
 
-本分支保留 Lithe 的 macOS 项目浏览、代码编辑与导航、搜索、运行调试、Git Diff、本地历史和数据库等核心工作流。默认包不包含 JDK/JDTLS、Java Debug/Test；Maven、Spring、Windows 和 Linux.do 集成已移除。Go、Rust、Python 及其他已有语言能力保持现状。
+本分支保留 Lithe 的 macOS 项目浏览、代码编辑与导航、搜索、运行调试、Git Diff、本地历史和数据库等核心工作流。默认包不包含 JDK/JDTLS、Java Debug/Test；Maven、Spring、Windows 和 Linux.do 集成已移除。Go、Rust、Python 及其他已有语言能力保持现状。远端 v0.4.4 的 Windows 预览与 Java/Maven 扩展已评估，因不符合本分支定位而不合入；v0.4.4 的 macOS 兼容发布信息与 Homebrew 校验和已同步。
 
 打开普通项目后，Lithe 应用本身的基础内存占用通常约为 **300～400 MB**。语言服务器、终端、构建工具、调试器和数据库组件均按需启动；实际占用会随项目和启用的服务变化。
 

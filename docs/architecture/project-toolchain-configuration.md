@@ -29,3 +29,9 @@ Go 与 Rust 的项目设置页分别显示 Go SDK (GOROOT) / Rust toolchain，�
 完整预览包通过 `scripts/preview.sh` 构建并打开，并覆盖到 `/Applications/Lithe.app` 做独立重启验收。安装包启动后 Go Support、Go Tools 和环境通知均正常；Go SDK 菜单实际列出 `.g/go`、版本管理器和 GOPATH toolchain，Rust 页面实际列出 Cargo。Go `main` 与 Rust `main.rs` 的右键菜单均实际显示 Run、Debug、Modify Run Configuration，且 Rust 菜单标题与 `scrap_url` 配置一致。系统安装包中 Go 运行窗口实际输出 `$ go run .` 与程序输出，未再出现缺失 execution capability。配置编辑器实际提供并持久化工作目录、程序参数和环境变量到 `.lithe/run/local.json`。
 
 验证命令：`swift test --filter 'ProjectRuntimeTests|GoTreePresentationTests|CargoTreePresentationTests'`（19 项通过）、Go/Rust 树测试（15 项通过）、`scripts/verify-official-plugins.sh`、`scripts/verify-service-boundaries.sh`、`verify-test-stability.sh` 与 `git diff --check` 均通过。
+
+## 远端 v0.4.4 更新评估（2026-09-09）
+
+远端 `main` 最新发布链为 v0.4.4；本分支选择性合入发布说明和 Homebrew cask 的版本、校验和更新。远端同时包含 Windows 预览、Windows Git Bash/欢迎页流程和 Java Mapper/Maven 扩展，这些改动依赖已移除的 Windows 产品树或完整 Java 工具链，未合入 macOS-only 分支。Java 保留源文件编辑、语法和基础导航能力，默认不打包 JDK/JDTLS、Java Debug/Test；Rust、Go、Python 仍是运行时验收优先级。
+
+合入提交：`7468e21c`（v0.4.4 发布说明）、`b405902e`（v0.4.4 Homebrew cask）。远端 `3fcb508f` 的旧提交文件树改动因目标视图已在本分支移除而未套用，避免回退当前工作区实现。

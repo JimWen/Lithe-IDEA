@@ -7,7 +7,7 @@ cask "lithe" do
 
   url "https://github.com/1lck/Lithe-IDEA/releases/download/v#{version}/Lithe-#{version}-#{arch}.dmg"
   name "Lithe"
-  desc "Native IDE for AI-assisted Java development"
+  desc "Native macOS IDE for multi-language development"
   homepage "https://github.com/1lck/Lithe-IDEA"
 
   livecheck do
