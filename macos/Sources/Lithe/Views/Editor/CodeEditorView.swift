@@ -1670,7 +1670,13 @@ struct CodeEditorView: NSViewRepresentable {
                 $0.replacingOccurrences(of: " ", with: "").hasPrefix("fnmain(")
             }) ?? 0
             let position = LanguageServerPosition(line: line, utf16Column: 0)
-            let name = url.deletingLastPathComponent().lastPathComponent
+            // `main.rs` normally lives under `<package>/src`; use the Cargo
+            // package directory so the gutter action selects the generated
+            // package configuration instead of a synthetic `src` target.
+            let packageRoot = url.deletingLastPathComponent().deletingLastPathComponent()
+            let name = packageRoot.lastPathComponent.isEmpty
+                ? url.deletingLastPathComponent().lastPathComponent
+                : packageRoot.lastPathComponent
             return [DocumentRunnable(
                 id: "rust:main:\(url.path)", configurationID: nil, displayName: name,
                 kind: .application, line: line + 1,
