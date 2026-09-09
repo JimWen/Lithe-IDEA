@@ -26,6 +26,7 @@ let package = Package(
         .library(name: "LitheGoSupportModule", targets: ["LitheGoSupportModule"]),
         .executable(name: "LitheCoreVerifier", targets: ["LitheCoreVerifier"]),
         .executable(name: "LitheGitGraphVerifier", targets: ["LitheGitGraphVerifier"]),
+        .executable(name: "LitheGitPerformanceVerifier", targets: ["LitheGitPerformanceVerifier"]),
         .executable(name: "LitheOfficialPluginVerifier", targets: ["LitheOfficialPluginVerifier"])
     ],
     dependencies: [
@@ -184,6 +185,23 @@ let package = Package(
             path: "macos/Tests/LitheGitModuleTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        .target(
+            name: "LitheGitPerformanceSupport",
+            dependencies: ["LitheGitModule"],
+            path: "macos/Tests/LitheGitPerformanceSupport",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "LitheGitPerformanceTests",
+            dependencies: [
+                "Lithe",
+                "LitheGitModule",
+                "LitheGitPerformanceSupport",
+                .product(name: "Testing", package: "swift-testing")
+            ],
+            path: "macos/Tests/LitheGitPerformanceTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .testTarget(
             name: "LitheDatabaseModuleTests",
             dependencies: ["LitheDatabaseModule", "LitheApplicationKernel", .product(name: "Testing", package: "swift-testing")],
@@ -236,6 +254,12 @@ let package = Package(
             name: "LitheGitGraphVerifier",
             dependencies: ["LitheGitModule"],
             path: "macos/Tests/LitheGitGraphVerifier",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .executableTarget(
+            name: "LitheGitPerformanceVerifier",
+            dependencies: ["LitheGitModule", "LitheGitPerformanceSupport"],
+            path: "macos/Tests/LitheGitPerformanceVerifier",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(

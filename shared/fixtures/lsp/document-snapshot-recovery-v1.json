@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "valid-utf16-delta",
+      "before": "a😀b",
+      "snapshot": "aXb",
+      "changes": [{"range": {"start": {"line": 0, "utf16Column": 1}, "end": {"line": 0, "utf16Column": 3}}, "text": "X"}],
+      "incremental": true
+    },
+    {
+      "name": "stale-but-valid-range",
+      "before": "a",
+      "snapshot": "abZ",
+      "changes": [{"range": {"start": {"line": 0, "utf16Column": 0}, "end": {"line": 0, "utf16Column": 0}}, "text": "Z"}],
+      "incremental": false
+    },
+    {
+      "name": "out-of-range-after-missed-sync",
+      "before": "a",
+      "snapshot": "next",
+      "changes": [{"range": {"start": {"line": 0, "utf16Column": 99}, "end": {"line": 0, "utf16Column": 99}}, "text": "Z"}],
+      "incremental": false
+    },
+    {
+      "name": "empty-snapshot-is-authoritative",
+      "before": "a",
+      "snapshot": "",
+      "changes": [{"range": {"start": {"line": 0, "utf16Column": 0}, "end": {"line": 0, "utf16Column": 0}}, "text": "Z"}],
+      "incremental": false
+    }
+  ]
+}

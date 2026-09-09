@@ -151,6 +151,10 @@ pub struct SyncDocumentRequest {
     /// Range-based edits used when the server advertised Incremental `textDocumentSync`.
     #[serde(default)]
     pub content_changes: Vec<LspDocumentContentChange>,
+    /// When true, `text` is authoritative, including an empty document. Ranged
+    /// replay is accepted only when it produces that snapshot exactly.
+    #[serde(default)]
+    pub text_is_snapshot: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1000,12 +1004,17 @@ impl RuntimeSession {
                     .get(&uri)
                     .is_some_and(|document| document.version > 0)
                 {
-                    client_change_document(ClientChangeDocumentRequest {
+                    let change = ClientChangeDocumentRequest {
                         state: state.client.clone(),
                         uri: uri.clone(),
                         text: request.text,
                         content_changes: request.content_changes,
-                    })?
+                    };
+                    if request.text_is_snapshot {
+                        change_document_with_snapshot(change)?
+                    } else {
+                        client_change_document(change)?
+                    }
                 } else {
                     client_open_document(ClientOpenDocumentRequest {
                         state: state.client.clone(),
@@ -3294,10 +3303,95 @@ fn workspace_file_changes_notification(
     .to_string()
 }
 
+/// Validates ranged replay before either the client state or wire is updated.
+/// A failed previous sync or a programmatic buffer edit may invalidate the
+/// host's delta base; the supplied full snapshot is then the recovery source.
+fn change_document_with_snapshot(
+    request: ClientChangeDocumentRequest,
+) -> Result<super::LspClientResponse, CoreError> {
+    let mut fallback = request.clone();
+    fallback.content_changes.clear();
+    match client_change_document(request) {
+        Ok(response)
+            if response
+                .state
+                .open_documents
+                .get(&fallback.uri)
+                .is_some_and(|document| document.text == fallback.text) =>
+        {
+            Ok(response)
+        }
+        _ => client_change_document(fallback),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::scripted::ScriptedServer;
     use super::*;
+
+    #[test]
+    fn snapshot_sync_recovers_stale_deltas_before_updating_state_or_wire() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../shared/fixtures/lsp/document-snapshot-recovery-v1.json"
+        )))
+        .unwrap();
+        let uri = "file:///workspace/main.go";
+        for case in fixture["cases"].as_array().unwrap() {
+            let state = client_open_document(ClientOpenDocumentRequest {
+                state: LspClientState {
+                    initialized: true,
+                    text_document_sync: super::super::LspTextDocumentSyncKind::Incremental,
+                    ..Default::default()
+                },
+                uri: uri.into(),
+                language_id: "go".into(),
+                text: case["before"].as_str().unwrap().into(),
+            })
+            .unwrap()
+            .state;
+            let response = change_document_with_snapshot(ClientChangeDocumentRequest {
+                state,
+                uri: uri.into(),
+                text: case["snapshot"].as_str().unwrap().into(),
+                content_changes: serde_json::from_value(case["changes"].clone()).unwrap(),
+            })
+            .unwrap();
+            assert_eq!(
+                response.state.open_documents[uri].text,
+                case["snapshot"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+            let message: Value = serde_json::from_str(&response.messages[0]).unwrap();
+            let wire = &message["params"]["contentChanges"][0];
+            assert_eq!(
+                wire["range"].is_object(),
+                case["incremental"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            if !wire["range"].is_object() {
+                assert_eq!(wire["text"], case["snapshot"]);
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_verification_is_opt_in_for_existing_sync_clients() {
+        let mut wire =
+            json!({"sessionId": "fixture", "uri": "file:///workspace/main.go", "languageId": "go"});
+        assert!(
+            !serde_json::from_value::<SyncDocumentRequest>(wire.clone())
+                .unwrap()
+                .text_is_snapshot
+        );
+        wire["textIsSnapshot"] = json!(true);
+        let request = serde_json::from_value::<SyncDocumentRequest>(wire).unwrap();
+        assert!(request.text_is_snapshot);
+        assert!(request.text.is_empty());
+    }
 
     /// The capabilities every test needs to reach `Ready` with a usable feature
     /// surface. Individual tests narrow or extend this.
@@ -3427,6 +3521,7 @@ mod tests {
         fn sync(&self, uri: &str, text: &str) {
             self.session()
                 .sync_document(SyncDocumentRequest {
+                    text_is_snapshot: false,
                     session_id: self.session_id.clone(),
                     uri: uri.to_string(),
                     language_id: "go".to_string(),
@@ -3903,6 +3998,7 @@ mod tests {
         let edit = thread::spawn(move || {
             edit_start.wait();
             edit_session.sync_document(SyncDocumentRequest {
+                text_is_snapshot: false,
                 session_id: edit_session_id,
                 uri: second_uri.to_string(),
                 language_id: "java".to_string(),
@@ -4410,6 +4506,7 @@ mod tests {
         let error = harness
             .session()
             .sync_document(SyncDocumentRequest {
+                text_is_snapshot: false,
                 session_id: harness.session_id.clone(),
                 uri: "file:///workspace/main.go".to_string(),
                 language_id: "go".to_string(),
@@ -4795,6 +4892,7 @@ mod tests {
         let uri = "file:///workspace/main.go";
         old_session
             .sync_document(SyncDocumentRequest {
+                text_is_snapshot: false,
                 session_id: old.session_id.clone(),
                 uri: uri.to_string(),
                 language_id: "go".to_string(),
@@ -4857,6 +4955,7 @@ mod tests {
         assert!(engine.session(&old.session_id).is_err());
         assert!(old_session
             .sync_document(SyncDocumentRequest {
+                text_is_snapshot: false,
                 session_id: old.session_id.clone(),
                 uri: uri.to_string(),
                 language_id: "go".to_string(),
@@ -5394,6 +5493,7 @@ public class Main {
 
         session
             .sync_document(SyncDocumentRequest {
+                text_is_snapshot: false,
                 session_id: started.session_id.clone(),
                 uri: source_uri.clone(),
                 language_id: "java".to_string(),

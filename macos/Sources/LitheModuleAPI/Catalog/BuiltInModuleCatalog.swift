@@ -203,7 +203,7 @@ public enum OfficialPluginCatalog {
         id: .languageExecutionExtension(goLanguageID),
         displayName: "Go Execution",
         scope: .workspace,
-        defaultState: .enabled,
+        defaultState: .disabled,
         activationPolicy: .onDemand,
         sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
         dependencies: [.module(.workspace)],
@@ -217,7 +217,7 @@ public enum OfficialPluginCatalog {
         id: .languageServerExtension(goLanguageID),
         displayName: "Go Language Server",
         scope: .workspace,
-        defaultState: .enabled,
+        defaultState: .disabled,
         activationPolicy: .onDemand,
         sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
         dependencies: [.module(.workspace)],
@@ -246,6 +246,17 @@ public enum OfficialPluginCatalog {
         ])
     )
 
+    private static let goLanguageServerManifestV2 = ModuleManifest(
+        id: goLanguageServerManifestV1.id,
+        displayName: goLanguageServerManifestV1.displayName,
+        scope: goLanguageServerManifestV1.scope,
+        defaultState: .enabled,
+        activationPolicy: goLanguageServerManifestV1.activationPolicy,
+        sleepPolicy: goLanguageServerManifestV1.sleepPolicy,
+        dependencies: goLanguageServerManifestV1.dependencies,
+        providedCapabilities: goLanguageServerManifestV1.providedCapabilities
+    )
+
     public static let manifests: [PluginManifest] = [
         PluginManifest(
             id: PluginID("dev.lithe.plugin.go-support"),
@@ -267,7 +278,7 @@ public enum OfficialPluginCatalog {
                     manifest: goExecutionManifestV2,
                     contributions: OfficialPluginCatalog.projectToolsContributions
                 ),
-                PluginModuleDeclaration(manifest: goLanguageServerManifestV1)
+                PluginModuleDeclaration(manifest: goLanguageServerManifestV2)
             ],
             languageSupports: [LanguageSupportDeclaration(
                 id: goLanguageID,
@@ -298,7 +309,7 @@ public enum OfficialPluginCatalog {
     public static func moduleManifestV2(for id: ModuleID) -> ModuleManifest? {
         switch id {
         case goExecutionManifestV2.id: goExecutionManifestV2
-        case goLanguageServerManifestV1.id: goLanguageServerManifestV1
+        case goLanguageServerManifestV2.id: goLanguageServerManifestV2
         default: nil
         }
     }

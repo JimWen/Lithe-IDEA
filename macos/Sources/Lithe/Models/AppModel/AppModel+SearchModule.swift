@@ -103,7 +103,8 @@ extension AppModel {
         searchFeatureIfActive?.clearSearchEverywhere()
     }
 
-    func searchEverywhere(options: ProjectSearchOptions = .default) async {
+    func searchEverywhere(query requestedQuery: String? = nil, options: ProjectSearchOptions = .default) async {
+        if let requestedQuery { searchEverywhereQuery = requestedQuery }
         guard let workspaceURL, isSearchEverywhereVisible else { return }
         let request = searchRequests.begin(.everywhere)
         let identity = currentWorkspaceIdentity
@@ -145,7 +146,14 @@ extension AppModel {
         isProjectReplaceVisible = true
     }
 
-    func previewProjectReplacement() async {
+    func previewProjectReplacement(
+        query requestedQuery: String? = nil,
+        replacement requestedReplacement: String? = nil,
+        options requestedOptions: ProjectSearchOptions? = nil
+    ) async {
+        if let requestedQuery { projectReplaceQuery = requestedQuery }
+        if let requestedReplacement { projectReplaceText = requestedReplacement }
+        if let requestedOptions { projectReplaceOptions = requestedOptions }
         guard let rootURL = workspaceURL, isProjectReplaceVisible else { return }
         let request = searchRequests.begin(.replacement)
         let identity = currentWorkspaceIdentity
@@ -199,54 +207,16 @@ extension AppModel {
             },
             applyTransaction: { [weak self] edits in
                 guard let self else { return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: edits.map(\.path)) }
-                let leasedDocuments = edits.compactMap { edit in
-                    self.openDocuments.first { $0.url.standardizedFileURL == rootURL.appendingPathComponent(edit.path).standardizedFileURL }
-                }
-                var leases: [(EditorDocument, EditorDocument.MutationLease)] = []
-                for document in leasedDocuments {
-                    guard let lease = document.acquireMutationLease() else {
-                        leases.forEach { $0.0.releaseMutationLease($0.1) }
-                        return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: edits.map(\.path))
-                    }
-                    leases.append((document, lease))
-                }
-                defer { leases.forEach { $0.0.releaseMutationLease($0.1) } }
-                let relativeDocumentPath: (URL) -> String = { url in
-                    let root = rootURL.standardizedFileURL.path.hasSuffix("/") ? rootURL.standardizedFileURL.path : rootURL.standardizedFileURL.path + "/"
-                    return url.standardizedFileURL.path.replacingOccurrences(of: root, with: "")
-                }
-                let openPaths = Set(leasedDocuments.map { relativeDocumentPath($0.url) })
                 let transactionEdits = edits.map {
-                    WorkspaceTextEdit(path: $0.path, sourceText: $0.sourceText, replacementText: $0.replacementText, sourceIdentity: "")
+                    WorkspaceTextEdit(path: $0.path, sourceText: $0.sourceText,
+                                      replacementText: $0.replacementText, sourceIdentity: "")
                 }
-                let openEdits = transactionEdits.filter { openPaths.contains($0.path) }
-                guard openEdits.allSatisfy({ edit in
-                    leasedDocuments.first { relativeDocumentPath($0.url) == edit.path }?.text.utf8.elementsEqual(edit.sourceText.utf8) == true
-                }) else {
-                    return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: edits.map(\.path))
-                }
-                let closedEdits = transactionEdits.filter { !openPaths.contains($0.path) }
-                let result = await self.services.workspaceTextEditCoordinator.apply(
-                    closedEdits,
-                    at: rootURL,
-                    operations: self.services.workspaceTextEditFileOperations
+                let result = await self.services.workspaceTextEditUndoController.apply(transactionEdits, at: rootURL)
+                let failures = result.failedPaths + result.recoveryPaths
+                return ProjectReplacementApplyResult(
+                    changedFiles: result.state == .applied ? transactionEdits.count : 0,
+                    failedFiles: result.state == .applied ? [] : (failures.isEmpty ? edits.map(\.path) : failures)
                 )
-                guard result.state == .applied else {
-                    return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: result.failedPaths + result.recoveryPaths)
-                }
-                var openUndoEdits: [(document: EditorDocument, before: String, after: String)] = []
-                for edit in openEdits {
-                    guard let document = leasedDocuments.first(where: { relativeDocumentPath($0.url) == edit.path }) else { continue }
-                    openUndoEdits.append((document: document, before: edit.sourceText, after: edit.replacementText))
-                    document.applyLiveEditorText(edit.replacementText)
-                }
-                self.services.workspaceTextEditUndoController.registerTransaction(
-                    edits: transactionEdits,
-                    openDocuments: openUndoEdits,
-                    workspaceURL: rootURL,
-                    transactionID: result.transactionID
-                )
-                return ProjectReplacementApplyResult(changedFiles: transactionEdits.count, failedFiles: [])
             }
         )
         try? services.moduleRuntime.markIdle(.search)

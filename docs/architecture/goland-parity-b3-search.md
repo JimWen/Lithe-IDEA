@@ -1,6 +1,6 @@
 # B3 搜索与替换分批方案
 
-状态：B3a 已验收，见 [输入与生命周期验收](#b3a-acceptance)；B3b1a Unicode 搜索/替换崩溃修复也已通过独立审查、完整测试及 ARM64 点击验收，见 [Unicode 验收](goland-parity-b3b-replacement.md#b3b1a-acceptance)。B3b 其余项与 B3c/B3d 仍待实施。基线 `cb892c85`；Project 按用户最新要求暂停。已验收的 B1 提示/快捷键、最近项目菜单、基础 View 入口跳过，不重复实现。
+状态：B3a 已验收，见 [输入与生命周期验收](#b3a-acceptance)；B3b1a Unicode 搜索/替换崩溃修复也已通过独立审查、完整测试及 ARM64 点击验收，见 [Unicode 验收](goland-parity-b3b-replacement.md#b3b1a-acceptance)。B3b 范围与事务的最新实现见 [缓冲区事务记录](goland-parity-b3b-replacement.md#buffer-transaction-integration)，B3c/B3d 仍待实施。基线 `cb892c85`；Project 按用户最新要求暂停。已验收的 B1 提示/快捷键、最近项目菜单、基础 View 入口跳过，不重复实现。
 
 ## 优先级与现状
 
@@ -27,7 +27,7 @@ apply 单独持有 busy，旧 isLoadingProjectReplacement 兼容为 preview/appl
 
 ## 后续批次与依赖
 
-1. B3b：统一搜索/替换请求模型和 scope，补齐所有 scope 的未保存文本；明确错误、结果限制、匹配位置和 regex 引擎。替换编辑事务先实现原文/版本校验、全部预计算、失败回滚和统一 undo，再接单项/选中/全部及排除预览。具体代码审计、动态库复现、事务边界和分批验收见 [B3b 细化方案](goland-parity-b3b-replacement.md)；B3b1a matcher/候选修复已验收，scope 和事务仍待实施，原生 undo 在接通新 Apply 前专项审查。
+1. B3b：统一搜索/替换请求模型和 scope，补齐所有 scope 的未保存文本；明确错误、结果限制、匹配位置和 regex 引擎。替换编辑事务先实现原文/版本校验、全部预计算、失败回滚和统一 undo，再接单项/选中/全部及排除预览。具体代码审计、动态库复现、事务边界和分批验收见 [B3b 细化方案](goland-parity-b3b-replacement.md)；B3b1a matcher/候选修复已验收，scope、事务和原生 undo 已接通，最新验证范围见细化方案的事务记录。
 2. B3c：Search Everywhere 最近文件/动作、`/` action 过滤、再次双 Shift 的真实可索引范围、空结果转 Find；按 GoLand 核对分组、图标、行高、焦点和小窗口适配。不存在的依赖索引不伪造可用。
 3. B3d：统一 Find/Replace 弹窗与底部 Find 工具窗口，复用 LitheSplitPaneView，键盘/IME、预览/导航、替换取消/undo、中文 emoji/零长度 regex 与大项目验收。
 

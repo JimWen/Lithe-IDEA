@@ -66,13 +66,15 @@ package protocol WorkspaceTextEditFileOperations: Sendable {
         _ paths: [String],
         at workspaceURL: URL
     ) async throws -> [WorkspaceTextEditSnapshot]
+    /// Returns the identity and bytes installed by this write for guarded compensation.
     func replace(
         _ edit: WorkspaceTextEdit,
         expected snapshot: WorkspaceTextEditSnapshot,
         at workspaceURL: URL
-    ) async throws
+    ) async throws -> WorkspaceTextEditSnapshot
     func restore(
         _ snapshot: WorkspaceTextEditSnapshot,
+        expected writtenSnapshot: WorkspaceTextEditSnapshot,
         at workspaceURL: URL
     ) async throws
 }
@@ -82,10 +84,10 @@ package struct UnavailableWorkspaceTextEditFileOperations: WorkspaceTextEditFile
     package func capture(_ paths: [String], at workspaceURL: URL) async throws -> [WorkspaceTextEditSnapshot] {
         throw NSError(domain: "WorkspaceTextEdit", code: 10)
     }
-    package func replace(_ edit: WorkspaceTextEdit, expected snapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws {
+    package func replace(_ edit: WorkspaceTextEdit, expected snapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws -> WorkspaceTextEditSnapshot {
         throw NSError(domain: "WorkspaceTextEdit", code: 10)
     }
-    package func restore(_ snapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws {
+    package func restore(_ snapshot: WorkspaceTextEditSnapshot, expected writtenSnapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws {
         throw NSError(domain: "WorkspaceTextEdit", code: 10)
     }
 }

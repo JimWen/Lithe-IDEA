@@ -59,7 +59,7 @@ struct MacWorkspaceTextEditFileOperations: WorkspaceTextEditFileOperations {
         }
     }
 
-    func replace(_ edit: WorkspaceTextEdit, expected snapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws {
+    func replace(_ edit: WorkspaceTextEdit, expected snapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws -> WorkspaceTextEditSnapshot {
         let url = try targetURL(edit.path, in: workspaceURL)
         let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileResourceIdentifierKey, .fileSizeKey, .contentModificationDateKey])
         guard values.isRegularFile == true,
@@ -76,19 +76,23 @@ struct MacWorkspaceTextEditFileOperations: WorkspaceTextEditFileOperations {
                 try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: temporaryURL.path)
             }
             _ = try FileManager.default.replaceItemAt(url, withItemAt: temporaryURL)
+            let installed = try url.resourceValues(forKeys: [.fileResourceIdentifierKey, .fileSizeKey, .contentModificationDateKey])
+            return WorkspaceTextEditSnapshot(path: edit.path, text: edit.replacementText, identity: identity(installed))
         } catch {
             try? FileManager.default.removeItem(at: temporaryURL)
             throw error
         }
     }
 
-    func restore(_ snapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws {
-        let url = try targetURL(snapshot.path, in: workspaceURL)
-        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileResourceIdentifierKey, .fileSizeKey, .contentModificationDateKey])
-        guard values.isRegularFile == true, identity(values) == snapshot.identity else {
-            throw NSError(domain: "WorkspaceTextEdit", code: 3, userInfo: [NSLocalizedDescriptionKey: "Workspace file changed before restore"])
-        }
-        try Data(snapshot.text.utf8).write(to: url, options: .atomic)
+    func restore(_ snapshot: WorkspaceTextEditSnapshot, expected writtenSnapshot: WorkspaceTextEditSnapshot,
+                 at workspaceURL: URL) async throws {
+        // Atomic replacement changes the file identity. Compensation validates
+        // the identity we installed, never the pre-transaction identity.
+        _ = try await replace(
+            WorkspaceTextEdit(path: snapshot.path, sourceText: writtenSnapshot.text,
+                              replacementText: snapshot.text, sourceIdentity: writtenSnapshot.identity),
+            expected: writtenSnapshot, at: workspaceURL
+        )
     }
 
     private func targetURL(_ path: String, in workspaceURL: URL) throws -> URL {

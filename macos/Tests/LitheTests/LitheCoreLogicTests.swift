@@ -2573,6 +2573,33 @@ struct LitheCoreLogicTests {
     }
 
     @Test
+    func highlightedRangeCacheShiftsUnchangedRangesAfterAnEdit() {
+        var cache = HighlightedRangeCache()
+        cache.insert(NSRange(location: 0, length: 10))
+        cache.insert(NSRange(location: 20, length: 10))
+        cache.insert(NSRange(location: 40, length: 10))
+
+        cache.applyEdit(
+            replacedRange: NSRange(location: 12, length: 4),
+            replacementLength: 8
+        )
+        #expect(cache.ranges == [
+            NSRange(location: 0, length: 10),
+            NSRange(location: 24, length: 10),
+            NSRange(location: 44, length: 10)
+        ])
+
+        cache.applyEdit(
+            replacedRange: NSRange(location: 24, length: 10),
+            replacementLength: 0
+        )
+        #expect(cache.ranges == [
+            NSRange(location: 0, length: 10),
+            NSRange(location: 34, length: 10)
+        ])
+    }
+
+    @Test
     @MainActor
     func codeEditorShiftsFindMatchesAcrossASingleLineEdit() {
         let textView = CodeTextView(frame: .zero)
@@ -3312,6 +3339,82 @@ struct EditorDocumentTests {
     }
 
     @Test
+    @MainActor
+    func liveEditorEditsCoalesceAgainstOneLanguageServerSnapshot() {
+        let document = EditorDocument(
+            url: URL(fileURLWithPath: "/tmp/live-editor-lsp.txt"),
+            text: "one\ntwo",
+            modificationDate: nil
+        )
+
+        document.applyLiveEditorEdit(
+            replacedRange: NSRange(location: 4, length: 3),
+            replacement: "second"
+        )
+        document.applyLiveEditorEdit(
+            replacedRange: NSRange(location: 0, length: 0),
+            replacement: "A"
+        )
+
+        let changes = document.takePendingLanguageServerChanges()
+        #expect(changes.map(\.text) == ["Aone\nsecond"])
+        #expect(changes[0].start == LanguageServerDocumentPosition(line: 0, utf16Column: 0))
+        #expect(changes[0].end == LanguageServerDocumentPosition(line: 1, utf16Column: 3))
+        #expect(document.takePendingLanguageServerChanges().isEmpty)
+    }
+
+    @Test
+    @MainActor
+    func incrementalEditorChangesRespectUnicodeSnapshotsAndMutationLeases() throws {
+        let document = EditorDocument(url: URL(fileURLWithPath: "/fixture/main.go"), text: "a😀b", modificationDate: nil)
+        #expect(document.applyLiveEditorEdit(replacedRange: NSRange(location: 1, length: 2), replacement: "😎"))
+        let change = try #require(document.takePendingLanguageServerChanges().first)
+        #expect(change.start.utf16Column == 1)
+        #expect(change.end.utf16Column == 3)
+        #expect(change.text == "😎")
+
+        let lease = try #require(document.acquireMutationLease())
+        defer { document.releaseMutationLease(lease) }
+        #expect(!document.applyLiveEditorEdit(replacedRange: NSRange(location: 0, length: 1), replacement: "blocked"))
+        #expect(document.text == "a😎b")
+        #expect(document.takePendingLanguageServerChanges().isEmpty)
+    }
+
+    @Test
+    @MainActor
+    func programmaticBufferReplacementInvalidatesPendingLanguageServerDelta() {
+        let document = EditorDocument(url: URL(fileURLWithPath: "/fixture/main.go"), text: "old", modificationDate: nil)
+        document.applyLiveEditorEdit(replacedRange: NSRange(location: 3, length: 0), replacement: " suffix")
+        document.text = "transaction replacement"
+        #expect(document.takePendingLanguageServerChanges().isEmpty)
+        #expect(document.text == "transaction replacement")
+    }
+
+    @Test
+    @MainActor
+    func liveEditorEditAppliesUTF16ReplacementWithoutFullEditorSnapshot() {
+        let document = EditorDocument(
+            url: URL(fileURLWithPath: "/tmp/live-editor-edit.txt"),
+            text: "before\nvalue",
+            modificationDate: nil
+        )
+
+        document.applyLiveEditorEdit(
+            replacedRange: NSRange(location: 7, length: 5),
+            replacement: "updated"
+        )
+
+        #expect(document.text == "before\nupdated")
+        #expect(document.isDirty)
+
+        document.applyLiveEditorEdit(
+            replacedRange: NSRange(location: 0, length: 0),
+            replacement: "A"
+        )
+        #expect(document.text == "Abefore\nupdated")
+    }
+
+    @Test
     func rustDocumentLifecyclePreservesDirtyEditorTextOnExternalChange() throws {
         let core = RustCoreBridge()
         guard core.isAvailable else { return }
@@ -3340,6 +3443,58 @@ struct EditorDocumentTests {
 
         #expect(throws: EditorDocument.DocumentError.self) {
             try document.save()
+        }
+    }
+
+    @Test
+    func bufferLeaseDefersWatcherAndResumesAutoSaveWithoutOverwritingExternalChanges() async throws {
+        guard RustCoreBridge().isAvailable else { return }
+        for externalChange in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("lithe-buffer-lease-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let url = root.appendingPathComponent("file.txt")
+            try "old".write(to: url, atomically: true, encoding: .utf8)
+            let saved = TestGate()
+            let feature = DocumentFeatureModel(
+                operations: EmptyWorkspaceOperations(readFileValue: "old"),
+                documentLifecycleDecider: RustDocumentLifecycleDecider(core: RustCoreBridge()),
+                fileOperations: MacWorkspaceFileOperations(), fileStorage: MacFileStorage(),
+                binaryFileViewerRegistry: BinaryFileViewerRegistry()
+            )
+            defer { feature.reset(); saved.open() }
+            feature.configure(workspaceURLProvider: { root }, autoSaveEnabledProvider: { true },
+                autoSaveDelayProvider: { 0 }, notify: { _ in }, onDocumentOpened: { _ in },
+                onDocumentChanged: { _ in }, onDocumentClosed: { _ in },
+                onRecordSave: { _, _ in saved.open() }, onRecordDiscard: { _ in },
+                onRecordExternalChanges: { _ in }, onDocumentCollectionChanged: {}, onProjectCloseReady: {})
+            await feature.openFileAsync(url, isReadOnly: false, displayPath: nil, activateWhenReady: true)
+            let document = try #require(feature.activeDocument)
+            document.text = "dirty"
+            feature.documentDidChange(document)
+            let lease = try #require(document.acquireMutationLease())
+            defer { document.releaseMutationLease(lease) }
+            feature.beginBufferMutation([document])
+            #expect(throws: EditorDocument.DocumentError.self) { try feature.save(document) }
+            if externalChange {
+                try "external".write(to: url, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 123_456_789)], ofItemAtPath: url.path)
+                #expect(!feature.processExternalChanges([url]))
+                #expect(document.text == "dirty" && !document.hasExternalConflict)
+            }
+            document.commitMutationText("replaced", lease: lease)
+            document.releaseMutationLease(lease)
+            feature.endBufferMutation([document])
+            if externalChange {
+                #expect(document.hasExternalConflict)
+                #expect(document.text == "replaced")
+                #expect(try String(contentsOf: url, encoding: .utf8) == "external")
+                #expect(!saved.isOpen)
+            } else {
+                #expect(await saved.waitUntilOpen(timeout: .seconds(2)))
+                #expect(try String(contentsOf: url, encoding: .utf8) == "replaced")
+                #expect(!document.isDirty)
+            }
         }
     }
 

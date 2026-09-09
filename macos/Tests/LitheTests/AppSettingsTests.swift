@@ -6,6 +6,23 @@ import Testing
 @MainActor
 struct AppSettingsTests {
     @Test
+    func detectedTerminalShellPersistsWithoutLosingLegacyDefaults() {
+        let store = AppSettingsTestStore()
+        let settings = AppSettings(store: store)
+        settings.terminalShell = .bash
+        #expect(AppSettings(store: store).terminalShellPath == "/bin/bash")
+        settings.terminalConfiguration.customProgram = "/tools/bin/fish"
+        settings.terminalShell = .custom
+        #expect(AppSettings(store: store).terminalShellPath == "/tools/bin/fish")
+        settings.terminalShell = .system
+        #expect(AppSettings(store: store).terminalShellPath == nil)
+        settings.terminalConfiguration.customProgram = "/tools/bin/nu"
+        settings.terminalShell = .custom
+        settings.restoreDefaults()
+        #expect(AppSettings(store: store).terminalShellPath == nil)
+    }
+
+    @Test
     func autoSaveDefaultsToEnabledAndPersistsDisabledSelection() {
         let store = AppSettingsTestStore()
         let settings = AppSettings(store: store)

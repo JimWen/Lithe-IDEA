@@ -161,3 +161,50 @@ respects the window safe area. Resizing updates the native accessory width
 without publishing high-frequency SwiftUI state. Project and branch popovers
 anchor to their titlebar controls; no content overlay spans across native tabs.
 Native tab dimensions and drag behavior follow the running macOS version.
+
+## Upstream main integration (2026-09-09)
+
+The merge imports upstream history through `4bb921dc78ef237fb6a51e2c1c0b62b0f04e5912`
+with `8479dfa6` as the local baseline. Windows and Java/framework increments are
+excluded from the resulting tree. The existing macOS module runtime, plugin
+capabilities, per-window project ownership, and document mutation leases remain
+the architectural owners; upstream aggregate/coordinator replacements are
+adapted into those boundaries.
+
+Integrated behavior includes multi-repository Git changes and repository
+selection, native commit/file/worktree rendering, shared context menus and
+coalesced split handles, local search drafts, incremental editor highlighting
+and LSP synchronization, detected terminal shells, and diagnostic exports.
+Git forwarding methods live in `AppModel+GitOperations`; selecting a repository
+clears the previous repository’s history filter, and commit/stash/shelf state
+uses the active repository. Go/Cargo project trees retain their native menus. Runnable gutter left and
+right clicks use the shared presenter and freeze the clicked document’s actions.
+
+The editor coalesces sequential UTF-16 edits against one snapshot. Rust verifies
+that replay matches the authoritative buffer before publishing document state
+or an LSP notification and recovers stale deltas with a full update. Native edit
+callbacks respect document mutation leases. Mixed buffer/disk transactions and
+every Undo/Redo cycle use the same owned workflow, with deferred watcher events,
+resumed autosave, and compensation against the file identity actually installed. Programmatic buffer updates discard
+pending deltas. Diagnostics UI observes published state values; cancellation and
+operation generations prevent stale exports from clearing a newly prepared
+bundle. The diagnostics workflow is composed in `MacServiceContainer` through
+filesystem, system-information, and archiving ports.
+
+Workbench resizing reuses `LitheSplitPaneView` and `SplitHandleView`, retains
+mounted editor content when panels hide, constrains adjacent pane sizes, and
+persists only committed drag sizes. Native drag events use stable screen
+coordinates and the coalescing scheduler; they do not update the entire
+workbench for every pointer event. DMG creation keeps its diagnostic output
+outside the source tree and retries bounded transient resource-busy failures.
+
+Verification for this integration is complete. The linked Swift stability run
+passed 1,250 tests in 138 suites and the Rust timing run passed 390 cases. The
+ARM64 packaged app is signed, contains the Go native plugin and required helper
+resources, and excludes retired Java language-server resources. In the packaged
+app, Go `main` renders the green gutter entry; left and right clicks both show
+Run, Debug, and Modify Run Configuration; generated Go and Rust projects auto-
+create runtime configurations; and Go environment, arguments, and working
+directory persist in `.lithe/run/local.json`. Go and Rust runs produced their
+fixture `GO_OK` and `RUST_OK` output. Raw test, package, and UI evidence is in
+`.artifacts/main-merge-*` and `.artifacts/test-stability/`.

@@ -17,6 +17,7 @@ enum SearchEverywhereScope: String, CaseIterable, Identifiable {
 struct SearchEverywhereView: View {
     @EnvironmentObject private var model: AppModel
     @FocusState private var searchFocused: Bool
+    @State private var query = ""
     @State private var selectedIndex = 0
     @State private var scope: SearchEverywhereScope = .all
     @State private var searchOptions = ProjectSearchOptions.default
@@ -36,7 +37,7 @@ struct SearchEverywhereView: View {
                 + model.searchEverywhereResults.classMatches
                 + model.searchEverywhereResults.symbolMatches
             return rankedResults(nameMatches)
-                + model.searchEverywhereActionMatches.map(SearchItem.action)
+                + model.searchEverywhereActionMatches(query: query).map(SearchItem.action)
         case .classes:
             return results(in: model.searchEverywhereResults.classMatches)
         case .files:
@@ -46,7 +47,7 @@ struct SearchEverywhereView: View {
         case .text:
             return results(in: model.searchEverywhereResults.contentMatches)
         case .actions:
-            return model.searchEverywhereActionMatches.map(SearchItem.action)
+            return model.searchEverywhereActionMatches(query: query).map(SearchItem.action)
         }
     }
 
@@ -58,7 +59,6 @@ struct SearchEverywhereView: View {
 
     /// 按相关度降序。同分保持原顺序，避免逐字输入时行位置来回跳动。
     private func rankedResults(_ results: [FileSearchResult]) -> [SearchItem] {
-        let query = model.searchEverywhereQuery
         var ranked: [RankedResult] = []
         ranked.reserveCapacity(results.count)
         for (index, value) in results.enumerated() {
@@ -73,7 +73,7 @@ struct SearchEverywhereView: View {
     }
 
     private var hasQuery: Bool {
-        !model.searchEverywhereQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -99,20 +99,21 @@ struct SearchEverywhereView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .onAppear {
+            query = model.searchEverywhereQuery
             searchFocused = true
             selectedIndex = 0
         }
         .background(MacSearchKeyboardHandler(isEnabled: { model.isSearchEverywhereVisible }, handle: handleKey))
-        .onChange(of: model.searchEverywhereQuery) { _ in
+        .onChange(of: query) { _ in
             selectedIndex = 0
             model.clearSearchEverywhereResults()
         }
         .onChange(of: searchOptions) { _ in model.clearSearchEverywhereResults() }
         .onChange(of: scope) { _ in selectedIndex = 0 }
-        .task(id: "\(model.searchEverywhereQuery)|\(searchOptions.cacheKey)") {
+        .task(id: "\(query)|\(searchOptions.cacheKey)") {
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            await model.searchEverywhere(options: searchOptions)
+            await model.searchEverywhere(query: query, options: searchOptions)
         }
     }
 
@@ -173,18 +174,18 @@ struct SearchEverywhereView: View {
         HStack(spacing: 8) {
             LitheSystemIcon(systemImage: "magnifyingglass")
                 .foregroundStyle(LitheTheme.secondaryText)
-            TextField("", text: $model.searchEverywhereQuery)
+            TextField("", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
                 .focused($searchFocused)
-            if model.searchEverywhereQuery.isEmpty {
+            if query.isEmpty {
                 Text("Type / to see commands")
                     .font(.system(size: 12))
                     .foregroundStyle(LitheTheme.tertiaryText)
                     .allowsHitTesting(false)
             } else {
                 Button {
-                    model.searchEverywhereQuery = ""
+                    query = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                 }

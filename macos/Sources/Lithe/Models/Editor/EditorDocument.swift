@@ -1,4 +1,5 @@
 import Foundation
+import LitheCoreContracts
 
 @MainActor
 final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable {
@@ -6,9 +7,12 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     enum DocumentError: LocalizedError {
         case readOnly
         case externalConflict
+        case mutationInProgress
 
         var errorDescription: String? {
             switch self {
+            case .mutationInProgress:
+                "A workspace edit is in progress. Try again after it finishes."
             case .readOnly:
                 "This document is read-only"
             case .externalConflict:
@@ -24,9 +28,14 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     private var storedText: String
     var text: String {
         get { storedText }
-        set { replaceText(newValue, publish: true) }
+        set {
+            guard !hasMutationLease else { return }
+            pendingLanguageServerBaseText = nil
+            replaceText(newValue, publish: true)
+        }
     }
     @Published private(set) var savedText: String
+    private var pendingLanguageServerBaseText: String?
     private(set) var lifecycleState: DocumentLifecycleState
     private(set) var lastKnownModificationDate: Date?
     private var activeMutationLease: MutationLease?
@@ -57,7 +66,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     /// Reserves this buffer for a coordinated multi-file edit. Callers must
     /// release the exact token; a second lease is rejected deterministically.
     func acquireMutationLease() -> MutationLease? {
-        guard activeMutationLease == nil else { return nil }
+        guard !isReadOnly, activeMutationLease == nil else { return nil }
         let lease = MutationLease(id: UUID())
         activeMutationLease = lease
         return lease
@@ -70,14 +79,91 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
 
     var hasMutationLease: Bool { activeMutationLease != nil }
 
+    func commitMutationText(_ text: String, lease: MutationLease) {
+        guard activeMutationLease == lease else { return }
+        pendingLanguageServerBaseText = nil
+        replaceText(text, publish: true)
+    }
+
     /// Keep the live NSTextView buffer in sync without waking SwiftUI on every
     /// already-dirty keystroke. The first edit still publishes so the tab dirty
     /// mark can appear.
     func applyLiveEditorText(_ newText: String) {
+        guard !isReadOnly, !hasMutationLease else { return }
+        pendingLanguageServerBaseText = nil
+        applyLiveEditorSnapshot(newText)
+    }
+
+    private func applyLiveEditorSnapshot(_ newText: String) {
         let remainsUnpersisted = lifecycleState.status == .saving
             || lifecycleState.status == .conflict
             || !newText.utf8.elementsEqual(savedText.utf8)
         replaceText(newText, publish: isDirty != remainsUnpersisted)
+    }
+
+    /// Applies the editor's latest change without asking the NSTextView for a
+    /// full document snapshot. The editor and document model stay in lockstep
+    /// through the same UTF-16 range used by NSTextView.
+    @discardableResult
+    func applyLiveEditorEdit(replacedRange: NSRange, replacement: String) -> Bool {
+        guard !isReadOnly, !hasMutationLease else { return false }
+        let source = storedText as NSString
+        guard replacedRange.location != NSNotFound,
+              replacedRange.location >= 0,
+              replacedRange.length >= 0,
+              replacedRange.location <= source.length,
+              replacedRange.length <= source.length - replacedRange.location else {
+            return false
+        }
+        guard Range(replacedRange, in: storedText) != nil else { return false }
+        if pendingLanguageServerBaseText == nil { pendingLanguageServerBaseText = storedText }
+        let nextText = source.replacingCharacters(in: replacedRange, with: replacement)
+        applyLiveEditorSnapshot(nextText)
+        return true
+    }
+
+    /// The Rust batch contract uses ranges in one pre-change snapshot. Merge
+    /// sequential keystrokes into one replacement, rather than forwarding
+    /// coordinates from several different document revisions.
+    func takePendingLanguageServerChanges() -> [LanguageServerDocumentChange] {
+        guard let base = pendingLanguageServerBaseText else { return [] }
+        pendingLanguageServerBaseText = nil
+        let source = base as NSString
+        let target = storedText as NSString
+        var start = 0
+        let commonLength = min(source.length, target.length)
+        while start < commonLength, source.character(at: start) == target.character(at: start) {
+            start += 1
+        }
+        if start == source.length && start == target.length { return [] }
+        // A shared UTF-16 prefix/suffix may end inside an emoji surrogate pair.
+        if start > 0, (0xD800...0xDBFF).contains(source.character(at: start - 1)) { start -= 1 }
+        var suffix = 0
+        while suffix < source.length - start, suffix < target.length - start,
+              source.character(at: source.length - suffix - 1) == target.character(at: target.length - suffix - 1) {
+            suffix += 1
+        }
+        if suffix > 0, (0xDC00...0xDFFF).contains(source.character(at: source.length - suffix)) { suffix -= 1 }
+        return [LanguageServerDocumentChange(
+            start: Self.position(at: start, in: source),
+            end: Self.position(at: source.length - suffix, in: source),
+            text: target.substring(with: NSRange(location: start, length: target.length - suffix - start))
+        )]
+    }
+
+    private static func position(
+        at offset: Int,
+        in source: NSString
+    ) -> LanguageServerDocumentPosition {
+        let safeOffset = min(max(offset, 0), source.length)
+        let lineRange = source.lineRange(
+            for: NSRange(location: safeOffset, length: 0)
+        )
+        return LanguageServerDocumentPosition(
+            line: source.substring(with: NSRange(location: 0, length: lineRange.location))
+                .split(separator: "\n", omittingEmptySubsequences: false).count - 1,
+            utf16Column: safeOffset - lineRange.location
+        )
     }
 
     private func replaceText(_ newText: String, publish: Bool) {
@@ -119,7 +205,9 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     }
 
     func reloadFromDisk() throws {
+        guard !hasMutationLease else { throw DocumentError.mutationInProgress }
         let contents = try String(contentsOf: url, encoding: .utf8)
+        pendingLanguageServerBaseText = nil
         storedText = contents
         savedText = contents
         lifecycleState = .clean(revision: lifecycleState.revision + 1)
@@ -159,12 +247,17 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     }
 
     func relocate(to newURL: URL) {
+        pendingLanguageServerBaseText = nil
         objectWillChange.send()
         url = newURL.standardizedFileURL
         lastKnownModificationDate = Self.modificationDate(for: newURL)
     }
 
     static func modificationDate(for url: URL) -> Date? {
-        try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        // URL caches resource values. Reusing the open document's URL after an
+        // atomic replacement must query the current file, not its cached mtime.
+        var currentURL = url
+        currentURL.removeCachedResourceValue(forKey: .contentModificationDateKey)
+        return try? currentURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
     }
 }

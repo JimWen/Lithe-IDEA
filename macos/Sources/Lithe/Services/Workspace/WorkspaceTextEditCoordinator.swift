@@ -6,6 +6,8 @@ import LitheCoreContracts
 package actor WorkspaceTextEditCoordinator {
     private(set) var state: WorkspaceTextEditTransactionState = .preparing
 
+    private var isApplying = false
+
     package init() {}
 
     package func apply(
@@ -14,6 +16,15 @@ package actor WorkspaceTextEditCoordinator {
         operations: any WorkspaceTextEditFileOperations,
         transactionID: UUID = UUID()
     ) async -> WorkspaceTextEditTransactionResult {
+        guard !isApplying else {
+            return WorkspaceTextEditTransactionResult(transactionID: transactionID, state: .failed,
+                                                      failedPaths: edits.map(\.path))
+        }
+        isApplying = true
+        defer { isApplying = false }
+        guard !Task.isCancelled else {
+            return WorkspaceTextEditTransactionResult(transactionID: transactionID, state: .cancelled)
+        }
         let grouped = Dictionary(grouping: edits, by: \.path)
         let duplicatePaths = grouped.filter { $0.value.count > 1 }.map(\.key)
         guard duplicatePaths.isEmpty else {
@@ -41,9 +52,11 @@ package actor WorkspaceTextEditCoordinator {
         let paths = uniqueEdits.map(\.path)
         let snapshots: [WorkspaceTextEditSnapshot]
         do {
+            try Task.checkCancellation()
             snapshots = try await operations.capture(paths, at: workspaceURL)
+            try Task.checkCancellation()
             guard snapshots.count == uniqueEdits.count,
-                  Dictionary(uniqueKeysWithValues: snapshots.map { ($0.path, $0) }).count == uniqueEdits.count,
+                  Set(snapshots.map(\.path)).count == uniqueEdits.count,
                   uniqueEdits.allSatisfy({ edit in
                       snapshots.first(where: { $0.path == edit.path })?.text.utf8.elementsEqual(edit.sourceText.utf8) == true &&
                           (edit.sourceIdentity.isEmpty || snapshots.first(where: { $0.path == edit.path })?.identity == edit.sourceIdentity)
@@ -52,31 +65,30 @@ package actor WorkspaceTextEditCoordinator {
                 return WorkspaceTextEditTransactionResult(transactionID: transactionID, state: state, failedPaths: paths)
             }
         } catch {
-            state = .failed
+            state = error is CancellationError ? .cancelled : .failed
             return WorkspaceTextEditTransactionResult(transactionID: transactionID, state: state, failedPaths: paths)
         }
 
         state = .committing
-        var applied: [WorkspaceTextEdit] = []
+        var applied: [(original: WorkspaceTextEditSnapshot, written: WorkspaceTextEditSnapshot)] = []
         for edit in uniqueEdits {
             do {
+                try Task.checkCancellation()
                 guard let snapshot = snapshots.first(where: { $0.path == edit.path }) else {
                     throw NSError(domain: "WorkspaceTextEdit", code: 1)
                 }
-                try await operations.replace(edit, expected: snapshot, at: workspaceURL)
-                applied.append(edit)
+                let written = try await operations.replace(edit, expected: snapshot, at: workspaceURL)
+                applied.append((snapshot, written))
+                try Task.checkCancellation()
             } catch {
                 state = .rollingBack
                 var recovery: [String] = []
                 for previous in applied.reversed() {
-                    guard let snapshot = snapshots.first(where: { $0.path == previous.path }) else {
-                        recovery.append(previous.path)
-                        continue
-                    }
-                    do { try await operations.restore(snapshot, at: workspaceURL) }
-                    catch { recovery.append(previous.path) }
+                    do {
+                        try await operations.restore(previous.original, expected: previous.written, at: workspaceURL)
+                    } catch { recovery.append(previous.original.path) }
                 }
-                state = recovery.isEmpty ? .failed : .recoveryRequired
+                state = recovery.isEmpty ? (error is CancellationError ? .cancelled : .failed) : .recoveryRequired
                 return WorkspaceTextEditTransactionResult(
                     transactionID: transactionID,
                     state: state,
@@ -89,7 +101,7 @@ package actor WorkspaceTextEditCoordinator {
         return WorkspaceTextEditTransactionResult(transactionID: transactionID, state: state, changedPaths: paths)
     }
 
-    private static func isValidPath(_ edit: WorkspaceTextEdit) -> Bool {
+    package static func isValidPath(_ edit: WorkspaceTextEdit) -> Bool {
         !edit.path.isEmpty && !edit.path.hasPrefix("/")
             && !edit.path.split(separator: "/").contains("..")
             && !edit.path.contains("\\")

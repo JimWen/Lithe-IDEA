@@ -93,6 +93,7 @@ struct RootView: View {
         .task {
             guard !didStartAutomaticUpdateCheck else { return }
             didStartAutomaticUpdateCheck = true
+            guard !LithePerformanceBaseline.isEnabled else { return }
             await updateChecker.checkForUpdates()
         }
     }

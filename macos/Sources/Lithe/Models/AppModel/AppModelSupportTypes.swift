@@ -13,6 +13,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     case python = "Python"
     case ai = "AI & Commit"
     case updates = "Updates"
+    case diagnostics = "Diagnostics"
 
     var id: String { rawValue }
 
@@ -26,6 +27,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .go, .rust, .python: "chevron.left.forwardslash.chevron.right"
         case .ai: "wand.and.stars"
         case .updates: "arrow.down.circle"
+        case .diagnostics: "stethoscope"
         }
     }
 

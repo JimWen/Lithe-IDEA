@@ -65,6 +65,8 @@ struct TerminalView: View {
                         _ = model.createTerminalSession(shellPath: shell)
                     }
                 }
+                Divider()
+                Button("Detect Installed Shells") { model.terminalFeature?.refreshAvailableShells() }
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10))
@@ -75,7 +77,8 @@ struct TerminalView: View {
             .frame(width: 26, height: 28)
             .contentShape(Rectangle())
             .foregroundStyle(LitheTheme.secondaryText)
-            .help("New terminal with shell")
+            .help("Detect shells and create a new terminal")
+            .accessibilityLabel("New terminal with shell")
 
             Menu {
                 if let session = model.activeToolTerminalSession {

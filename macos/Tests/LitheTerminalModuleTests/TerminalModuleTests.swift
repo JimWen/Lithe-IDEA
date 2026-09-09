@@ -132,6 +132,8 @@ private final class TestTransport: TerminalTransport {
     var isRunning = false
     var processID: Int32? { isRunning ? 1234 : nil }
     var shellName = "Shell"
+    var shellStarts: [String] = []
+    var startError: Error?
     var onTermination: ((Int32?) -> Void)?
     var onOutput: ((Data) -> Void)?
     var onTitle: ((String) -> Void)?

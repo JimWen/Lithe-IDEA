@@ -52,6 +52,7 @@ final class AppServices {
     let platformUI: any PlatformUI
     let shortcutDetectorFactory: any ShortcutDetectorFactory
     let commandProjectionScheduler: any CommandProjectionScheduling
+    let diagnosticsExportService: DiagnosticsExportService?
 
     init(
         moduleRuntime: ModuleRuntime,
@@ -89,7 +90,8 @@ final class AppServices {
         directoryWatcherFactory: any DirectoryWatcherFactory,
         platformUI: any PlatformUI,
         shortcutDetectorFactory: any ShortcutDetectorFactory,
-        commandProjectionScheduler: any CommandProjectionScheduling
+        commandProjectionScheduler: any CommandProjectionScheduling,
+        diagnosticsExportService: DiagnosticsExportService? = nil
     ) {
         self.moduleRuntime = moduleRuntime
         self.pluginManager = pluginManager
@@ -141,5 +143,6 @@ final class AppServices {
         self.platformUI = platformUI
         self.shortcutDetectorFactory = shortcutDetectorFactory
         self.commandProjectionScheduler = commandProjectionScheduler
+        self.diagnosticsExportService = diagnosticsExportService
     }
 }

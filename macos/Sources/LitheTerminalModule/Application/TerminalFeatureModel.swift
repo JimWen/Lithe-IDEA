@@ -9,6 +9,8 @@ public final class TerminalFeatureModel: ObservableObject {
     @Published public private(set) var displayDiagnostics: [String] = []
     public private(set) var displayConfiguration = TerminalDisplayConfiguration()
 
+    @Published public private(set) var availableShells: [String] = []
+
     private let terminalFactory: () -> any TerminalTransport
     private let shellDiscovery: () -> [String]
 
@@ -18,9 +20,12 @@ public final class TerminalFeatureModel: ObservableObject {
     ) {
         self.terminalFactory = terminalFactory
         self.shellDiscovery = shellDiscovery
+        refreshAvailableShells()
     }
 
-    public var availableShells: [String] { shellDiscovery() }
+    public func refreshAvailableShells() {
+        availableShells = shellDiscovery()
+    }
 
     public func applyDisplayConfiguration(_ configuration: TerminalDisplayConfiguration) {
         displayConfiguration = configuration

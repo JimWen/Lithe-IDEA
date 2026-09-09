@@ -21,16 +21,21 @@ struct WorkspaceTextEditCoordinatorTests {
             paths.map { WorkspaceTextEditSnapshot(path: $0, text: texts[$0] ?? "", identity: identities[$0] ?? "missing") }
         }
 
-        func replace(_ edit: WorkspaceTextEdit, expected snapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws {
+        func replace(_ edit: WorkspaceTextEdit, expected snapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws -> WorkspaceTextEditSnapshot {
             if edit.path == failingPath { throw NSError(domain: "test", code: 1) }
             guard texts[edit.path]?.utf8.elementsEqual(edit.sourceText.utf8) == true else {
                 throw NSError(domain: "test", code: 2)
             }
             texts[edit.path] = edit.replacementText
             writes.append(edit.path)
+            let installedIdentity = UUID().uuidString
+            identities[edit.path] = installedIdentity
+            return WorkspaceTextEditSnapshot(path: edit.path, text: edit.replacementText, identity: installedIdentity)
         }
 
-        func restore(_ snapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws {
+        func restore(_ snapshot: WorkspaceTextEditSnapshot, expected writtenSnapshot: WorkspaceTextEditSnapshot, at workspaceURL: URL) async throws {
+            guard identities[snapshot.path] == writtenSnapshot.identity,
+                  texts[snapshot.path] == writtenSnapshot.text else { throw CocoaError(.fileWriteUnknown) }
             texts[snapshot.path] = snapshot.text
             writes.append("restore:\(snapshot.path)")
         }

@@ -50,18 +50,20 @@ final class MenuPresentationCoordinator: ObservableObject {
     private static let hostAttachmentTimeout: TimeInterval = 5
 
     var canUndoWorkspaceEdit: Bool {
-        host?.model.services.workspaceTextEditUndoController.sharedUndoManager.canUndo == true
+        host?.model.services.workspaceTextEditUndoController.canUndo == true
     }
 
     var canRedoWorkspaceEdit: Bool {
-        host?.model.services.workspaceTextEditUndoController.sharedUndoManager.canRedo == true
+        host?.model.services.workspaceTextEditUndoController.canRedo == true
     }
 
     func undoWorkspaceEdit() {
+        guard canUndoWorkspaceEdit else { return }
         host?.model.services.workspaceTextEditUndoController.sharedUndoManager.undo()
     }
 
     func redoWorkspaceEdit() {
+        guard canRedoWorkspaceEdit else { return }
         host?.model.services.workspaceTextEditUndoController.sharedUndoManager.redo()
     }
 

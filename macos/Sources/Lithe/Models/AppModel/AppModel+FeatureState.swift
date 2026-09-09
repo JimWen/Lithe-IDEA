@@ -174,16 +174,12 @@ extension AppModel {
         gitFeatureIfActive?.gitTreeStatus ?? GitTreeStatusProjection(changes: [])
     }
     func gitChange(for url: URL) -> GitChange? {
-        guard let root = gitRepositoryRoot,
-              let relativePath = workspaceRelativePath(for: url, root: root) else { return nil }
-        return gitFeatureIfActive?.gitTreeStatus.change(relativePath: relativePath)
+        return gitFeatureIfActive?.gitTreeStatus.change(relativePath: url.standardizedFileURL.path)
     }
 
     func gitTreeStatus(for url: URL, isDirectory: Bool) -> GitChangeKind? {
-        guard let root = gitRepositoryRoot,
-              let relativePath = workspaceRelativePath(for: url, root: root) else { return nil }
         return gitFeatureIfActive?.gitTreeStatus.kind(
-            relativePath: relativePath,
+            relativePath: url.standardizedFileURL.path,
             isDirectory: isDirectory
         )
     }
@@ -217,6 +213,8 @@ extension AppModel {
     func clearGitConsole() { gitFeatureIfActive?.clearGitConsole() }
     func loadGitConsoleIfNeeded() async { await gitFeatureIfActive?.loadGitConsoleIfNeeded() }
     var gitRepositoryRoot: URL? { gitFeatureIfActive?.gitRepositoryRoot }
+    var availableGitRepositoryRoots: [URL] { gitFeatureIfActive?.availableRepositoryRoots ?? [] }
+    var activeGitRepositoryChanges: [GitChange] { gitFeatureIfActive?.activeRepositoryChanges ?? [] }
     var currentBranch: String { gitFeatureIfActive?.currentBranch ?? "No Git" }
     var selectedChange: GitChange? {
         get { gitFeatureIfActive?.selectedChange }
@@ -338,8 +336,8 @@ extension AppModel {
     var searchEverywhereResults: SearchEverywhereResults {
         searchFeatureIfActive?.searchEverywhereResults ?? SearchEverywhereResults()
     }
-    var searchEverywhereActionMatches: [LitheAction] {
-        LitheActionRegistry.actions(for: self).filter { $0.matches(searchEverywhereQuery) }
+    func searchEverywhereActionMatches(query: String) -> [LitheAction] {
+        LitheActionRegistry.actions(for: self).filter { $0.matches(query) }
     }
     var isSearchingEverywhere: Bool { searchFeatureIfActive?.isSearchingEverywhere ?? false }
     var projectReplacementFiles: [ProjectReplacementFile] {

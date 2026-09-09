@@ -31,7 +31,7 @@ verification scripts are the executable source of boundary checks.
 | Language tooling | provider catalog, local fallback results, complete LSP process/session runtime, capabilities, diagnostics, UTF-16 edits, and normalized feature results | executable/environment discovery and UI provider routing |
 | Java | Java source structure, symbols, code vision, run configurations, and optional JDTLS/Debug policy | JDK discovery and optional Java child processes |
 | Run/Debug | versioned configuration documents, three-layer resolution, diagnostics, platform-neutral launch plans, DAP framing/state, reverse terminal requests, breakpoint relocation, stepping filters, threads, stacks, variables, and events | project and preference persistence, native edit reporting, adapter discovery, PTY/ConPTY debuggee launch, child processes, sockets, native termination, and UI |
-| Terminal | input bytes, output bytes, lifecycle | PTY/ConPTY, shell and environment |
+| Terminal | input bytes, output bytes, lifecycle; [shell selection semantics](terminal-profiles.md) | PTY/ConPTY, shell discovery, native profile preferences, and environment |
 | Workbench background | versioned source (`none`, bundled slot `01`–`10`, or `custom`) and opacity | UI, image rendering, bundled-resource packaging, local-image access permission and persistence |
 | Local History | revision metadata, text content, restore result | persistence location and file operations |
 | Modules | stable IDs, manifests, enabled state, lifecycle snapshots, dependencies, capabilities, and contributions | native factories, processes, timers, PTY/ConPTY, watchers, connections, and UI rendering |

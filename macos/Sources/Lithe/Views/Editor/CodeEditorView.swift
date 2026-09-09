@@ -719,6 +719,9 @@ struct CodeEditorView: NSViewRepresentable {
 
         let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
         textView.externalUndoManager = model.services.workspaceTextEditUndoController.sharedUndoManager
+        textView.isExternalEditSuspended = { [weak model] in
+            model?.services.workspaceTextEditUndoController.isApplying == true
+        }
         textView.delegate = context.coordinator
         textView.layoutManager?.delegate = textView
         textView.string = document.text
@@ -967,6 +970,14 @@ struct CodeEditorView: NSViewRepresentable {
         var colorTheme: AppColorTheme = .lithe
         var shouldFocus = true
         var markdownScrollPosition: Binding<MarkdownScrollPosition>?
+        private struct CodeVisionInputKey: Equatable {
+            let textHash: Int
+            let hintCount: Int
+            let foldCount: Int
+            let collapsedIDs: Set<String>
+            let enabled: Bool
+        }
+
         var appliedNavigationTargetID: UUID?
         var foldRegions: [JavaFoldRegion] = []
         var collapsedFoldIDs: Set<String> = []
@@ -989,6 +1000,7 @@ struct CodeEditorView: NSViewRepresentable {
         private var appliedLanguageFeatures: LanguageServerFeatureSet?
         private var appliedReadOnly: Bool?
         private var appliedCodeVisionHints: [JavaCodeVisionHint]?
+        private var codeVisionInputKey: CodeVisionInputKey?
         private var appliedInlineDebugLine: Int?
         private var appliedInlineDebugValues: [EditorInlineDebugValue] = []
         private var requestedAutomaticDebugFrameID: Int?
@@ -1279,6 +1291,8 @@ struct CodeEditorView: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            guard document?.isReadOnly != true, document?.hasMutationLease != true,
+                  (textView as? CodeTextView)?.isExternalEditSuspended?() != true else { return false }
             let inserted = replacementString ?? ""
             pendingReplacement = inserted
             pendingReplacedRange = affectedCharRange
@@ -1287,8 +1301,10 @@ struct CodeEditorView: NSViewRepresentable {
         }
 
         func textDidChange(_ notification: Notification) {
+            let signpost = LitheSignpost.begin("editor.input")
+            defer { LitheSignpost.end("editor.input", signpost) }
             guard let textView else { return }
-            guard document?.isReadOnly != true else { return }
+            guard document?.isReadOnly != true, document?.hasMutationLease != true else { return }
             let codeTextView = textView as? CodeTextView
             let previousSource = document?.text
             if let replacedRange = pendingReplacedRange, let replacement = pendingReplacement {
@@ -1298,7 +1314,17 @@ struct CodeEditorView: NSViewRepresentable {
             }
             gutter?.refreshLineNumberLayout()
             isApplyingEditorChange = true
-            document?.applyLiveEditorText(textView.string)
+            if let document,
+               let replacedRange = pendingReplacedRange,
+               let replacement = pendingReplacement {
+                if !document.applyLiveEditorEdit(replacedRange: replacedRange, replacement: replacement) {
+                    document.applyLiveEditorText(textView.string)
+                }
+            } else {
+                // Programmatic edits may not provide shouldChangeTextIn
+                // metadata. Keep this recovery path for those edits only.
+                document?.applyLiveEditorText(textView.string)
+            }
             if let document,
                let previousSource,
                let replacedRange = pendingReplacedRange,
@@ -1313,9 +1339,12 @@ struct CodeEditorView: NSViewRepresentable {
             if let document {
                 scheduleDocumentChange(document)
             }
-            highlight(in: pendingHighlightRange)
             let findReplacedRange = pendingReplacedRange
             let findInsertedLength = pendingHighlightRange?.length ?? 0
+            highlight(
+                in: pendingHighlightRange,
+                replacedLength: pendingReplacedRange?.length
+            )
             pendingHighlightRange = nil
             pendingReplacedRange = nil
             pendingReplacement = nil
@@ -1432,12 +1461,18 @@ struct CodeEditorView: NSViewRepresentable {
             return changed
         }
 
-        func highlight(in editedRange: NSRange? = nil) {
+        func highlight(in editedRange: NSRange? = nil, replacedLength: Int? = nil) {
             guard let textView, let textStorage = textView.textStorage else { return }
             let fullRange = NSRange(location: 0, length: textStorage.length)
             let font = textView.font ?? LitheTheme.editorFont(size: 13)
             if let editedRange {
-                highlightedRanges.removeAll()
+                highlightedRanges.applyEdit(
+                    replacedRange: NSRange(
+                        location: editedRange.location,
+                        length: replacedLength ?? editedRange.length
+                    ),
+                    replacementLength: editedRange.length
+                )
                 let target = SyntaxHighlighter.targetRange(
                     for: editedRange,
                     in: textStorage.string as NSString,
@@ -1692,15 +1727,24 @@ struct CodeEditorView: NSViewRepresentable {
             guard let document, let model else { return }
             let url = document.url.standardizedFileURL
             let hints = model.settings.showCodeVision ? model.javaCodeVisionHints[url] ?? [] : []
-            let visibleCodeVisionHints = EditorFoldVisibility.visibleCodeVisionHints(
-                hints,
-                in: (textView?.string ?? "") as NSString,
-                regions: foldRegions,
-                collapsedIDs: collapsedFoldIDs
-            )
             let overlayLayoutChanged = appliedEditorOverlayLayoutRevision != editorOverlayLayoutRevision
-
-            if appliedCodeVisionHints != visibleCodeVisionHints || overlayLayoutChanged {
+            // Further resize optimization can move this representable behind a stable
+            // layout boundary and skip all geometry-only updates before reaching here.
+            let inputKey = CodeVisionInputKey(
+                textHash: textView?.string.hashValue ?? 0,
+                hintCount: hints.count,
+                foldCount: foldRegions.count,
+                collapsedIDs: collapsedFoldIDs,
+                enabled: model.settings.showCodeVision
+            )
+            if codeVisionInputKey != inputKey || overlayLayoutChanged {
+                let visibleCodeVisionHints = EditorFoldVisibility.visibleCodeVisionHints(
+                    hints,
+                    in: (textView?.string ?? "") as NSString,
+                    regions: foldRegions,
+                    collapsedIDs: collapsedFoldIDs
+                )
+                codeVisionInputKey = inputKey
                 appliedCodeVisionHints = visibleCodeVisionHints
                 codeVisionOverlay?.update(
                     hints: visibleCodeVisionHints,
@@ -2109,9 +2153,11 @@ private struct TextLineIndex {
 
 final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     var externalUndoManager: UndoManager?
+    var isExternalEditSuspended: (() -> Bool)?
     override var undoManager: UndoManager? { externalUndoManager ?? super.undoManager }
 
     override func keyDown(with event: NSEvent) {
+        guard isExternalEditSuspended?() != true else { return }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if modifiers == .command, event.charactersIgnoringModifiers == "z" {
             if let externalUndoManager, externalUndoManager.canUndo {
@@ -2333,6 +2379,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let character = event.charactersIgnoringModifiers
         if modifiers.contains(.command), event.keyCode == 6 {
+            guard isExternalEditSuspended?() != true else { return true }
             if modifiers.contains(.shift) {
                 guard externalUndoManager?.canRedo == true || super.undoManager?.canRedo == true else { return false }
                 (externalUndoManager?.canRedo == true ? externalUndoManager : super.undoManager)?.redo()
@@ -3229,11 +3276,11 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         super.flagsChanged(with: event)
         guard let window,
               isEditorHitTarget(at: convert(window.mouseLocationOutsideOfEventStream, from: nil)) else {
-            NSCursor.arrow.set()
             return
         }
         guard isLanguageNavigationEnabled, hasNavigationModifier(event.modifierFlags) else {
             clearLinkHighlight()
+            NSCursor.iBeam.set()
             return
         }
         updateLinkHighlight(at: convert(window.mouseLocationOutsideOfEventStream, from: nil))
@@ -3243,7 +3290,6 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         super.mouseEntered(with: event)
         let point = convert(event.locationInWindow, from: nil)
         guard isEditorHitTarget(at: point) else {
-            NSCursor.arrow.set()
             return
         }
         let summaryRegion = foldSummaryRegion(at: point)
@@ -3256,7 +3302,6 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard isEditorHitTarget(at: point) else {
-            NSCursor.arrow.set()
             return
         }
         let summaryRegion = foldSummaryRegion(at: point)
@@ -3286,7 +3331,6 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     override func cursorUpdate(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard isEditorHitTarget(at: point) else {
-            NSCursor.arrow.set()
             return
         }
         if foldSummaryRegion(at: point) != nil {
@@ -3303,7 +3347,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     private func isEditorHitTarget(at point: NSPoint) -> Bool {
         guard let contentView = window?.contentView,
               let hitView = contentView.hitTest(convert(point, to: contentView)) else {
-            return true
+            return false
         }
         return hitView === self || hitView.isDescendant(of: self)
     }
@@ -3313,7 +3357,6 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         updateFoldHover(to: nil)
         clearLinkHighlight()
         clearDebugHover()
-        NSCursor.arrow.set()
     }
 
     override func resignFirstResponder() -> Bool {
@@ -3348,6 +3391,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         guard isLanguageNavigationEnabled,
               let target = linkRange(at: point) else {
             clearLinkHighlight()
+            NSCursor.iBeam.set()
             return
         }
         guard linkRange != target else {
@@ -3360,13 +3404,11 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     private func clearLinkHighlight() {
-        guard linkRange != nil else {
-            NSCursor.iBeam.set()
-            return
-        }
+        // Cleanup also runs after the pointer leaves or the window loses focus.
+        // Only pointer handlers that still own the hit target may change its cursor.
+        guard linkRange != nil else { return }
         linkRange = nil
         updateEditorDecorations()
-        NSCursor.iBeam.set()
     }
 
     private func applyLinkHighlight() {
@@ -4146,7 +4188,6 @@ final class LineNumberGutterView: NSView {
     private var onRunRunnable: ((DocumentRunnable) -> Void)?
     private var onDebugRunnable: ((DocumentRunnable) -> Void)?
     private var onModifyRunnable: ((DocumentRunnable) -> Void)?
-    private var contextRunnable: DocumentRunnable?
     private var onSelectImplementation: ((JavaImplementationMarker) -> Void)?
     private var debugBreakpointLines: Set<Int> = []
     private var debugBreakpointStatesByLine: [Int: EditorDebugBreakpointState] = [:]
@@ -4161,8 +4202,6 @@ final class LineNumberGutterView: NSView {
     private var canAddDebugBreakpoint: ((Int) -> Bool)?
     private var isRunToCursorEnabled = false
     private var areBreakpointsMuted = false
-    private var contextGutterLine: Int?
-    private var contextDebugBreakpointLine: Int?
     private var scrollRefreshScheduled = false
     private var hoveredFoldID: String?
     private var foldIndicatorOpacities: [String: CGFloat] = [:]
@@ -5151,7 +5190,7 @@ final class LineNumberGutterView: NSView {
             onToggleFold?(region)
         case .implementation:
             if let runnable = runnableMarkers.first(where: { $0.line == line + 1 }) {
-                onRunRunnable?(runnable)
+                presentRunnableMenu(runnable, event: event)
                 return
             }
             let markers = implementationMarkers.filter { $0.line == line }
@@ -5169,44 +5208,49 @@ final class LineNumberGutterView: NSView {
         }
     }
 
+    /// AppKit dispatches a secondary click to this gutter view without asking
+    /// its `menu(for:)` override. Route it through the same shared presenter
+    /// used by the left-click runnable marker so right-click Run/Debug/config
+    /// actions are available on the actual entry icon.
+    override func rightMouseDown(with event: NSEvent) {
+        if let nativeMenu = menu(for: event) {
+            NSMenu.popUpContextMenu(nativeMenu, with: event, for: self)
+        }
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         let localX = point.x - editorGutterOriginX
         if gutterLayout.implementationRange.contains(localX),
            let line = editorLine(at: point),
            let runnable = runnableMarkers.first(where: { $0.line == line + 1 }) {
-            contextRunnable = runnable
-            let menu = NSMenu(title: "Runnable")
-            let run = NSMenuItem(title: "Run ‘\(runnable.displayName)’", action: #selector(runRunnableFromGutterMenu), keyEquivalent: "")
-            run.target = self
-            menu.addItem(run)
-            let debug = NSMenuItem(title: "Debug ‘\(runnable.displayName)’", action: #selector(debugRunnableFromGutterMenu), keyEquivalent: "")
-            debug.target = self
-            menu.addItem(debug)
-            menu.addItem(.separator())
-            let modify = NSMenuItem(title: "Modify Run Configuration…", action: #selector(modifyRunnableFromGutterMenu), keyEquivalent: "")
-            modify.target = self
-            menu.addItem(modify)
-            return menu
+            presentRunnableMenu(runnable, event: event)
+            return nil
         }
         if gutterLayout.breakpointInteractionRange.contains(localX),
            let line = editorLine(at: point) {
-            return debugBreakpointContextMenu(forLine: line)
+            guard let window else { return nil }
+            LitheContextMenuPresenter.shared.show(
+                items: debugBreakpointContextMenuItems(forLine: line),
+                at: window.convertPoint(toScreen: event.locationInWindow),
+                appearance: effectiveAppearance,
+                locale: .current
+            )
+            return nil
         }
         if gutterLayout.lineNumberRange.contains(localX),
            let line = editorLine(at: point),
            onRunToCursor != nil {
-            contextGutterLine = line
-            let menu = NSMenu(title: "Editor Line")
-            let item = NSMenuItem(
-                title: "Run to Cursor",
-                action: #selector(runToCursorFromGutterMenu),
-                keyEquivalent: ""
+            guard let window else { return nil }
+            LitheContextMenuPresenter.shared.show(
+                items: [.action("Run to Cursor", isEnabled: isRunToCursorEnabled) { [weak self] in
+                    self?.onRunToCursor?(line)
+                }],
+                at: window.convertPoint(toScreen: event.locationInWindow),
+                appearance: effectiveAppearance,
+                locale: .current
             )
-            item.target = self
-            item.isEnabled = isRunToCursorEnabled
-            menu.addItem(item)
-            return menu
+            return nil
         }
         guard gutterLayout.gitChangeRange.contains(localX),
               let line = editorLine(at: point),
@@ -5247,82 +5291,52 @@ final class LineNumberGutterView: NSView {
         return nil
     }
 
-    @objc private func runRunnableFromGutterMenu() { if let contextRunnable { onRunRunnable?(contextRunnable) } }
-    @objc private func debugRunnableFromGutterMenu() { if let contextRunnable { onDebugRunnable?(contextRunnable) } }
-    @objc private func modifyRunnableFromGutterMenu() { if let contextRunnable { onModifyRunnable?(contextRunnable) } }
+    private func presentRunnableMenu(_ runnable: DocumentRunnable, event: NSEvent) {
+        guard let window else { return }
+        LitheContextMenuPresenter.shared.show(
+            items: runnableContextMenuItems(for: runnable),
+            at: window.convertPoint(toScreen: event.locationInWindow),
+            appearance: effectiveAppearance,
+            locale: .current
+        )
+    }
 
-    func debugBreakpointContextMenu(forLine line: Int) -> NSMenu? {
-        contextDebugBreakpointLine = line
+    func runnableContextMenuItems(for runnable: DocumentRunnable) -> [LitheContextMenuItem] {
+        // Freeze both the clicked entry and its document-owned callbacks. A
+        // marker refresh while the menu is open must not retarget the action.
+        let run = onRunRunnable
+        let debug = onDebugRunnable
+        let modify = onModifyRunnable
+        return [
+            .action("Run ‘\(runnable.displayName)’", systemImage: "play.fill", isEnabled: run != nil) { run?(runnable) },
+            .action("Debug ‘\(runnable.displayName)’", systemImage: "ladybug", isEnabled: debug != nil) { debug?(runnable) },
+            .separator,
+            .action("Modify Run Configuration…", isEnabled: modify != nil) { modify?(runnable) }
+        ]
+    }
+
+    func debugBreakpointContextMenuItems(forLine line: Int) -> [LitheContextMenuItem] {
         guard let state = debugBreakpointStatesByLine[line] else {
-            guard canAddDebugBreakpoint?(line) == true else { return nil }
-            let menu = NSMenu(title: "Breakpoint")
-            menu.addItem(
-                withTitle: "Set Breakpoint",
-                action: #selector(addDebugBreakpointFromMenu),
-                keyEquivalent: ""
-            )
-            menu.items.last?.target = self
-            return menu
+            guard canAddDebugBreakpoint?(line) == true else { return [] }
+            return [.action("Set Breakpoint") { [weak self] in self?.onToggleDebugBreakpoint?(line) }]
         }
-        let menu = NSMenu(title: "Breakpoint")
+        var items: [LitheContextMenuItem] = []
         if onEditDebugBreakpoint != nil {
-            menu.addItem(
-                withTitle: "Edit Breakpoint…",
-                action: #selector(editDebugBreakpointFromMenu),
-                keyEquivalent: ""
-            )
-            menu.items.last?.target = self
+            items.append(.action("Edit Breakpoint…") { [weak self] in self?.onEditDebugBreakpoint?(line) })
         }
-        let toggleTitle = state.enabled ? "Disable Breakpoint" : "Enable Breakpoint"
-        menu.addItem(
-            withTitle: toggleTitle,
-            action: #selector(toggleDebugBreakpointFromMenu),
-            keyEquivalent: ""
-        )
-        menu.items.last?.target = self
-        menu.addItem(
-            withTitle: "Remove Breakpoint",
-            action: #selector(removeDebugBreakpointFromMenu),
-            keyEquivalent: ""
-        )
-        menu.items.last?.target = self
+        items.append(.action(state.enabled ? "Disable Breakpoint" : "Enable Breakpoint") { [weak self] in
+            self?.onSetDebugBreakpointEnabled?(line, !state.enabled)
+        })
+        items.append(.action("Remove Breakpoint", role: .destructive) { [weak self] in
+            self?.onRemoveDebugBreakpoint?(line)
+        })
         if onToggleAllDebugBreakpoints != nil {
-            menu.addItem(.separator())
-            menu.addItem(
-                withTitle: areBreakpointsMuted
-                    ? "Unmute All Breakpoints" : "Mute All Breakpoints",
-                action: #selector(toggleAllDebugBreakpointsFromMenu),
-                keyEquivalent: ""
-            )
-            menu.items.last?.target = self
+            items.append(.separator)
+            items.append(.action(areBreakpointsMuted ? "Unmute All Breakpoints" : "Mute All Breakpoints") { [weak self] in
+                self?.onToggleAllDebugBreakpoints?()
+            })
         }
-        return menu
-    }
-
-    @objc func editDebugBreakpointFromMenu() {
-        if let line = contextDebugBreakpointLine { onEditDebugBreakpoint?(line) }
-    }
-
-    @objc func addDebugBreakpointFromMenu() {
-        if let line = contextDebugBreakpointLine { onToggleDebugBreakpoint?(line) }
-    }
-
-    @objc private func toggleDebugBreakpointFromMenu() {
-        guard let line = contextDebugBreakpointLine,
-              let state = debugBreakpointStatesByLine[line] else { return }
-        onSetDebugBreakpointEnabled?(line, !state.enabled)
-    }
-
-    @objc private func removeDebugBreakpointFromMenu() {
-        if let line = contextDebugBreakpointLine { onRemoveDebugBreakpoint?(line) }
-    }
-
-    @objc private func toggleAllDebugBreakpointsFromMenu() {
-        onToggleAllDebugBreakpoints?()
-    }
-
-    @objc private func runToCursorFromGutterMenu() {
-        if let contextGutterLine { onRunToCursor?(contextGutterLine) }
+        return items
     }
 
     private func editorLine(at point: NSPoint) -> Int? {
@@ -5869,5 +5883,30 @@ struct HighlightedRangeCache {
 
     mutating func removeAll() {
         ranges.removeAll(keepingCapacity: true)
+    }
+
+    /// Keeps cached ranges valid after NSTextStorage applies an edit. Ranges
+    /// crossing the edit are discarded; ranges after it are shifted by the
+    /// UTF-16 length delta.
+    mutating func applyEdit(replacedRange: NSRange, replacementLength: Int) {
+        guard replacedRange.location != NSNotFound,
+              replacedRange.location >= 0,
+              replacedRange.length >= 0,
+              replacementLength >= 0 else {
+            removeAll()
+            return
+        }
+
+        let editEnd = NSMaxRange(replacedRange)
+        let delta = replacementLength - replacedRange.length
+        ranges = ranges.compactMap { range in
+            if NSMaxRange(range) > replacedRange.location && range.location < editEnd {
+                return nil
+            }
+            if range.location >= editEnd {
+                return NSRange(location: range.location + delta, length: range.length)
+            }
+            return range
+        }
     }
 }

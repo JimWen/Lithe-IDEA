@@ -70,6 +70,7 @@ final class DocumentFeatureModel: ObservableObject {
     private var onRecordExternalChanges: (@MainActor ([URL]) -> Void)?
     private var onDocumentCollectionChanged: (@MainActor () -> Void)?
     private var onProjectCloseReady: (@MainActor () -> Void)?
+    private var deferredExternalChanges: Set<URL> = []
     private var autoSaveTasks: [UUID: Task<Void, Never>] = [:]
     private var pendingFileOpenRequests: [String: UUID] = [:]
     private var latestFileOpenRequestID: UUID?
@@ -137,6 +138,7 @@ final class DocumentFeatureModel: ObservableObject {
         standaloneOpenRequestID = nil
         autoSaveTasks.values.forEach { $0.cancel() }
         autoSaveTasks.removeAll()
+        deferredExternalChanges.removeAll()
         pendingFileOpenRequests.removeAll()
         latestFileOpenRequestID = nil
         pendingCloseDocument = nil
@@ -561,14 +563,32 @@ final class DocumentFeatureModel: ObservableObject {
         try saveDocument(document)
     }
 
+    func beginBufferMutation(_ documents: [EditorDocument]) {
+        for document in documents {
+            autoSaveTasks.removeValue(forKey: document.id)?.cancel()
+        }
+    }
+
+    func endBufferMutation(_ documents: [EditorDocument]) {
+        let retained = documents.filter { document in openDocuments.contains { $0 === document } }
+        let urls = Set(retained.map { $0.url.standardizedFileURL })
+        let pending = deferredExternalChanges.intersection(urls)
+        deferredExternalChanges.subtract(pending)
+        // Reconcile watcher events before resuming autosave so an external
+        // writer becomes a visible conflict instead of being overwritten.
+        if !pending.isEmpty { processExternalChanges(Array(pending)) }
+        for document in retained { documentDidChange(document) }
+    }
+
     func documentDidChange(_ document: EditorDocument) {
+        guard !document.hasMutationLease else { return }
         onDocumentChanged?(document)
         autoSaveTasks[document.id]?.cancel()
-        guard autoSaveEnabledProvider?() == true else { return }
+        guard autoSaveEnabledProvider?() == true, !document.hasExternalConflict else { return }
         let delay = autoSaveDelayProvider?() ?? 0
         autoSaveTasks[document.id] = Task { [weak self, weak document] in
             try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled, let self, let document, document.isDirty else { return }
+            guard !Task.isCancelled, let self, let document, document.isDirty, !document.hasMutationLease else { return }
             do {
                 let previousText = document.savedText
                 if try self.saveDocument(document) {
@@ -582,6 +602,7 @@ final class DocumentFeatureModel: ObservableObject {
     }
 
     func loadExternalVersion(of document: EditorDocument) {
+        guard !document.hasMutationLease else { return }
         let operationID = UUID().uuidString
         do {
             let decision = try documentLifecycleDecider.decide(
@@ -602,6 +623,7 @@ final class DocumentFeatureModel: ObservableObject {
     }
 
     func keepEditorVersion(of document: EditorDocument) {
+        guard !document.hasMutationLease else { return }
         let operationID = UUID().uuidString
         do {
             let decision = try documentLifecycleDecider.decide(
@@ -619,7 +641,10 @@ final class DocumentFeatureModel: ObservableObject {
 
     @discardableResult
     func processExternalChanges(_ urls: [URL]) -> Bool {
-        let changedPathSet = Set(urls.map { $0.standardizedFileURL.path })
+        let leasedURLs = Set(openDocuments.filter(\.hasMutationLease).map { $0.url.standardizedFileURL })
+        deferredExternalChanges.formUnion(urls.map(\.standardizedFileURL).filter { leasedURLs.contains($0) })
+        let readyURLs = urls.filter { !leasedURLs.contains($0.standardizedFileURL) }
+        let changedPathSet = Set(readyURLs.map { $0.standardizedFileURL.path })
         var conflictDetected = false
         for document in openDocuments where changedPathSet.contains(document.url.standardizedFileURL.path) {
             guard document.hasPossibleExternalChange() else { continue }
@@ -644,7 +669,7 @@ final class DocumentFeatureModel: ObservableObject {
                 notify?("Could not process an external change to \(document.url.lastPathComponent)")
             }
         }
-        onRecordExternalChanges?(urls)
+        onRecordExternalChanges?(readyURLs)
         return conflictDetected
     }
 
@@ -670,6 +695,7 @@ final class DocumentFeatureModel: ObservableObject {
     }
 
     private func closeDocument(_ document: EditorDocument) {
+        guard !document.hasMutationLease else { return }
         guard let index = openDocuments.firstIndex(where: { $0.id == document.id }) else { return }
         autoSaveTasks[document.id]?.cancel()
         autoSaveTasks[document.id] = nil
@@ -696,6 +722,7 @@ final class DocumentFeatureModel: ObservableObject {
     @discardableResult
     private func saveDocument(_ document: EditorDocument) throws -> Bool {
         guard !document.isReadOnly else { throw EditorDocument.DocumentError.readOnly }
+        guard !document.hasMutationLease else { throw EditorDocument.DocumentError.mutationInProgress }
         let operationID = UUID().uuidString
         let saving = try documentLifecycleDecider.decide(
             state: document.lifecycleState,

@@ -21,6 +21,9 @@ struct LitheSplitPaneView<Sized: View, Flexible: View>: View {
     /// has a product-level usability requirement of its own.
     let flexibleMinimum: CGFloat?
     let showsIdleDivider: Bool
+    /// Keep the content mounted when a tool window is hidden, preserving its
+    /// expansion, selection and native editor state across layout changes.
+    let isSizedPaneVisible: Bool
     /// Called with the final size when a drag ends. Hosts that persist the size
     /// write it here; the container then defers to `defaultSize` again so the
     /// persisted value is the single source of truth.
@@ -40,6 +43,7 @@ struct LitheSplitPaneView<Sized: View, Flexible: View>: View {
         maximum: CGFloat,
         flexibleMinimum: CGFloat? = nil,
         showsIdleDivider: Bool = true,
+        isSizedPaneVisible: Bool = true,
         onCommit: ((CGFloat) -> Void)? = nil,
         @ViewBuilder sized: () -> Sized,
         @ViewBuilder flexible: () -> Flexible
@@ -51,6 +55,7 @@ struct LitheSplitPaneView<Sized: View, Flexible: View>: View {
         self.maximum = maximum
         self.flexibleMinimum = flexibleMinimum
         self.showsIdleDivider = showsIdleDivider
+        self.isSizedPaneVisible = isSizedPaneVisible
         self.onCommit = onCommit
         self.sized = sized()
         self.flexible = flexible()
@@ -77,22 +82,28 @@ struct LitheSplitPaneView<Sized: View, Flexible: View>: View {
     private func panes(_ size: CGFloat) -> some View {
         switch placement {
         case .leading:
-            sizedPane(size)
-            handle(size)
+            sizedPane(isSizedPaneVisible ? size : 0)
+            if isSizedPaneVisible { handle(size) }
             flexiblePane
         case .trailing:
             flexiblePane
-            handle(size)
-            sizedPane(size)
+            if isSizedPaneVisible { handle(size) }
+            sizedPane(isSizedPaneVisible ? size : 0)
         }
     }
 
     @ViewBuilder
     private func sizedPane(_ size: CGFloat) -> some View {
         if axis == .horizontal {
-            sized.frame(width: size)
+            sized.frame(width: size).clipped()
+                .opacity(isSizedPaneVisible ? 1 : 0)
+                .allowsHitTesting(isSizedPaneVisible)
+                .accessibilityHidden(!isSizedPaneVisible)
         } else {
-            sized.frame(height: size)
+            sized.frame(height: size).clipped()
+                .opacity(isSizedPaneVisible ? 1 : 0)
+                .allowsHitTesting(isSizedPaneVisible)
+                .accessibilityHidden(!isSizedPaneVisible)
         }
     }
 

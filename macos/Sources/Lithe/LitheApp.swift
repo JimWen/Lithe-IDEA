@@ -279,6 +279,11 @@ struct LitheApp: App {
 
     init() {
         let store = MacUserDefaultsStore()
+        if LithePerformanceBaseline.isEnabled {
+            LitheSignpost.configureBaselineOutput { line in
+                FileHandle.standardError.write(Data(line.utf8))
+            }
+        }
         let settings = AppSettings(
             store: store,
             logDirectoryProvider: MacServiceContainer.makeLogDirectoryProvider(),
@@ -335,11 +340,13 @@ struct LitheApp: App {
             startedAt: litheProcessLaunchDate,
             baselineReporter: { marker in
                 Self.appendApplicationLog(applicationLogWriter, message: marker + "\n")
+                Self.emitPerformanceBaselineMarker(marker)
             },
             logsPerformanceBaseline: ProcessInfo.processInfo.environment["LITHE_PERFORMANCE_BASELINE"] == "1",
             processRegistry: processRegistry,
             memorySampler: MacProcessMemorySampler()
         ))
+        Self.emitPerformanceBaselineMarker(LithePerformanceBaseline.configurationMarker())
         let updateChecker = UpdateChecker()
         _updateChecker = StateObject(wrappedValue: updateChecker)
         let commandEnvironmentObserver = MacServiceContainer.makeCommandEnvironmentObserver()
@@ -415,6 +422,11 @@ struct LitheApp: App {
 
     private var model: AppModel { projectWindows.activeSessions.activeModel }
 
+    private static func emitPerformanceBaselineMarker(_ marker: String) {
+        guard LithePerformanceBaseline.isEnabled else { return }
+        FileHandle.standardOutput.write(Data((marker + "\n").utf8))
+    }
+
     var body: some Scene {
         WindowGroup("Lithe", id: LitheWindowID.workspace, for: UUID.self) { windowID in
             ProjectWindowScene(
@@ -436,7 +448,9 @@ struct LitheApp: App {
                 .preferredColorScheme(settings.themePreference.preferredColorScheme)
                 .task {
                     memoryUsageMonitor.start()
-                    frameRateMonitor.start()
+                    if !LithePerformanceBaseline.isEnabled {
+                        frameRateMonitor.start()
+                    }
                 }
         } defaultValue: {
             projectWindows.defaultWindowID()

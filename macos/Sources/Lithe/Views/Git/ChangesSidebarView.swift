@@ -19,6 +19,11 @@ struct ChangesSidebarView: View {
         let _ = LitheSignpost.bodyEvaluated("ChangesSidebarView")
         VStack(spacing: 0) {
             tabHeader
+            if model.availableGitRepositoryRoots.count > 1 {
+                GitRepositoryPicker()
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+            }
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
 
             if let operation = model.gitOperationState {
@@ -174,6 +179,10 @@ struct ChangesSidebarView: View {
                     flexible: { changeList.frame(minHeight: minimumListHeight) }
                 )
             }
+        }
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
         }
     }
 
@@ -810,7 +819,7 @@ struct ChangesSidebarView: View {
     }
 
     private var stagedChanges: [GitChange] {
-        changeSections.staged
+        (model.gitFeatureIfActive?.activeRepositoryChanges ?? []).filter(\.isStaged)
     }
 
     private var canCommit: Bool {
@@ -820,11 +829,11 @@ struct ChangesSidebarView: View {
     }
 
     private var canStash: Bool {
-        !model.gitChanges.isEmpty && !model.isPerformingStashOperation
+        !model.activeGitRepositoryChanges.isEmpty && !model.isPerformingStashOperation
     }
 
     private var canShelf: Bool {
-        !model.gitChanges.isEmpty && !model.isPerformingShelfOperation
+        !model.activeGitRepositoryChanges.isEmpty && !model.isPerformingShelfOperation
     }
 
     private func statusColor(_ change: GitChange) -> Color {
@@ -856,10 +865,12 @@ struct ChangesSidebarView: View {
 
     private func parentPathText(_ change: GitChange) -> String {
         let parent = (change.path as NSString).deletingLastPathComponent
-        guard let originalPath = change.originalPath else { return parent }
+        let prefix = (model.gitFeatureIfActive?.availableRepositoryRoots.count ?? 0) > 1
+            ? change.repositoryRoot.path + "/" : ""
+        guard let originalPath = change.originalPath else { return prefix + parent }
         let originalParent = (originalPath as NSString).deletingLastPathComponent
-        guard originalParent != parent else { return parent }
-        return "\(originalParent) → \(parent)"
+        guard originalParent != parent else { return prefix + parent }
+        return "\(prefix)\(originalParent) → \(parent)"
     }
 
     private func constrained(_ value: CGFloat, minimum: CGFloat, maximum: CGFloat) -> CGFloat {

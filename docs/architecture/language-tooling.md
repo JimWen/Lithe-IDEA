@@ -149,7 +149,7 @@ LSP 控制中心标题栏的工具设置会在用户偏好中保存每个 provid
 
 当前 transport 是 LSP 标准的 stdio `Content-Length` framing。一个 provider 在一个 workspace root 下复用一个 session；同一 provider 切换到另一个 root 时，manager 会停止旧 session 并创建新 session。`java.workspacePolicy` 只要在非忽略目录发现有效 `.java` 文件就请求异步预热，但平台仅在可选 JDK 资源存在时才启动准备流程，也不需要先打开 Java 标签页；会话由 workspace 持有并在 workspace 关闭时停止。
 
-生产路径由 Rust engine 持有长生命周期 `sessionID -> RuntimeSession` registry。每个 runtime 同时拥有子进程、stdio、frame buffer、文档版本、pending request/deadline、capability 和 diagnostics；Swift 只保存不透明 `sessionID` 与 application-level `operationID`。`syncDocument` 由 Rust 决定发送 version 1 的 `didOpen` 或递增版本的 `didChange`；当 server 声明 Incremental `textDocumentSync` 且请求携带 range 时发送 range-based `didChange`，否则发送全文。`pollEvents` 立即排空队列；`waitEvents` 在 session 事件 channel 上等待直到有事件或超时后再排空 typed state/feature/diagnostic/result/error 事件。协议 reducer/host 只作为 engine 内部实现与纯函数测试 seam，不属于应用公开命令面。
+生产路径由 Rust engine 持有长生命周期 `sessionID -> RuntimeSession` registry。每个 runtime 同时拥有子进程、stdio、frame buffer、文档版本、pending request/deadline、capability 和 diagnostics；Swift 只保存不透明 `sessionID` 与 application-level `operationID`。`syncDocument` 由 Rust 决定发送 version 1 的 `didOpen` 或递增版本的 `didChange`；当 server 声明 Incremental `textDocumentSync` 且请求携带 range 时发送 range-based `didChange`，否则发送全文。`pollEvents` 立即排空队列；`waitEvents` 在 session 事件 channel 上等待直到有事件或超时后再排空 typed state/feature/diagnostic/result/error 事件。macOS 将连续原生编辑合并为相同基准快照中的一个 UTF-16 区间，并携带 `textIsSnapshot: true` 与完整缓冲区；Rust 验证增量重放结果，失效或越界时恢复为全文同步。程序化缓冲区替换会丢弃旧增量。协议 reducer/host 只作为 engine 内部实现与纯函数测试 seam，不属于应用公开命令面。
 
 平台 adapter 只能投影 Rust 发布的 lifecycle，不能再用多个布尔字段复制一套 session 状态机。Windows 的 adapter 负责持有并清理 event pump、semantic request timer 和 file attachment；React 文档 owner 负责初始化 Promise、变更队列和 debounce timer。所有启动、成功、失败、取消和超时记录都保留同一个 `operationId`，旧 attachment 的完成结果不得修改新 owner 的状态。
 
@@ -201,6 +201,12 @@ interface/inheritance` 四类图标并展示跳转结果。编辑器对 marker �
 marker 结果。新版本会取消旧批次并使缓存失效，因此频繁输入不会累计旧的
 CodeLens、implementation 或 `java/findLinks` 请求。没有语义目标的声明不显示
 图标；一个目标直接跳转，多个目标由平台 UI 显示选择列表。
+
+MyBatis Mapper 到 XML 的跳转不经过 JDT LS。`mybatis.index` 用 `tree-sitter-java`
+提取真实接口方法，再与 XML `<mapper namespace>` 中的 statement `id` 配对；
+Go to Definition 和 Cmd/Ctrl-click 仅在光标落在方法名或 XML `id` 上时优先
+使用该索引，返回类型和参数仍走语言服务器。没有配对 XML 的方法继续走普通
+LSP 定义跳转。
 
 Java 测试类与方法同样不能由 UI 猜测。Tests 面板打开或刷新时，
 `LanguageToolingSessionManager` 直接调用 JDT LS 已注册的 Java Test 扩展命令

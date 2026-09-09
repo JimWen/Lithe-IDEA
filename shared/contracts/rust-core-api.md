@@ -58,6 +58,7 @@ stable error code and a user-facing message:
 | --- | --- |
 | `core.ping` | Verify the ABI and protocol version |
 | `workspace.snapshot` | Enumerate visible workspace nodes and relative file paths |
+| `workspace.repositories` | Discover deterministic Git repository roots for an opened workspace |
 | `workspace.search` | Search visible file names and UTF-8 text files |
 | `workspace.searchEverywhere` | Search visible file names, Java types/methods, and UTF-8 text files |
 | `workspace.replacePreview` | Return deterministic replacement lines and complete replacement text |
@@ -149,12 +150,26 @@ stable error code and a user-facing message:
 | `github.parseRemote` | Parse a canonical GitHub HTTPS or SSH remote into owner/name |
 | `github.requestPlan` | Validate one GitHub operation and produce a trusted platform HTTP request plan |
 | `github.normalizeResponse` | Normalize raw GitHub JSON and HTTP status into deterministic data or a stable error |
+| `diagnostics.redactText` | Redact credentials, tokens, and home-directory paths from diagnostic-bundle text |
+| `diagnostics.buildManifest` | Shape a deterministic diagnostic bundle manifest from host-gathered environment and file facts |
 
 Workspace paths in responses are relative and use `/` separators. Line numbers
 are one-based. `git.status.repositoryRoot` may be an absolute path when the
 opened workspace is a subdirectory of the repository; all Git change paths are
 relative to that repository root. `git.status.ahead` and `behind` report the
 current branch's tracking counts and are zero when no upstream is configured.
+`workspace.repositories.repositories` is ordered with the containing workspace
+repository first when present, then repositories under the opened workspace by
+workspace containment, depth, and path. Each entry contains an absolute native
+`path` because repository roots are platform boundary values and may be outside
+the opened folder when the folder is nested inside a checkout. Core treats both
+`.git` directories and `.git` files as repository markers. The default traversal
+visits the entire workspace tree, including build and dependency folders, and
+continues below discovered repositories. Git metadata itself is not traversed.
+Symbolic directory links are not followed, preventing cycles and traversal
+outside the workspace. Callers may explicitly supply `maxDirectories` and
+`maxDepth` to request a bounded scan; product consumers omit these limits.
+Traversal checks cancellation between directories and entries.
 `git.worktrees.worktrees` is ordered with the primary worktree first and then
 by path. Each entry contains `path`, `head`, nullable `branch`, `isCurrent`,
 `isPrimary`, `isBare`, `isDetached`, `isLocked`, nullable `lockReason`,
@@ -830,7 +845,8 @@ returns deterministically sorted `expiredWorkspaceKeys` older than the fixed
 enumeration, revalidation, deletion, and error logging; Core performs no cache
 filesystem I/O. See `shared/fixtures/lsp/jdt-cache-retention-v1.json`.
 
-`lsp.syncDocument` accepts `{ sessionId, uri, languageId, text?, contentChanges? }`.
+`lsp.syncDocument` accepts
+`{ sessionId, uri, languageId, text?, contentChanges?, textIsSnapshot? }`.
 The first sync emits `didOpen` at version 1. Later syncs emit `didChange` with
 increasing versions. When the server advertised incremental `textDocumentSync`
 and `contentChanges` includes LSP ranges, the notification carries those
@@ -838,6 +854,15 @@ range-based edits and does not require a full document `text` field. Otherwise
 the change is a full-text replacement. The response is
 `{ documentVersion, changed }`; submitting identical full text returns
 `changed: false`, preserves the version, and emits no LSP notification.
+
+`textIsSnapshot` defaults to `false` for compatibility with delta-only callers.
+When `true`, `text` is the authoritative current buffer, including an empty
+buffer. Core validates ranged replay against that snapshot before updating
+document state or sending a notification; invalid or stale deltas recover with
+a full replacement. Ranges in one request refer to the same pre-change
+snapshot. macOS coalesces sequential native edits into one delta and always
+provides the current full snapshot. Programmatic edits invalidate the pending
+delta. See `shared/fixtures/lsp/document-snapshot-recovery-v1.json`.
 
 `lsp.workspaceFilesChanged` accepts a session ID and ordered file URI changes
 whose `kind` is `created`, `changed`, or `deleted`. It emits one

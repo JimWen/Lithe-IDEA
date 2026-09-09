@@ -3,7 +3,7 @@ import LitheModuleAPI
 
 @MainActor
 public final class GoLanguageServerModule: LitheModule {
-    public static let moduleManifest = OfficialPluginCatalog.moduleManifest(
+    public static let moduleManifest = OfficialPluginCatalog.moduleManifestV2(
         for: .languageServerExtension(goLanguageID)
     )!
 

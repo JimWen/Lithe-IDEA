@@ -9,7 +9,7 @@ import LitheRustCore
 /// The JSON request/response shape is also the contract that the future
 /// Windows Qt binding will consume. The bridge stays synchronous at this
 /// layer; callers move filesystem and Git work off the main actor.
-struct RustCoreBridge: Sendable {
+struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
     private struct Request<Payload: Encodable>: Encodable {
         let id: String
         let operationId: String?
@@ -75,6 +75,14 @@ struct RustCoreBridge: Sendable {
                 files: files.map { rootURL.appendingPathComponent($0) }
             )
         }
+    }
+
+    struct WorkspaceRepositoryPayload: Decodable, Sendable {
+        let path: String
+    }
+
+    struct WorkspaceRepositoriesPayload: Decodable, Sendable {
+        let repositories: [WorkspaceRepositoryPayload]
     }
 
     private struct SearchIndexStatusPayload: Decodable {
@@ -213,6 +221,49 @@ struct RustCoreBridge: Sendable {
 
 
 
+
+
+    struct DiagnosticsRedactTextPayload: Decodable, Sendable {
+        let redacted: String
+    }
+
+    struct DiagnosticsManifestPayload: Decodable, Sendable {
+        struct Environment: Decodable, Sendable {
+            let appVersion: String
+            let osName: String
+            let osVersion: String
+            let cpuCoreCount: Int
+            let memoryRssBytes: Int64
+            let diskFreeBytes: Int64
+        }
+
+        struct FileEntry: Decodable, Sendable {
+            let relativePath: String
+            let sizeBytes: Int64
+            let description: String
+        }
+
+        let schemaVersion: Int
+        let generatedAtEpochMilliseconds: Int64
+        let environment: Environment
+        let files: [FileEntry]
+    }
+
+    struct DiagnosticsEnvironmentInfo: Sendable {
+        let appVersion: String
+        let osName: String
+        let osVersion: String
+        let cpuCoreCount: Int
+        let memoryRssBytes: Int64
+        let diskFreeBytes: Int64
+    }
+
+    struct DiagnosticsFileEntryInput: Sendable {
+        let relativePath: String
+        let sizeBytes: Int64
+        let description: String
+    }
+
     struct JavaRunConfigurationsPayload: Decodable, Sendable {
         struct MainClass: Decodable, Sendable {
             let path: String
@@ -231,6 +282,8 @@ struct RustCoreBridge: Sendable {
         let mainClasses: [MainClass]
         let configurations: [Configuration]
     }
+
+
 
 
     struct RunConfigurationPayload: Codable, Sendable {
@@ -1128,8 +1181,35 @@ struct RustCoreBridge: Sendable {
 
 
 
+
+
     private struct MarkdownRenderRequest: Encodable {
         let source: String
+    }
+
+    private struct DiagnosticsRedactTextRequest: Encodable {
+        let text: String
+    }
+
+    private struct DiagnosticsManifestRequest: Encodable {
+        struct Environment: Encodable {
+            let appVersion: String
+            let osName: String
+            let osVersion: String
+            let cpuCoreCount: Int
+            let memoryRssBytes: Int64
+            let diskFreeBytes: Int64
+        }
+
+        struct FileEntry: Encodable {
+            let relativePath: String
+            let sizeBytes: Int64
+            let description: String
+        }
+
+        let environment: Environment
+        let files: [FileEntry]
+        let generatedAtEpochMilliseconds: Int64
     }
 
     private struct LspTextEditsRequest: Encodable {
@@ -1383,10 +1463,24 @@ struct RustCoreBridge: Sendable {
     }
 
     private struct LspSyncDocumentRequest: Encodable {
+        struct Change: Encodable {
+            let range: Range
+            let text: String
+        }
+        struct Position: Encodable {
+            let line: Int
+            let character: Int
+        }
+        struct Range: Encodable {
+            let start: LspSyncDocumentRequest.Position
+            let end: LspSyncDocumentRequest.Position
+        }
         let sessionId: String
         let uri: String
         let languageId: String
         let text: String
+        let contentChanges: [Change]
+        let textIsSnapshot = true
     }
 
     private struct LspWorkspaceFilesChangedRequest: Encodable {
@@ -1521,6 +1615,8 @@ struct RustCoreBridge: Sendable {
     }
 
 
+
+
     private struct JavaRunConfigurationsRequest: Encodable {
         let root: String
         let paths: [String]
@@ -1562,6 +1658,8 @@ struct RustCoreBridge: Sendable {
     }
 
 
+
+
     private struct JavaCodeVisionRequest: Encodable {
         let root: String
         let targetPath: String
@@ -1581,6 +1679,10 @@ struct RustCoreBridge: Sendable {
 
 
     private struct GitStatusRequest: Encodable {
+        let root: String
+    }
+
+    private struct WorkspaceRepositoriesRequest: Encodable {
         let root: String
     }
 
@@ -2172,10 +2274,19 @@ struct RustCoreBridge: Sendable {
     }
 
 
+
+
     func gitStatus(at rootURL: URL) -> GitStatusPayload? {
         execute(
             command: "git.status",
             payload: GitStatusRequest(root: rootURL.standardizedFileURL.path)
+        )
+    }
+
+    func workspaceRepositories(at rootURL: URL) -> WorkspaceRepositoriesPayload? {
+        execute(
+            command: "workspace.repositories",
+            payload: WorkspaceRepositoriesRequest(root: rootURL.standardizedFileURL.path)
         )
     }
 
@@ -2547,6 +2658,45 @@ struct RustCoreBridge: Sendable {
         )
     }
 
+    /// Redacts credentials, tokens, and home-directory paths from diagnostic
+    /// text before it is staged for a diagnostic bundle export.
+    func redactDiagnosticText(_ text: String) -> Result<DiagnosticsRedactTextPayload, CoreCallError> {
+        executeResult(
+            command: "diagnostics.redactText",
+            payload: DiagnosticsRedactTextRequest(text: text)
+        )
+    }
+
+    /// Shapes a deterministic diagnostic bundle manifest from environment and
+    /// file facts the caller already gathered and redacted natively.
+    func buildDiagnosticsManifest(
+        environment: DiagnosticsEnvironmentInfo,
+        files: [DiagnosticsFileEntryInput],
+        generatedAtEpochMilliseconds: Int64
+    ) -> Result<DiagnosticsManifestPayload, CoreCallError> {
+        executeResult(
+            command: "diagnostics.buildManifest",
+            payload: DiagnosticsManifestRequest(
+                environment: DiagnosticsManifestRequest.Environment(
+                    appVersion: environment.appVersion,
+                    osName: environment.osName,
+                    osVersion: environment.osVersion,
+                    cpuCoreCount: environment.cpuCoreCount,
+                    memoryRssBytes: environment.memoryRssBytes,
+                    diskFreeBytes: environment.diskFreeBytes
+                ),
+                files: files.map {
+                    DiagnosticsManifestRequest.FileEntry(
+                        relativePath: $0.relativePath,
+                        sizeBytes: $0.sizeBytes,
+                        description: $0.description
+                    )
+                },
+                generatedAtEpochMilliseconds: generatedAtEpochMilliseconds
+            )
+        )
+    }
+
     func applyLanguageServerTextEdits(
         _ edits: [LanguageServerTextEdit],
         to text: String
@@ -2757,7 +2907,8 @@ struct RustCoreBridge: Sendable {
         sessionID: String,
         fileURL: URL,
         languageID: String,
-        text: String
+        text: String,
+        changes: [LanguageServerDocumentChange] = []
     ) -> Result<LspSyncDocumentPayload, CoreCallError> {
         executeResult(
             command: "lsp.syncDocument",
@@ -2765,9 +2916,53 @@ struct RustCoreBridge: Sendable {
                 sessionId: sessionID,
                 uri: fileURL.standardizedFileURL.absoluteString,
                 languageId: languageID,
-                text: text
+                // Keep the full snapshot for the initial didOpen and as a
+                // recovery source; Rust emits range-based didChange when safe.
+                text: text,
+                contentChanges: changes.map { change in
+                    LspSyncDocumentRequest.Change(
+                        range: .init(
+                            start: LspSyncDocumentRequest.Position(
+                                line: change.start.line,
+                                character: change.start.utf16Column
+                            ),
+                            end: LspSyncDocumentRequest.Position(
+                                line: change.end.line,
+                                character: change.end.utf16Column
+                            )
+                        ),
+                        text: change.text
+                    )
+                }
             )
         )
+    }
+
+    func syncLanguageServerDocument(
+        sessionID: String,
+        fileURL: URL,
+        languageID: String,
+        text: String,
+        changes: [LanguageServerDocumentChange]
+    ) -> Result<LanguageServerDocumentSync, LanguageServerRuntimeFailure> {
+        lspSyncDocument(
+            sessionID: sessionID,
+            fileURL: fileURL,
+            languageID: languageID,
+            text: text,
+            changes: changes
+        ).map {
+            LanguageServerDocumentSync(
+                documentVersion: $0.documentVersion,
+                changed: $0.changed
+            )
+        }.mapError { error in
+            LanguageServerRuntimeFailure(
+                code: error.code,
+                message: error.message,
+                details: error.details
+            )
+        }
     }
 
     func lspWorkspaceFilesChanged(

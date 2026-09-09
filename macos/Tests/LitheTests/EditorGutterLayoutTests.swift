@@ -1,5 +1,6 @@
 import AppKit
 import Testing
+import LitheCoreContracts
 @testable import Lithe
 
 @Suite("Editor gutter layout")
@@ -117,6 +118,32 @@ struct EditorGutterLayoutTests {
 
     @MainActor
     @Test
+    func runnableMenuKeepsClickedEntryAndActionOwnerAcrossRefreshes() throws {
+        let gutter = LineNumberGutterView(frame: .zero)
+        let runnable = DocumentRunnable(
+            id: "go:main", configurationID: nil, displayName: "main", kind: .application,
+            line: 3, symbolRange: LanguageServerRange(
+                start: .init(line: 2, utf16Column: 5), end: .init(line: 2, utf16Column: 9)
+            )
+        )
+        var actions: [String] = []
+        gutter.updateRunnableMarkers([runnable],
+            onRun: { actions.append("run:\($0.id)") },
+            onDebug: { actions.append("debug:\($0.id)") },
+            onModify: { actions.append("modify:\($0.id)") })
+        let items = gutter.runnableContextMenuItems(for: runnable)
+        gutter.updateRunnableMarkers([], onRun: { _ in Issue.record("Retargeted Run") },
+            onDebug: { _ in Issue.record("Retargeted Debug") },
+            onModify: { _ in Issue.record("Retargeted configuration") })
+        #expect(items.filter(\.isEnabled).map(\.title).contains("Modify Run Configuration…"))
+        try #require(items.first { $0.title == "Run ‘main’" }).action()
+        try #require(items.first { $0.title == "Debug ‘main’" }).action()
+        try #require(items.first { $0.title == "Modify Run Configuration…" }).action()
+        #expect(actions == ["run:go:main", "debug:go:main", "modify:go:main"])
+    }
+
+    @MainActor
+    @Test
     func breakpointContextMenuOffersEditingAndDispatchesTheEditorLine() throws {
         let gutter = LineNumberGutterView(frame: NSRect(x: 0, y: 0, width: 80, height: 200))
         var editedLine: Int?
@@ -126,14 +153,14 @@ struct EditorGutterLayoutTests {
             onEdit: { editedLine = $0 }
         )
 
-        let menu = try #require(gutter.debugBreakpointContextMenu(forLine: 6))
-        #expect(menu.items.map(\.title) == [
+        let items = gutter.debugBreakpointContextMenuItems(forLine: 6)
+        #expect(items.map(\.title) == [
             "Edit Breakpoint…",
             "Disable Breakpoint",
             "Remove Breakpoint"
         ])
 
-        gutter.editDebugBreakpointFromMenu()
+        try #require(items.first).action()
         #expect(editedLine == 6)
     }
 
@@ -148,9 +175,9 @@ struct EditorGutterLayoutTests {
             canAdd: { $0 == 4 }
         )
 
-        let menu = try #require(gutter.debugBreakpointContextMenu(forLine: 4))
-        #expect(menu.items.map(\.title) == ["Set Breakpoint"])
-        gutter.addDebugBreakpointFromMenu()
+        let items = gutter.debugBreakpointContextMenuItems(forLine: 4)
+        #expect(items.map(\.title) == ["Set Breakpoint"])
+        try #require(items.first).action()
         #expect(toggledLine == 4)
     }
 

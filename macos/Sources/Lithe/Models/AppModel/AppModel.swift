@@ -14,6 +14,9 @@ import LitheCoreContracts
 @MainActor
 final class AppModel: ObservableObject, Identifiable {
     let id = UUID()
+    let diagnosticsFeature: DiagnosticsFeatureModel
+    private var diagnosticsObservation: AnyCancellable?
+    private var workspaceEditObservation: AnyCancellable?
     @Published private(set) var workspaceURL: URL? {
         didSet {
             invalidateCargoWorkspace()
@@ -336,7 +339,9 @@ final class AppModel: ObservableObject, Identifiable {
     func scheduleObjectWillChangeRelay() {
         guard !isObjectWillChangeRelayScheduled else { return }
         isObjectWillChangeRelayScheduled = true
+        let signpost = LitheSignpost.begin("appmodel.relay")
         Task { @MainActor [weak self] in
+            defer { LitheSignpost.end("appmodel.relay", signpost) }
             guard let self else { return }
             self.isObjectWillChangeRelayScheduled = false
             self.objectWillChange.send()
@@ -346,6 +351,7 @@ final class AppModel: ObservableObject, Identifiable {
     init(settings: AppSettings, services: AppServices) {
         self.settings = settings
         self.services = services
+        diagnosticsFeature = DiagnosticsFeatureModel(service: services.diagnosticsExportService)
         platformUI = services.platformUI
         keyboardShortcutFeature = KeyboardShortcutFeatureModel(settings: settings)
         workbenchBackgroundFeature = WorkbenchBackgroundFeatureModel(settings: settings, platform: services.workbenchBackgroundPlatform)
@@ -386,6 +392,18 @@ final class AppModel: ObservableObject, Identifiable {
             self?.languageToolingSessionsIfActive
         }
         workbenchBackgroundFeatureObservation = workbenchBackgroundFeature.objectWillChange.sink { [weak self] _ in self?.scheduleObjectWillChangeRelay() }
+        diagnosticsObservation = diagnosticsFeature.objectWillChange.sink { [weak self] _ in
+            self?.scheduleObjectWillChangeRelay()
+        }
+        services.workspaceTextEditUndoController.configure(
+            documents: { [weak self] in self?.openDocuments ?? [] },
+            willMutate: { [weak self] in self?.documentFeature.beginBufferMutation($0) },
+            didMutate: { [weak self] in self?.documentFeature.endBufferMutation($0) },
+            notifyFailure: { [weak self] in self?.showNotification($0) }
+        )
+        workspaceEditObservation = services.workspaceTextEditUndoController.objectWillChange.sink { [weak self] _ in
+            self?.scheduleObjectWillChangeRelay()
+        }
         moduleRuntimeObservationID = services.moduleRuntime.observeEvents { [weak self] event in
             guard let self else { return }
             handleCargoModuleEvent(event)
@@ -747,6 +765,8 @@ final class AppModel: ObservableObject, Identifiable {
     /// on-demand activation that follows a project switch can join the same
     /// operation instead of racing a capability release.
     private func beginModuleRuntimeShutdown() {
+        diagnosticsFeature.dismiss()
+        services.workspaceTextEditUndoController.reset()
         guard moduleRuntimeShutdownTask == nil else { return }
         let moduleRuntime = services.moduleRuntime
         moduleRuntimeShutdownTask = Task { @MainActor [weak self] in
@@ -1432,7 +1452,8 @@ final class AppModel: ObservableObject, Identifiable {
             try languageToolingSessions.synchronizeLanguageServer(
                 for: document.url,
                 text: document.text,
-                rootURL: workspaceURL
+                rootURL: workspaceURL,
+                changes: document.takePendingLanguageServerChanges()
             )
             languageToolingFeature.markActivationSucceeded(providerID: descriptor.id)
             if let moduleID = services.pluginCatalog.languageSupport(for: document.url)?
@@ -1478,7 +1499,7 @@ final class AppModel: ObservableObject, Identifiable {
     func generateCommitMessage() async {
         guard !isGeneratingCommitMessage else { return }
         guard let gitFeature = await activateGitModule() else { return }
-        let stagedChanges = gitFeature.gitChanges.filter(\.isStaged)
+        let stagedChanges = gitFeature.activeRepositoryChanges.filter(\.isStaged)
         guard !stagedChanges.isEmpty else {
             showNotification("Stage at least one file first")
             return
@@ -1507,7 +1528,7 @@ final class AppModel: ObservableObject, Identifiable {
                 settings: settings.commitMessageAI
             )
             let currentStagedChangeIDs = Set(
-                gitFeature.gitChanges.filter(\.isStaged).map(\.id)
+                gitFeature.activeRepositoryChanges.filter(\.isStaged).map(\.id)
             )
             guard currentStagedChangeIDs == stagedChangeIDs else {
                 showNotification("Staged files changed before generation finished")
@@ -1559,240 +1580,4 @@ final class AppModel: ObservableObject, Identifiable {
         pendingGeneratedCommitMessage = nil
     }
 
-    func toggleStaging(_ change: GitChange) {
-        guard let gitFeature = gitFeatureIfActive else { return }
-        guard let staged = gitFeature.beginToggleStaging(change) else { return }
-        Task { await gitFeature.finishToggleStaging(change, staged: staged) }
-    }
-
-    func setStaging(_ changes: [GitChange], staged: Bool) {
-        guard let gitFeature = gitFeatureIfActive else { return }
-        let pendingChanges = gitFeature.beginSetStaging(changes, staged: staged)
-        Task { await gitFeature.finishSetStaging(pendingChanges, staged: staged) }
-    }
-
-    func stageAllChanges() async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.stageAllChanges()
-    }
-
-    func toggleGitLog() async {
-        isGitLogVisible.toggle()
-        if isGitLogVisible {
-            isTestsVisible = false
-            isTerminalVisible = false
-            isReferencesVisible = false
-            isProblemsVisible = false
-            isRunVisible = false
-            isDebugVisible = false
-        }
-        if isGitLogVisible && gitCommits.isEmpty {
-            if selectedGitReference == nil {
-                await showAllGitReferences()
-            } else {
-                await refreshGitHistory()
-            }
-        } else if !isGitLogVisible {
-            gitFeatureIfActive?.cancelGitHistoryLoading()
-        }
-    }
-
-    func closeGitLog() {
-        isGitLogVisible = false
-        gitFeatureIfActive?.cancelGitHistoryLoading()
-    }
-
-    func selectGitReference(_ reference: GitReference?) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.selectGitReference(reference)
-    }
-
-    func showAllGitReferences() async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.showAllGitReferences()
-    }
-
-    func refreshGitHistory() async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.refreshGitHistory()
-    }
-
-    func loadMoreGitHistory() async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.loadMoreGitHistory()
-    }
-
-    func selectGitCommit(_ commit: GitCommit) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.selectGitCommit(commit)
-    }
-
-    func applyGitLogFilter(_ query: String) async {
-        await applyGitLogFilter(GitLogQuery.parse(query))
-    }
-
-    func applyGitLogFilter(_ query: GitLogQuery) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.applyGitLogFilter(query)
-    }
-
-    func showGitCommitDiff(for file: GitCommitFile) {
-        activeDocumentID = nil
-        Task { [weak self] in
-            guard let gitFeature = await self?.activateGitModule() else { return }
-            await gitFeature.showGitCommitDiff(for: file)
-        }
-    }
-
-    func closeGitCommitDiff() {
-        gitFeatureIfActive?.closeGitCommitDiff()
-    }
-
-    func showGitCommit(_ hash: String) async {
-        guard let gitFeature = await activateGitModule(),
-              gitFeature.gitRepositoryRoot != nil,
-              !hash.allSatisfy({ $0 == "0" }) else { return }
-        isTerminalVisible = false
-        isReferencesVisible = false
-        isProblemsVisible = false
-        isRunVisible = false
-        isDebugVisible = false
-        isTestsVisible = false
-        isGitLogVisible = true
-        await gitFeature.showGitCommit(hash)
-    }
-
-    func showComparisonWithWorkingTree(for reference: GitReference) async {
-        activeDocumentID = nil
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.showComparisonWithWorkingTree(for: reference)
-    }
-
-    func showComparison(from reference: GitReference, to target: GitReference) async {
-        activeDocumentID = nil
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.showComparison(from: reference, to: target)
-    }
-
-    func selectBranchComparisonFile(_ file: GitBranchComparisonFile) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.selectBranchComparisonFile(file)
-    }
-
-    func closeBranchComparison() {
-        gitFeatureIfActive?.closeBranchComparison()
-    }
-
-    func createBranch(
-        named rawName: String,
-        from reference: GitReference,
-        checkout: Bool
-    ) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.createBranch(named: rawName, from: reference, checkout: checkout)
-    }
-
-    func renameBranch(_ reference: GitReference, to rawName: String) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.renameBranch(reference, to: rawName)
-    }
-
-    func deleteBranch(_ reference: GitReference) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.deleteBranch(reference)
-    }
-
-    func restoreRecentlyDeletedBranch() async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.restoreRecentlyDeletedBranch()
-    }
-
-    func dismissDeletedBranchBanner() {
-        gitFeatureIfActive?.dismissDeletedBranchBanner()
-    }
-
-    /// Returns nil on success, otherwise the error message a tag dialog
-    /// should show where the user typed.
-    @discardableResult
-    func createTag(at commit: GitCommit, name: String, message: String) async -> String? {
-        guard let gitFeature = await activateGitModule() else { return "No Git repository is open" }
-        return await gitFeature.createTag(at: commit, name: name, message: message)
-    }
-
-    func deleteTag(_ reference: GitReference) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.deleteTag(reference)
-    }
-
-    func restoreRecentlyDeletedTag() async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.restoreRecentlyDeletedTag()
-    }
-
-    func dismissDeletedTagBanner() {
-        gitFeatureIfActive?.dismissDeletedTagBanner()
-    }
-
-    func mergeBranch(_ reference: GitReference) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.mergeBranch(reference)
-    }
-
-    func continueGitOperation() async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.continueGitOperation()
-    }
-
-    func resolvePullStrategy(_ strategy: GitPullStrategy) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.resolvePullStrategy(strategy)
-    }
-
-    func cancelPullStrategy() {
-        gitFeatureIfActive?.cancelPullStrategy()
-    }
-
-    func resolveIntegrationConflict(_ request: GitIntegrationConflictRequest) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.resolveIntegrationConflict(request)
-    }
-
-    func cancelIntegrationConflict() {
-        gitFeatureIfActive?.cancelIntegrationConflict()
-    }
-
-    func abortGitOperation() async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.abortGitOperation()
-    }
-
-    func skipGitOperationStep() async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.skipGitOperationStep()
-    }
-
-    func rebaseCurrentBranch(onto reference: GitReference) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.rebaseCurrentBranch(onto: reference)
-    }
-
-    func checkoutAndRebase(_ reference: GitReference) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.checkoutAndRebase(reference)
-    }
-
-    func pullRemoteReference(_ reference: GitReference, strategy: GitPullStrategy) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.pullRemoteReference(reference, strategy: strategy)
-    }
-
-    func updateCurrentBranch(_ reference: GitReference) async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.updateCurrentBranch(reference)
-    }
-
-    func fetchGit() async {
-        guard let gitFeature = await activateGitModule() else { return }
-        await gitFeature.fetchGit()
-    }
 }

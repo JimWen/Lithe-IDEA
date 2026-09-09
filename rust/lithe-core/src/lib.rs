@@ -3,6 +3,7 @@
 use std::path::Path;
 
 mod debug;
+mod diagnostics;
 mod execution;
 mod git;
 mod github;

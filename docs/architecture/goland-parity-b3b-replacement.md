@@ -1,6 +1,6 @@
 # B3b 搜索范围与跨文件替换事务
 
-状态：B3b1 正在实施；2026-09-08 已接通显式范围、原文/位置和结构化预览结果，并完成阶段自动验证，见下方实施记录。事务、原生 Undo 和整体 GUI 验收仍未完成。历史基线为 `517b4584`。B3b1a Unicode matcher/候选修复已完成，方案与代码经 `workbench_audit` 独立审查通过，自动检查和 ARM64 真实点击见 [验收记录](#b3b1a-acceptance)。下述 scope 已进入实现，事务为后续实施设计，原生 undo 仍须专项审查；本次审查未放行新的 Apply 事务。B3a 和 B4a0–B4a3 已验收，跳过；Project 按用户要求暂停。本批是 [B3 搜索方案](goland-parity-b3-search.md) 的细化，后续 B3c/B3d、设置、语言和 Git 批次仍保留。
+状态：显式范围、结构化预览、打开缓冲区与关闭文件的替换事务、租约协调和统一 Undo/Redo 已接入并通过回归。完整打包 GUI 已验证 Go 入口图标、左右键 Run/Debug/Modify 菜单和配置持久化；见[当前事务实施记录](#buffer-transaction-integration)。B3b1a 的历史独立审查和 ARM64 验收见[Unicode 验收](#b3b1a-acceptance)。下方原始审计与分批设计保留为历史依据；当前实现和已验证范围以最新记录为准，未据此宣称 B3c/B3d 或 B6 全部完成。
 
 ## 1. 先解决什么
 
@@ -225,3 +225,34 @@ shared fixtures 与 stable-tests 静态门禁通过。新的共享
 实施命令语法与 `git diff --cached --check` 通过；Search 契约差异单独留在工作区。
 原始清单、文件摘要及文档检查保留在
 `.artifacts/plan-implementation/uncommitted-review/`；历史测试仍只代表当时覆盖的场景。
+
+<a id="buffer-transaction-integration"></a>
+
+## 打开缓冲区事务与 Undo/Redo（2026-09-09）
+
+`WorkspaceTextEditUndoController` 现在统一执行初次 Apply 与后续每轮 Undo/Redo。
+每次按当前打开文档重新分配缓冲区/磁盘目标，核对原文并取得准确的文档租约；关闭
+文件通过 `WorkspaceTextEditCoordinator` 预检、顺序提交和逆序补偿，成功后才提交
+打开缓冲区。已 dirty 的文档也发布程序化更新，原生编辑器能够同步显示；打开文件
+遵循用户原有自动保存设置，自动保存关闭时保持 dirty。
+
+`DocumentFeatureModel` 在租约期间取消待执行自动保存、暂存 watcher 事件并拒绝
+显式保存；释放后先处理外部变更，再恢复语言服务与自动保存。URL 修改时间查询
+清除 Foundation 的缓存，避免原子替换后的真实磁盘变更被旧 mtime 掩盖。存在外部
+冲突时保留编辑缓冲区与磁盘各自内容，不执行自动覆盖。
+
+UndoManager 的逆向项在原生 undo/redo 回调内同步注册，磁盘工作由单一任务持有。
+事务期间阻止重复 Undo/Redo 和原生编辑；重新校验失败时不修改打开缓冲区，清除
+失效的事务栈项并提示用户。任意轮数的 Undo/Redo 都复用同一路径，代替原来的两层
+嵌套回调。项目结束时取消任务并清空对应撤销栈。
+
+文件端口返回本次原子替换安装后的内容与身份；补偿验证该身份及内容，而非已经
+失效的旧 inode。第二个文件提交失败可恢复第一个文件；第三方已再次改写时返回
+`recoveryRequired` 并保留第三方内容。协调器拒绝并发批次和重复路径，取消进入
+现有逆序补偿流程。
+
+回归覆盖混合 dirty 缓冲区/磁盘目标、连续三轮 Undo/Redo、外部改写拒绝、租约期间
+取消、协调器重入、真实 macOS 文件补偿以及 watcher/自动保存协调。
+日志和后续界面证据位于 `.artifacts/main-merge-transaction-tests.log`、
+`.artifacts/test-stability/main-merge-transactions.*` 与 `.artifacts/main-merge-ui/`。
+完整构建与 GUI 结果将在最终验收后补入，不沿用合并前结果。

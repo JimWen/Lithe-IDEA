@@ -58,6 +58,20 @@ final class MacServiceContainer {
         MacApplicationLogWriter()
     }
 
+    static func makeDiagnosticsExportService(
+        fileStorage: any FileStorage,
+        processRunner: any ProcessRunner,
+        core: RustCoreBridge
+    ) -> DiagnosticsExportService {
+        DiagnosticsExportService(
+            logDirectoryProviding: makeLogDirectoryProvider(),
+            fileStorage: fileStorage,
+            systemDiagnostics: MacSystemDiagnosticsProvider(),
+            archiver: MacDittoArchiver(processRunner: processRunner),
+            core: core
+        )
+    }
+
     init(
         store: any KeyValueStore,
         settings: AppSettings,
@@ -553,7 +567,10 @@ final class MacServiceContainer {
             directoryWatcherFactory: MacDirectoryWatcherFactory(),
             platformUI: platformUI,
             shortcutDetectorFactory: MacShortcutDetectorFactory(),
-            commandProjectionScheduler: MacCommandProjectionScheduler()
+            commandProjectionScheduler: MacCommandProjectionScheduler(),
+            diagnosticsExportService: Self.makeDiagnosticsExportService(
+                fileStorage: fileStorage, processRunner: processRunner, core: rustCore
+            )
         )
         moduleLifecycleCoordinator.start()
         Task { try? await moduleRegistry.startEagerModules() }

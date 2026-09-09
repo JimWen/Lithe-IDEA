@@ -7,6 +7,7 @@ public final class TerminalSession: ObservableObject, Identifiable {
     @Published public private(set) var isRunning = false
     @Published public private(set) var isReady = false
     @Published public private(set) var isManagedProcess = false
+    @Published public private(set) var launchError: String?
     @Published public private(set) var shellName = "Shell"
     @Published public private(set) var processTitle: String?
     @Published public private(set) var currentDirectory: URL?
@@ -131,6 +132,7 @@ public final class TerminalSession: ObservableObject, Identifiable {
         shellLaunch = nil
         lastError = nil
         isManagedProcess = true
+        launchError = nil
         currentDirectory = workingDirectory
         processTitle = launch.title?.trimmingCharacters(in: .whitespacesAndNewlines)
         if processTitle?.isEmpty == true { processTitle = nil }

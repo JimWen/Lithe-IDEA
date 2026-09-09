@@ -30,8 +30,10 @@ Go 与 Rust 的项目设置页分别显示 Go SDK (GOROOT) / Rust toolchain，�
 
 验证命令：`swift test --filter 'ProjectRuntimeTests|GoTreePresentationTests|CargoTreePresentationTests'`（19 项通过）、Go/Rust 树测试（15 项通过）、`scripts/verify-official-plugins.sh`、`scripts/verify-service-boundaries.sh`、`verify-test-stability.sh` 与 `git diff --check` 均通过。
 
-## 远端 v0.4.4 更新评估（2026-09-09）
+## 远端 main 合并适配（2026-09-09）
 
-远端 `main` 最新发布链为 v0.4.4；本分支选择性合入发布说明和 Homebrew cask 的版本、校验和更新。远端同时包含 Windows 预览、Windows Git Bash/欢迎页流程和 Java Mapper/Maven 扩展，这些改动依赖已移除的 Windows 产品树或完整 Java 工具链，未合入 macOS-only 分支。Java 保留源文件编辑、语法和基础导航能力，默认不打包 JDK/JDTLS、Java Debug/Test；Rust、Go、Python 仍是运行时验收优先级。
+初次评估仅同步 `7468e21c`、`b405902e` 的发布信息；后续按用户要求执行完整历史合并，目标为 `4bb921dc78ef237fb6a51e2c1c0b62b0f04e5912`。合并结果排除 Windows、Java、Maven、MyBatis 及相关框架增量，保留当前 Go/Rust/Python 优先支持与 Java 基础编辑范围。
 
-合入提交：`7468e21c`（v0.4.4 发布说明）、`b405902e`（v0.4.4 Homebrew cask）。远端 `3fcb508f` 的旧提交文件树改动因目标视图已在本分支移除而未套用，避免回退当前工作区实现。
+通用改进已适配到本分支的 AppModel 特性扩展、按窗口管理的工作区、插件租约和文档事务边界。`3fcb508f` 的提交文件树修复现已通过原生文件树接入，之前“目标已移除，未套用”的结论不再适用。运行入口、项目工具链发现、配置持久化与插件隔离恢复继续使用本分支实现。
+
+本次跨特性审查与验证结果统一记录在 [macOS 服务边界](mac-service-boundaries.md#upstream-main-integration-2026-09-09)；上方预览包验收属于合并前的历史证据。

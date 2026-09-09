@@ -19,6 +19,9 @@ struct GoProjectToolsTests {
             providedCapabilities: [.languageExecutionExtension("go"), .languageTestingExtension("go")]
         )
         #expect(OfficialPluginCatalog.moduleManifest(for: moduleID) == legacy)
+        #expect(OfficialPluginCatalog.moduleManifest(for: .languageServerExtension("go"))?.defaultState == .disabled)
+        #expect(GoExecutionModule.moduleManifest.defaultState == .enabled)
+        #expect(GoLanguageServerModule.moduleManifest.defaultState == .enabled)
         #expect(GoExecutionModule.moduleManifest.providedCapabilities == legacy.providedCapabilities.union([
             .languageProjectTools("go")
         ]))
