@@ -1,6 +1,6 @@
 # 项目工具链配置与入口运行配置
 
-状态：实施与真实界面验收中。
+状态：已完成并通过真实打包界面验收。
 
 ## 验收范围
 
@@ -18,6 +18,12 @@ AppModel 在 workspace rebuild 完成且工作区代数仍匹配时触发项目�
 
 macOS 工具发现支持 GOROOT、PATH、Homebrew、Go 版本管理器目录和 GOPATH 下的工具链缓存。
 
-## 待完成的验收
+Go 与 Rust 的项目设置页分别显示 Go SDK (GOROOT) / Rust toolchain，检测菜单沿用平台发现优先级；Go Finder 启动环境会优先使用 GOROOT/GOPATH 并展示版本管理器和缓存中的可执行文件。
 
-真实打包界面已暴露 Finder 环境下缺少 Go 候选的问题。仍需完整验证 go env 主动发现、SDK 版本展示、右键目标配置绑定、新项目首次 Debug、设置布局对齐及完整包点击流程。现有单元测试通过不能代替这些验收。
+入口菜单通过文档 URL 解析到对应的生成配置：Go 入口使用项目目录名，Rust `src/main.rs` 使用 Cargo 包目录名，Run、Debug 与 Modify Run Configuration 都先选中该配置再执行。
+
+## 验收记录
+
+完整预览包通过 `scripts/preview.sh` 构建并打开，Go SDK 菜单实际列出 `.g/go`、版本管理器和 GOPATH toolchain；Rust 页面实际列出 Cargo。Go `main` 与 Rust `main.rs` 的右键菜单均实际显示 Run、Debug、Modify Run Configuration，且 Rust 菜单标题与 `scrap_url` 配置一致。Go 运行窗口实际输出 `$ go run .` 与程序输出，未再出现缺失 execution capability。配置编辑器实际保存工作目录、程序参数和环境变量到 `.lithe/run/local.json`。
+
+验证命令：`swift test --filter 'ProjectRuntimeTests|GoTreePresentationTests|CargoTreePresentationTests'`（19 项通过）、Go/Rust 树测试（15 项通过）、`scripts/verify-official-plugins.sh`、`scripts/verify-service-boundaries.sh`、`verify-test-stability.sh` 与 `git diff --check` 均通过。

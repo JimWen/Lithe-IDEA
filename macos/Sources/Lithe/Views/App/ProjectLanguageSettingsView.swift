@@ -17,14 +17,31 @@ struct ProjectLanguageSettingsView: View {
     private var command: String { category.runtimeCommand ?? "" }
     private var providerID: String { category.languageProviderID ?? "" }
 
+    private var toolchainTitle: String {
+        switch category {
+        case .go: "Go SDK (GOROOT)"
+        case .rust: "Rust toolchain"
+        case .python: "Project interpreter"
+        default: "Project toolchain"
+        }
+    }
+
+    private var executablePlaceholder: String {
+        switch category {
+        case .go: "Auto-detect Go SDK"
+        case .rust: "Auto-detect Cargo"
+        default: "Auto-detect"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("\(category.rawValue) · \(model.projectName)")
                 .font(.system(size: 15, weight: .semibold))
-            Text(category == .python ? "Project interpreter" : "Project toolchain")
+            Text(toolchainTitle)
                 .font(.system(size: 13, weight: .semibold))
             HStack(spacing: 8) {
-                TextField("Auto-detect", text: $executableDraft)
+                TextField(executablePlaceholder, text: $executableDraft)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(saveExecutable)
                     .accessibilityLabel("Project executable")
