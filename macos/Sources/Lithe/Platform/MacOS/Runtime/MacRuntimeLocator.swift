@@ -37,7 +37,33 @@ struct MacRuntimeLocator: RuntimeLocator {
     }
 
     func environment() -> [String: String] {
-        ProcessInfo.processInfo.environment
+        var environment = ProcessInfo.processInfo.environment
+        // Finder-launched apps do not inherit shell startup files. Mirror the
+        // Go tool's well-known installation roots so the later GOROOT/GOPATH
+        // candidates have the same priority as `go env` in a terminal.
+        if environment["GOROOT"] == nil {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let roots = [
+                home.appendingPathComponent(".g/go"),
+                URL(fileURLWithPath: "/usr/local/go")
+            ]
+            if let root = roots.first(where: {
+                FileManager.default.isExecutableFile(atPath: $0.appendingPathComponent("bin/go").path)
+            }) {
+                environment["GOROOT"] = root.path
+            }
+        }
+        if environment["GOPATH"] == nil {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let roots = [
+                home.appendingPathComponent("go"),
+                home.appendingPathComponent("Repository/gopath")
+            ]
+            if let root = roots.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+                environment["GOPATH"] = root.path
+            }
+        }
+        return environment
     }
 
     func discover() -> RuntimeDiscoveryResult {

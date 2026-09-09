@@ -338,6 +338,54 @@ extension AppModel {
         }
     }
 
+    /// Resolve an editor gutter entry against the generated project inventory
+    /// before launching. This keeps Go main markers tied to their own target
+    /// instead of silently using whichever configuration was last selected.
+    func runDocumentRunnable(_ runnable: DocumentRunnable, in fileURL: URL, debug: Bool) {
+        Task { @MainActor [weak self] in
+            guard let self, runnable.kind == DocumentRunnable.Kind.application else { return }
+            guard let identity = currentWorkspaceIdentity else { return }
+            guard let feature = await activateExecutionModule()?.runFeature else { return }
+            guard case .ready = await ensureRunProjectReady(feature, for: identity) else {
+                showNotification("运行配置仍在生成，请稍后重试。", severity: .warning, title: runnable.displayName)
+                return
+            }
+            let applicationExecution: RunConfigurationExecution = .application
+            let configuration = feature.configurations.first {
+                $0.name == runnable.displayName
+                    && $0.execution == applicationExecution
+                    && ($0.modulePath == nil || fileURL.path.contains($0.modulePath ?? ""))
+            } ?? feature.configurations.first { $0.name == runnable.displayName && $0.execution == applicationExecution }
+            guard let configuration else {
+                showNotification("未找到该入口的运行配置，请先重新生成运行配置。", severity: .error, title: runnable.displayName)
+                return
+            }
+            selectRunConfiguration(configuration)
+            if debug { startDebugging() } else { startRunConfiguration(configuration) }
+        }
+    }
+
+    func modifyDocumentRunnable(_ runnable: DocumentRunnable, in fileURL: URL) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let identity = currentWorkspaceIdentity else { return }
+            guard let feature = await activateExecutionModule()?.runFeature else { return }
+            guard case .ready = await ensureRunProjectReady(feature, for: identity) else {
+                showNotification("运行配置仍在生成，请稍后重试。", severity: .warning, title: runnable.displayName)
+                return
+            }
+            let applicationExecution: RunConfigurationExecution = .application
+            guard let configuration = feature.configurations.first(where: {
+                $0.name == runnable.displayName && $0.execution == applicationExecution
+            }) else {
+                showNotification("未找到该入口的运行配置，请先重新生成运行配置。", severity: .error, title: runnable.displayName)
+                return
+            }
+            selectRunConfiguration(configuration)
+            showRunConfigurationEditor()
+        }
+    }
+
     func openRunConfiguration(relativePath: String?) {
         guard let workspaceURL else { return }
         let url = workspaceURL.appendingPathComponent(relativePath ?? ".lithe/run/generated.json")

@@ -1610,26 +1610,31 @@ struct CodeEditorView: NSViewRepresentable {
                 guard let document else { return }
                 model?.resolveJavaNavigation(marker, in: document.url)
             }
-            let runnableMarkers = Self.discoverGoRunnables(in: textView?.string ?? "", url: document.url)
+            let text = textView?.string ?? ""
+            let runnableMarkers = Self.discoverRunnables(in: text, url: document.url)
             gutter?.updateRunnableMarkers(
                 runnableMarkers,
                 onRun: { [weak model] runnable in
                     guard let model else { return }
-                    model.showNotification("Run ‘\(runnable.displayName)’", severity: .information)
-                    model.runSelectedConfiguration()
+                    model.runDocumentRunnable(runnable, in: document.url, debug: false)
                 },
                 onDebug: { [weak model] runnable in
                     guard let model else { return }
-                    model.showNotification("Debug ‘\(runnable.displayName)’", severity: .information)
-                    model.startDebugging()
+                    model.runDocumentRunnable(runnable, in: document.url, debug: true)
                 },
                 onModify: { [weak model] runnable in
                     guard let model else { return }
-                    model.showNotification("Modify Run Configuration for ‘\(runnable.displayName)’", severity: .information)
-                    model.showRunConfigurationEditor()
+                    model.modifyDocumentRunnable(runnable, in: document.url)
                 }
             )
             scheduleEditorOverlayRelayout()
+        }
+
+        private static func discoverRunnables(in text: String, url: URL) -> [DocumentRunnable] {
+            if url.pathExtension.lowercased() == "rs" {
+                return discoverRustRunnables(in: text, url: url)
+            }
+            return discoverGoRunnables(in: text, url: url)
         }
 
         private static func discoverGoRunnables(in text: String, url: URL) -> [DocumentRunnable] {
@@ -1650,8 +1655,27 @@ struct CodeEditorView: NSViewRepresentable {
                 else { kind = nil }
                 guard let kind else { return nil }
                 let position = LanguageServerPosition(line: index, utf16Column: 0)
-                return DocumentRunnable(id: "go:\(kind.rawValue):\(name):\(index + 1)", configurationID: nil, displayName: name, kind: kind, line: index + 1, symbolRange: LanguageServerRange(start: position, end: position))
+                let displayName = kind == .application
+                    ? url.deletingLastPathComponent().lastPathComponent
+                    : name
+                return DocumentRunnable(id: "go:\(kind.rawValue):\(name):\(index + 1)", configurationID: nil, displayName: displayName, kind: kind, line: index + 1, symbolRange: LanguageServerRange(start: position, end: position))
             }
+        }
+
+        private static func discoverRustRunnables(in text: String, url: URL) -> [DocumentRunnable] {
+            guard text.components(separatedBy: .newlines).contains(where: {
+                $0.replacingOccurrences(of: " ", with: "").hasPrefix("fnmain(")
+            }) else { return [] }
+            let line = text.components(separatedBy: .newlines).firstIndex(where: {
+                $0.replacingOccurrences(of: " ", with: "").hasPrefix("fnmain(")
+            }) ?? 0
+            let position = LanguageServerPosition(line: line, utf16Column: 0)
+            let name = url.deletingLastPathComponent().lastPathComponent
+            return [DocumentRunnable(
+                id: "rust:main:\(url.path)", configurationID: nil, displayName: name,
+                kind: .application, line: line + 1,
+                symbolRange: LanguageServerRange(start: position, end: position)
+            )]
         }
 
         func applyInitialRunnableMarkers() {
