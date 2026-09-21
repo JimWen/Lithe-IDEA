@@ -24,7 +24,10 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
 
     let id = UUID()
     private(set) var url: URL
-    let isReadOnly: Bool
+    /// Invalidates asynchronous reads even after a rename away and back.
+    private(set) var locationRevision: UInt64 = 0
+    private let isProductReadOnly: Bool
+    @Published private(set) var isReadOnly: Bool
     let displayPath: String?
     /// Preview subscribers receive live edits without invalidating the editor hierarchy.
     let textDidChange = PassthroughSubject<Void, Never>()
@@ -42,21 +45,49 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     private(set) var lifecycleState: DocumentLifecycleState
     private(set) var lastKnownModificationDate: Date?
     private var activeMutationLease: MutationLease?
+    private(set) var acknowledgedDiskContent: String?
+    private(set) var hasAcknowledgedDiskContent = false
+    private(set) var externalDiskContent: String?
+    private(set) var hasObservedDiskConflict = false
+    var expectedDiskContent: String? { hasAcknowledgedDiskContent ? acknowledgedDiskContent : savedText }
+    var externalFileMissing: Bool { hasObservedDiskConflict && externalDiskContent == nil }
+
+    func observeDiskConflict(_ content: String?) {
+        objectWillChange.send()
+        externalDiskContent = content
+        hasObservedDiskConflict = true
+    }
+
+    func acknowledgeObservedDiskContent() {
+        guard hasObservedDiskConflict else { return }
+        acknowledgedDiskContent = externalDiskContent
+        hasAcknowledgedDiskContent = true
+        hasObservedDiskConflict = false
+    }
+
 
     init(
         url: URL,
         text: String,
         modificationDate: Date?,
         isReadOnly: Bool = false,
+        isFileWritable: Bool = true,
         displayPath: String? = nil
     ) {
         self.url = url
-        self.isReadOnly = isReadOnly
+        self.isProductReadOnly = isReadOnly
+        self.isReadOnly = isReadOnly || !isFileWritable
         self.displayPath = displayPath
         self.storedText = text
         self.savedText = text
         self.lifecycleState = .clean(revision: 0)
         self.lastKnownModificationDate = modificationDate
+    }
+
+    func updateFileSystemWritable(_ isWritable: Bool) {
+        let next = isProductReadOnly || !isWritable
+        guard isReadOnly != next else { return }
+        isReadOnly = next
     }
 
     var displayName: String {
@@ -69,7 +100,9 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     /// Reserves this buffer for a coordinated multi-file edit. Callers must
     /// release the exact token; a second lease is rejected deterministically.
     func acquireMutationLease() -> MutationLease? {
-        guard !isReadOnly, activeMutationLease == nil else { return nil }
+        // A native write owns its captured bytes until completion. Workspace
+        // transactions must not overlap that write or its disk reconciliation.
+        guard !isReadOnly, activeMutationLease == nil, lifecycleState.status != .saving else { return nil }
         let lease = MutationLease(id: UUID())
         activeMutationLease = lease
         return lease
@@ -159,14 +192,23 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         in source: NSString
     ) -> LanguageServerDocumentPosition {
         let safeOffset = min(max(offset, 0), source.length)
-        let lineRange = source.lineRange(
-            for: NSRange(location: safeOffset, length: 0)
-        )
-        return LanguageServerDocumentPosition(
-            line: source.substring(with: NSRange(location: 0, length: lineRange.location))
-                .split(separator: "\n", omittingEmptySubsequences: false).count - 1,
-            utf16Column: safeOffset - lineRange.location
-        )
+        var line = 0
+        var lineStart = 0
+        var index = 0
+        // LSP counts CR, LF and CRLF as line separators, including native CRLF documents.
+        while index < safeOffset {
+            let unit = source.character(at: index)
+            index += 1
+            if unit == 13 {
+                if index < safeOffset, source.character(at: index) == 10 { index += 1 }
+                line += 1
+                lineStart = index
+            } else if unit == 10 {
+                line += 1
+                lineStart = index
+            }
+        }
+        return LanguageServerDocumentPosition(line: line, utf16Column: safeOffset - lineStart)
     }
 
     private func replaceText(_ newText: String, publish: Bool) {
@@ -203,6 +245,8 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     }
 
     func save() throws {
+        guard !hasMutationLease, lifecycleState.status != .saving else { throw DocumentError.mutationInProgress }
+        guard !hasExternalConflict else { throw DocumentError.externalConflict }
         guard !isReadOnly else { throw DocumentError.readOnly }
         try text.write(to: url, atomically: true, encoding: .utf8)
         markSavedWithoutWriting()
@@ -211,9 +255,16 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     func reloadFromDisk() throws {
         guard !hasMutationLease else { throw DocumentError.mutationInProgress }
         let contents = try String(contentsOf: url, encoding: .utf8)
+        replaceWithDiskContent(contents)
+    }
+
+    func replaceWithDiskContent(_ contents: String) {
+        guard !hasMutationLease else { return }
         pendingLanguageServerBaseText = nil
         storedText = contents
         savedText = contents
+        hasAcknowledgedDiskContent = false
+        hasObservedDiskConflict = false
         lifecycleState = .clean(revision: lifecycleState.revision + 1)
         lastKnownModificationDate = Self.modificationDate(for: url)
         textDidChange.send()
@@ -245,8 +296,10 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         lifecycleState = state
     }
 
-    func markSavedWithoutWriting(state: DocumentLifecycleState? = nil) {
-        savedText = text
+    func markSavedWithoutWriting(state: DocumentLifecycleState? = nil, savedContent: String? = nil) {
+        savedText = savedContent ?? text
+        hasAcknowledgedDiskContent = false
+        hasObservedDiskConflict = false
         lifecycleState = state ?? .clean(revision: lifecycleState.revision)
         lastKnownModificationDate = Self.modificationDate(for: url)
     }
@@ -254,6 +307,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     func relocate(to newURL: URL) {
         pendingLanguageServerBaseText = nil
         objectWillChange.send()
+        if url != newURL.standardizedFileURL { locationRevision &+= 1 }
         url = newURL.standardizedFileURL
         lastKnownModificationDate = Self.modificationDate(for: newURL)
     }

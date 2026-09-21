@@ -8,6 +8,33 @@ import Testing
 @MainActor
 struct DebugModuleTests {
     @Test
+    func hoverFromEarlierPauseIsRejectedAfterResumeAndPauseWithTheSameFrame() throws {
+        let session = DeferredInspectionDebugSession()
+        let descriptor = DebugProviderDescriptor(id: "python", displayName: "Python", fileExtensions: ["py"])
+        let manager = DebugAdapterSessionManager(providers: [descriptor]) { _, _ in session }
+        let feature = GenericDebugFeatureModel(sessions: manager)
+        let root = URL(fileURLWithPath: "/fixture/debug-hover", isDirectory: true)
+        defer { feature.stop() }
+        try #require(feature.start(fileURL: root.appendingPathComponent("main.py"), rootURL: root,
+                              configuration: DebugLaunchConfiguration(name: "Python", request: .launch, arguments: [:])))
+        let originalFrameID = feature.selectedFrameID
+        var delivered = false
+        var value: DebugVariable?
+        feature.evaluateForHover("value") { delivered = true; value = $0 }
+        try #require(session.evaluateExpressions == ["value"])
+        // The delayed adapter result belongs to the previous pause, even when
+        // the next pause reuses the same frame identity (including nil).
+        session.transition(to: .running)
+        session.transition(to: .paused)
+        #expect(feature.selectedFrameID == originalFrameID)
+        session.completeEvaluation(at: 0, with: .success(DebugVariable(
+            id: "value", name: "value", value: "old", type: "str", evaluateName: "value", variablesReference: 0
+        )))
+        #expect(delivered)
+        #expect(value == nil)
+    }
+
+    @Test
     func debuggeeOutputIsMirroredIntoConsoleWithoutTerminalControlSequences() {
         let manager = DebugAdapterSessionManager(providers: []) { _, _ in nil }
         let feature = GenericDebugFeatureModel(sessions: manager)

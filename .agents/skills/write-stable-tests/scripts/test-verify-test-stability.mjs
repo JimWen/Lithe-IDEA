@@ -145,6 +145,14 @@ const selectedViolations = scanFile(
 assert.deepEqual(selectedViolations.map((violation) => violation.rule), ["swift-unbounded-wait"]);
 
 assert.deepEqual(
+  parseSwiftTimingLine("✘ Test failedWithIssue() failed after 0.024 seconds with 1 issue."),
+  { name: "failedWithIssue()", event: "failed", durationMs: 24, caseCount: null },
+);
+assert.deepEqual(
+  parseSwiftTimingLine("✘ Test parameterized(_:) with 4 test cases failed after 0.125 seconds with 2 issues."),
+  { name: "parameterized(_:)", event: "failed", durationMs: 125, caseCount: 4 },
+);
+assert.deepEqual(
   parseSwiftTimingLine("✔ Test deterministicGate() passed after 0.024 seconds."),
   { name: "deterministicGate()", event: "passed", durationMs: 24, caseCount: null },
 );

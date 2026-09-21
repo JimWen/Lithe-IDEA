@@ -78,6 +78,9 @@ extension AppModel {
                 .sink { [weak self] state in
                     self?.handleDebugSessionStateChange(state)
                 })
+            // Runtime activation can notify before this host caches the capability.
+            // Render once more now that the Debug panel can resolve its feature.
+            scheduleObjectWillChangeRelay()
             return DebugFeatureAccess(genericFeature: genericFeature)
         } catch {
             showNotification(error.localizedDescription)

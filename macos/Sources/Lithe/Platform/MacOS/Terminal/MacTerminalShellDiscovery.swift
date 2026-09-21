@@ -5,14 +5,12 @@ enum MacTerminalShellDiscovery {
     private static let shellNames = ["zsh", "bash", "fish", "nu", "pwsh", "sh", "dash", "ksh", "tcsh", "csh"]
     private static let standardSearchDirectories = ["/bin", "/usr/bin", "/opt/homebrew/bin", "/usr/local/bin"]
 
+    static func defaultShellPath(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        environment["SHELL"] ?? "/bin/zsh"
+    }
+
     static func availableShells(fileManager: FileManager = .default) -> [String] {
-        let registeredShells: String
-        do {
-            registeredShells = try String(contentsOfFile: "/etc/shells", encoding: .utf8)
-        } catch {
-            NSLog("Lithe could not read registered login shells: %@", String(describing: error))
-            registeredShells = ""
-        }
+        let registeredShells = registeredShells()
         return discover(
             environment: ProcessInfo.processInfo.environment,
             registeredShells: registeredShells
@@ -23,10 +21,26 @@ enum MacTerminalShellDiscovery {
         }
     }
 
+    /// Returns reasonable shell paths even when the executable is missing.
+    /// Settings uses this list to show unavailable choices instead of hiding them.
+    static func knownShells() -> [String] {
+        candidates(
+            environment: ProcessInfo.processInfo.environment,
+            registeredShells: registeredShells()
+        )
+    }
+
     static func discover(
         environment: [String: String],
         registeredShells: String,
         isExecutable: (String) -> Bool
+    ) -> [String] {
+        candidates(environment: environment, registeredShells: registeredShells).filter(isExecutable)
+    }
+
+    static func candidates(
+        environment: [String: String],
+        registeredShells: String
     ) -> [String] {
         var candidates = [environment["SHELL"]].compactMap { $0 }
         candidates += registeredShells.split(whereSeparator: \.isNewline).compactMap { line in
@@ -41,7 +55,16 @@ enum MacTerminalShellDiscovery {
         }
         var seen = Set<String>()
         return candidates.filter { path in
-            path.hasPrefix("/") && seen.insert(path).inserted && isExecutable(path)
+            path.hasPrefix("/") && seen.insert(path).inserted
+        }
+    }
+
+    private static func registeredShells() -> String {
+        do {
+            return try String(contentsOfFile: "/etc/shells", encoding: .utf8)
+        } catch {
+            NSLog("Lithe could not read registered login shells: %@", String(describing: error))
+            return ""
         }
     }
 

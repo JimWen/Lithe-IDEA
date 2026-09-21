@@ -23,7 +23,6 @@ struct SettingsView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var updateChecker: UpdateChecker
-    @State private var showsGitPreferences = false
     @ObservedObject var settings: AppSettings
     @ObservedObject var viewState: SettingsViewState
     let initialCategory: SettingsCategory
@@ -243,18 +242,12 @@ struct SettingsView: View {
                     case .lsp, .go, .rust, .python: EmptyView()
                     case .ai: aiSettings
                     case .git:
-                        VStack(alignment: .leading, spacing: 24) {
+                        VStack(alignment: .leading, spacing: 14) {
                             GitExecutionSettingsView(settings: settings)
-                            DisclosureGroup("Fetch and commit preferences", isExpanded: $showsGitPreferences) {
-                                if showsGitPreferences {
-                                    VStack(alignment: .leading, spacing: 24) {
-                                        GitFetchSettingsView(options: $settings.gitFetchOptions)
-                                        Divider()
-                                        GitIdentitySettingsView()
-                                    }.padding(.top, 12)
-                                }
-                            }
+                            GitFetchSettingsView(options: $settings.gitFetchOptions)
+                            GitIdentitySettingsView()
                         }
+                        .frame(maxWidth: 760, alignment: .leading)
                     case .updates: updatesSettings
                     case .diagnostics: diagnosticsSettings
                     }

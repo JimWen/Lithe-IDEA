@@ -504,7 +504,6 @@ private struct SelectionRunConfigurationOperations: RunConfigurationOperations {
     func launchPlan(at _: URL, configurationID: String, currentFile _: String?, classPath _: String?, debugPort _: Int?) throws -> SharedLaunchPlan {
         SharedLaunchPlan(executable: .command("fixture-service"), arguments: [configurationID], workingDirectory: ".")
     }
-    func createConfiguration(_ draft: RunConfigurationDraft, at _: URL) throws -> String { draft.name }
     func migrateLegacySettings(at _: URL, configurationIDs _: [String]) throws {}
 }
 

@@ -182,10 +182,8 @@ final class ProjectWindowManager: ObservableObject, UnsavedDocumentHandling {
     }
 
     @discardableResult
-    func saveAllDocuments() -> Bool {
-        // Do not short-circuit: every window must get a chance to save.
-        let results = windowIDs.compactMap { managers[$0]?.saveAllDocuments() }
-        return results.allSatisfy { $0 }
+    func saveAllDocuments() async -> Bool {
+        await DocumentSaveBatch.save { windowIDs.compactMap { managers[$0] } }
     }
 
     func windowClosed(_ id: UUID) {

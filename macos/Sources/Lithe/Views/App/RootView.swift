@@ -315,7 +315,7 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
     private var closeCommandMonitor: Any?
     private var pendingNativeWindowCloseIntent: NativeWindowCloseIntent?
     private var nativeWindowCloseTask: Task<Void, Never>?
-    private let confirmUnsavedDocuments: @MainActor (any UnsavedDocumentHandling) -> Bool
+    private let confirmUnsavedDocuments: @MainActor (any UnsavedDocumentHandling) async -> Bool
     private var isDetached = false
     private let windowID: UUID?
     private let windowPresentation: ProjectWindowPresentation?
@@ -324,8 +324,8 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
         projectSessions: any ProjectWindowSessionHandling,
         windowID: UUID? = nil,
         windowPresentation: ProjectWindowPresentation? = nil,
-        confirmUnsavedDocuments: @escaping @MainActor (any UnsavedDocumentHandling) -> Bool = {
-            LitheAppDelegate.confirmUnsavedDocuments(
+        confirmUnsavedDocuments: @escaping @MainActor (any UnsavedDocumentHandling) async -> Bool = {
+            await LitheAppDelegate.confirmUnsavedDocuments(
                 for: $0,
                 context: .projectWindowClose
             )
@@ -389,13 +389,11 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
         guard nativeWindowCloseTask == nil else { return false }
         if case .commandW? = pendingNativeWindowCloseIntent {
             pendingNativeWindowCloseIntent = nil
-            guard confirmUnsavedDocuments(projectSessions) else { return false }
             closeWindowAfterProjectCleanup(sender)
             return false
         }
         if projectSessions.hasActiveProject || projectSessions.hasActiveStandaloneFile {
             if windowPresentation != nil {
-                guard confirmUnsavedDocuments(projectSessions) else { return false }
                 closeWindowAfterProjectCleanup(sender)
                 return false
             }
@@ -418,15 +416,15 @@ final class LitheWindowCoordinator: NSObject, NSWindowDelegate {
         let projectSessions = projectSessions
         let preservesNativeTabGroup = windowPresentation != nil
         nativeWindowCloseTask = Task { @MainActor [weak self, weak sender] in
+            guard let self else { return }
+            defer { self.nativeWindowCloseTask = nil }
+            guard await self.confirmUnsavedDocuments(projectSessions), !self.isDetached else { return }
             if preservesNativeTabGroup {
-                // Keep the project's scene and tabbing identifier alive until
-                // AppKit closes the tab and selects its remaining neighbour.
+                // Keep the scene identity until AppKit selects the remaining native tab.
                 await projectSessions.stopAllSessions()
             } else {
                 await projectSessions.resetForProjectWindowClose()
             }
-            guard let self else { return }
-            defer { self.nativeWindowCloseTask = nil }
             guard !self.isDetached,
                   let sender,
                   self.window === sender else { return }

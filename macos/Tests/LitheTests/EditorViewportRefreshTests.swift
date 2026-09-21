@@ -144,7 +144,7 @@ private final class GenericViewportTestStore: KeyValueStore, @unchecked Sendable
 
     func data(forKey key: String) -> Data? { values[key] as? Data }
     func object(forKey key: String) -> Any? { values[key] }
-    func string(forKey key: String) -> String? { values[key] }
+    func string(forKey key: String) -> String? { values[key] as? String }
     func stringArray(forKey key: String) -> [String]? { values[key] as? [String] }
     func set(_ value: Any?, forKey key: String) { values[key] = value }
 }

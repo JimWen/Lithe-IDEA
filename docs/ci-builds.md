@@ -1,7 +1,10 @@
 # macOS CI builds and test downloads
 
-The macOS package lane uploads complete test packages when product changes select
-that lane. Open the workflow run's **Summary** and follow **macOS test download**,
+The macOS package lane uploads complete test packages when bundle-sensitive changes
+select that lane. Ordinary Swift source changes run the complete Swift test lane;
+resources, dependencies, Rust bridges, composition and packaging changes retain
+installer verification. Git source and performance harness changes additionally
+select the Git performance and observation checks. Open the workflow run's **Summary** and follow **macOS test download**,
 or use the run's **Artifacts** list. This fork ships macOS only; its packages do
 not add JDK/JDTLS, Maven/Spring or Linux.do resources.
 
@@ -45,7 +48,8 @@ existing verified crate archive cache. SwiftPM repository caches keep their
 integrity validation; Swift compilation products are not cached. The cache action
 retains no Java download inputs or preparation steps.
 
-These changes preserve upstream `a92d3b47`'s generic packaging and cache behavior.
+These changes preserve upstream `a92d3b47`'s generic packaging/cache behavior and
+`f27562b5`'s selective PR validation.
 Their integration does not establish a measured build-time improvement: compare
 actual cold and warm fork runs before making that claim. Queue delays and runner
 availability are separate from compilation time. Candidate preparation did not

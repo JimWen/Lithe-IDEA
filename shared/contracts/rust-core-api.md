@@ -1557,3 +1557,23 @@ See [Patch exchange](git-patch-exchange.md) and its metadata fixture.
 Missing or stale HEAD rejects the amendment before writing; plain Continue,
 Skip and Abort do not require this field. Consumers must send the HEAD reviewed
 by the amendment editor. See [Rebase sessions](git-rebase-session.md).
+
+## Native document persistence
+
+`document.lifecycle` reduces `{state, event}` into `{state, action}` without
+filesystem access. The `diskConflict` event represents a missing file or a
+native guarded write whose expected content no longer matches disk. It moves
+any valid state to `conflict`, preserves its current revision and last saved
+revision, and returns `showConflict`. Unlike a clean-file `externalChanged`
+event, it never silently reloads or recreates a missing file. The lifecycle
+fixture is `shared/fixtures/documents/lifecycle-v1.json`.
+
+The macOS document owner retains observation, asynchronous save tasks, and
+close-request tokens. Its native file adapter compares the expected UTF-8
+content before installing a staged replacement; save completion records the
+captured content, so input received during the write remains dirty. A workspace
+mutation lease excludes native saves and defers observer updates while the
+existing shared edit transaction owns disk rollback and undo. Menu Save All,
+window close, run/debug preparation, and application/update termination await
+persistence and recheck their current owners before proceeding. Native editor
+buffers require no remote-editor synchronization barrier.

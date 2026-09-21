@@ -1474,7 +1474,7 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         }
         struct Position: Encodable {
             let line: Int
-            let character: Int
+            let utf16Column: Int
         }
         struct Range: Encodable {
             let start: LspSyncDocumentRequest.Position
@@ -2940,11 +2940,11 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
                         range: .init(
                             start: LspSyncDocumentRequest.Position(
                                 line: change.start.line,
-                                character: change.start.utf16Column
+                                utf16Column: change.start.utf16Column
                             ),
                             end: LspSyncDocumentRequest.Position(
                                 line: change.end.line,
-                                character: change.end.utf16Column
+                                utf16Column: change.end.utf16Column
                             )
                         ),
                         text: change.text

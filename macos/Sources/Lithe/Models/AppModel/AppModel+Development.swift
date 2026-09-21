@@ -628,8 +628,12 @@ extension AppModel {
            activeDocument.isDirty {
             do {
                 let previousText = activeDocument.savedText
-                try saveDocument(activeDocument)
-                recordSave(activeDocument, previousText: previousText)
+                let wrote = try await saveDocument(activeDocument)
+                guard self.activeDocument === activeDocument, !activeDocument.isDirty,
+                      isCurrentWorkspace(identity), !Task.isCancelled else { return }
+                if wrote {
+                    recordSave(activeDocument, previousText: previousText)
+                }
             } catch {
                 showNotification(error.localizedDescription, severity: .error, title: "Could not save \(activeDocument.url.lastPathComponent)")
                 return
@@ -901,12 +905,9 @@ extension AppModel {
         isDebugVisible.toggle()
         guard isDebugVisible else { return }
         Task { [weak self] in
-            guard let self else { return }
-            guard await activateExecutionModule() != nil else { return }
-            if let workspaceURL {
-                await loadProjectServicesForAppliedSnapshot(at: workspaceURL)
-            }
-            _ = await activateDebugModule()
+            // Opening the panel does not launch a session. Actual debug start
+            // retains project/toolchain preparation and Go/Rust/Python resolution.
+            _ = await self?.activateDebugModule()
         }
         isTestsVisible = false
         isGitLogVisible = false
@@ -1110,6 +1111,7 @@ extension AppModel {
             let baseItems = execution.tests.itemsByProviderID["java"] ?? []
             let javaFiles = baseItems.filter { $0.kind == .file && $0.fileURL != nil }
             guard !javaFiles.isEmpty else { return }
+            guard isCurrentJavaTestDebugLaunch(operationID), !Task.isCancelled else { return }
             do {
                 let sessions = try await languageSessionsForWorkspaceMaintenance()
                 var projected = baseItems.filter { $0.kind == .workspace }
@@ -1233,13 +1235,17 @@ extension AppModel {
                document.isDirty {
                 do {
                     let previousText = document.savedText
-                    try saveDocument(document)
-                    recordSave(document, previousText: previousText)
+                    let wrote = try await saveDocument(document)
+                    guard !document.isDirty, isCurrentJavaTestDebugLaunch(operationID), !Task.isCancelled else { return }
+                    if wrote {
+                        recordSave(document, previousText: previousText)
+                    }
                 } catch {
                     showNotification(error.localizedDescription, severity: .error, title: "Could not save \(document.url.lastPathComponent)")
                     return
                 }
             }
+            guard isCurrentJavaTestDebugLaunch(operationID), !Task.isCancelled else { return }
             do {
                 let sessions = try await languageSessionsForWorkspaceMaintenance()
                 let prepared = try await services.javaTestDebugLaunchService.prepare(
@@ -1579,13 +1585,17 @@ extension AppModel {
         if let document, document.isDirty {
             do {
                 let previousText = document.savedText
-                try saveDocument(document)
-                recordSave(document, previousText: previousText)
+                let wrote = try await saveDocument(document)
+                guard !document.isDirty, isCurrentWorkspace(identity), !Task.isCancelled else { return }
+                if wrote {
+                    recordSave(document, previousText: previousText)
+                }
             } catch {
                 showNotification(error.localizedDescription, severity: .error, title: "Could not save \(document.url.lastPathComponent)")
                 return
             }
         }
+        guard isCurrentWorkspace(identity), !Task.isCancelled else { return }
         // Reject an occupied service port before asking JDT LS to resolve the
         // launch target. A failed preflight therefore creates no language
         // service, Debug Adapter, terminal, or Java child process.
@@ -1981,7 +1991,7 @@ extension AppModel {
                 switch result {
                 case .success(let hover): completion(hover)
                 case .failure(let error):
-                    self?.showNotification(error.localizedDescription)
+                    if !(error is CancellationError) { self?.showNotification(error.localizedDescription) }
                     completion(nil)
                 }
             }
@@ -2021,7 +2031,7 @@ extension AppModel {
                     var seen = Set<String>()
                     completion(values.filter { seen.insert($0.label).inserted })
                 case .failure(let error):
-                    self?.showNotification(error.localizedDescription)
+                    if !(error is CancellationError) { self?.showNotification(error.localizedDescription) }
                     completion([])
                 }
             }

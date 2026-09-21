@@ -100,6 +100,8 @@ pub enum DocumentLifecycleEvent {
     SaveFailed { operation_id: String },
     /// A watcher observed a disk change not attributed to the current save.
     ExternalChanged,
+    /// The platform observed a missing file or rejected a guarded write.
+    DiskConflict,
     /// A requested disk reload completed and installed this revision.
     ReloadSucceeded { revision: u64 },
     /// The user chose the live editor text after a conflict.
@@ -150,6 +152,21 @@ pub fn decide_document_lifecycle(
     let current_revision = request.state.revision();
 
     let decision = match (request.state, request.event) {
+        (state, DocumentLifecycleEvent::DiskConflict) => {
+            let saved_revision = match &state {
+                DocumentLifecycleState::Clean { revision } => *revision,
+                DocumentLifecycleState::Dirty { saved_revision, .. }
+                | DocumentLifecycleState::Saving { saved_revision, .. }
+                | DocumentLifecycleState::Conflict { saved_revision, .. } => *saved_revision,
+            };
+            decision(
+                DocumentLifecycleState::Conflict {
+                    revision: current_revision,
+                    saved_revision,
+                },
+                DocumentLifecycleAction::ShowConflict,
+            )
+        }
         (
             state,
             DocumentLifecycleEvent::Edited {
@@ -361,6 +378,51 @@ fn invalid_request(message: &str) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guarded_disk_conflict_preserves_each_states_last_saved_revision() {
+        let states = [
+            (DocumentLifecycleState::Clean { revision: 4 }, 4),
+            (
+                DocumentLifecycleState::Dirty {
+                    revision: 4,
+                    saved_revision: 1,
+                },
+                1,
+            ),
+            (
+                DocumentLifecycleState::Saving {
+                    revision: 4,
+                    saved_revision: 1,
+                    save_revision: 3,
+                    operation_id: "save-1".into(),
+                },
+                1,
+            ),
+            (
+                DocumentLifecycleState::Conflict {
+                    revision: 4,
+                    saved_revision: 1,
+                },
+                1,
+            ),
+        ];
+        for (state, saved_revision) in states {
+            let result = decide_document_lifecycle(DocumentLifecycleRequest {
+                state,
+                event: DocumentLifecycleEvent::DiskConflict,
+            })
+            .unwrap();
+            assert_eq!(result.action, DocumentLifecycleAction::ShowConflict);
+            assert_eq!(
+                result.state,
+                DocumentLifecycleState::Conflict {
+                    revision: 4,
+                    saved_revision
+                }
+            );
+        }
+    }
 
     #[test]
     fn edit_during_save_keeps_the_newer_revision_dirty_after_success() {

@@ -155,16 +155,19 @@ struct LitheCoreLogicTests {
 
     @Test
     @MainActor
-    func commandWCancelDoesNotResetSessionsOrLeakIntoTheNextWindowClose() {
+    func commandWCancelDoesNotResetSessionsOrLeakIntoTheNextWindowClose() async {
+        let confirmationFinished = TestGate()
+        defer { confirmationFinished.open() }
         let sessions = TestProjectWindowSessions(hasActiveProject: true)
         let coordinator = LitheWindowCoordinator(
             projectSessions: sessions,
-            confirmUnsavedDocuments: { _ in false }
+            confirmUnsavedDocuments: { _ in confirmationFinished.open(); return false }
         )
         let window = CloseCommandTestWindow()
         coordinator.attach(to: window, layout: .workspace)
 
         coordinator.performCloseCommand()
+        #expect(await confirmationFinished.waitUntilOpen())
 
         #expect(window.performCloseCallCount == 1)
         #expect(!window.delegateAllowedClose)
@@ -176,7 +179,9 @@ struct LitheCoreLogicTests {
 
     @Test
     @MainActor
-    func commandWSaveFailureDoesNotResetSessions() {
+    func commandWSaveFailureDoesNotResetSessions() async {
+        let confirmationFinished = TestGate()
+        defer { confirmationFinished.open() }
         let sessions = TestProjectWindowSessions(hasActiveProject: true)
         sessions.hasUnsavedDocuments = true
         sessions.saveAllDocumentsResult = false
@@ -184,7 +189,8 @@ struct LitheCoreLogicTests {
             projectSessions: sessions,
             confirmUnsavedDocuments: { owner in
                 #expect(owner.hasUnsavedDocuments)
-                #expect(!owner.saveAllDocuments())
+                #expect(await !owner.saveAllDocuments())
+                confirmationFinished.open()
                 return false
             }
         )
@@ -192,6 +198,7 @@ struct LitheCoreLogicTests {
         coordinator.attach(to: window, layout: .workspace)
 
         coordinator.performCloseCommand()
+        #expect(await confirmationFinished.waitUntilOpen())
 
         #expect(!window.delegateAllowedClose)
         #expect(sessions.saveAllDocumentsCallCount == 1)
@@ -323,21 +330,25 @@ struct LitheCoreLogicTests {
 
     @Test
     @MainActor
-    func welcomeAndWorkspaceUseDistinctWindowSizes() {
+    func welcomeAndWorkspaceDeclareDistinctWindowSizes() {
         let sessions = TestProjectWindowSessions(hasActiveProject: false)
         let coordinator = LitheWindowCoordinator(projectSessions: sessions)
         let window = NSWindow()
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+
+        #expect(LitheWindowLayout.welcome.contentSize != LitheWindowLayout.workspace.contentSize)
+        #expect(LitheWindowLayout.welcome.minimumContentSize != LitheWindowLayout.workspace.minimumContentSize)
+        #expect(LitheWindowLayout.welcome.contentSize.width >= LitheWindowLayout.welcome.minimumContentSize.width)
+        #expect(LitheWindowLayout.welcome.contentSize.height >= LitheWindowLayout.welcome.minimumContentSize.height)
+        #expect(LitheWindowLayout.workspace.contentSize.width >= LitheWindowLayout.workspace.minimumContentSize.width)
+        #expect(LitheWindowLayout.workspace.contentSize.height >= LitheWindowLayout.workspace.minimumContentSize.height)
 
         coordinator.attach(to: window, layout: .welcome)
         #expect(window.contentMinSize == LitheWindowLayout.welcome.minimumContentSize)
-        #expect(window.contentLayoutRect.size == LitheWindowLayout.welcome.contentSize)
 
         coordinator.attach(to: window, layout: .workspace)
         #expect(window.contentMinSize == LitheWindowLayout.workspace.minimumContentSize)
-        #expect(window.contentLayoutRect.width <= LitheWindowLayout.workspace.contentSize.width)
-        #expect(window.contentLayoutRect.height <= LitheWindowLayout.workspace.contentSize.height)
-        #expect(window.contentLayoutRect.width >= LitheWindowLayout.workspace.minimumContentSize.width)
-        #expect(window.contentLayoutRect.height >= LitheWindowLayout.workspace.minimumContentSize.height)
     }
 
     @Test
@@ -1624,6 +1635,95 @@ struct LitheCoreLogicTests {
     }
 
     @Test
+    func shellDiscoveryKeepsUnavailableChoicesAndUsesTheLaunchDefault() {
+        let environment = ["SHELL": "/fixture/bin/missing-shell", "PATH": "/fixture/bin"]
+        let registered = "/fixture/bin/available-shell\n"
+        let candidates = MacTerminalShellDiscovery.candidates(environment: environment, registeredShells: registered)
+        let available = MacTerminalShellDiscovery.discover(environment: environment, registeredShells: registered) {
+            $0 == "/fixture/bin/available-shell"
+        }
+        #expect(candidates.contains("/fixture/bin/missing-shell"))
+        #expect(available == ["/fixture/bin/available-shell"])
+        #expect(MacTerminalShellDiscovery.defaultShellPath(environment: environment) == "/fixture/bin/missing-shell")
+        #expect(MacTerminalShellDiscovery.defaultShellPath(environment: [:]) == "/bin/zsh")
+    }
+
+    @Test
+    func textPrefixCompletesUtf8ScalarAtSamplingBoundary() {
+        let data = Data((String(repeating: "a", count: 4 * 1024 - 1) + "你").utf8)
+
+        #expect(!WorkspaceTextFilePolicy.isPlainText(Data(data.prefix(4 * 1024))))
+        #expect(WorkspaceTextFilePolicy.isPlainTextPrefix(data, byteLimit: 4 * 1024))
+        #expect(!WorkspaceTextFilePolicy.isPlainTextPrefix(Data([0x61, 0xFF, 0x62]), byteLimit: 2))
+    }
+
+    @Test
+    func workspaceFileIconResolverUsesIdeaTextAndBinaryKindsForGenericFiles() async {
+        let storage = InMemoryFileStorage()
+        let textURL = URL(fileURLWithPath: "/in-memory/LICENSE")
+        let binaryURL = URL(fileURLWithPath: "/in-memory/tool.unknown")
+        storage.seed(Data("permission text\n".utf8), at: textURL)
+        storage.seed(Data([0x00, 0x01, 0x02]), at: binaryURL)
+
+        let text = await WorkspaceFileIconResolver.resolve(
+            for: textURL,
+            suggested: .generic,
+            storage: storage
+        )
+        let binary = await WorkspaceFileIconResolver.resolve(
+            for: binaryURL,
+            suggested: .generic,
+            storage: storage
+        )
+
+        #expect(text.kind == .plainText)
+        #expect(binary.kind == .binary)
+        #expect(!text.isExecutable)
+        #expect(!binary.isExecutable)
+    }
+
+    @Test
+    func executableUtf8TextSplitAtSniffBoundaryStaysPlainText() async {
+        let storage = InMemoryFileStorage()
+        let url = URL(fileURLWithPath: "/in-memory/script")
+        storage.seed(Data((String(repeating: "a", count: 4 * 1024 - 1) + "你").utf8), at: url)
+        storage.markExecutable(url)
+
+        let resolved = await WorkspaceFileIconResolver.resolve(
+            for: url,
+            suggested: .generic,
+            storage: storage
+        )
+
+        #expect(resolved.kind == .plainText)
+        #expect(resolved.isExecutable)
+    }
+
+    @Test
+    func executableBinaryDoubleClickDoesNotOpenItAsText() {
+        var opened = 0
+        var executed = 0
+
+        ProjectFileRowActivation.performPrimary(isExecutableBinary: true) { opened += 1 }
+        ProjectFileRowActivation.performPrimary(isExecutableBinary: true) { opened += 1 }
+        ProjectFileRowActivation.performDoubleClick(isExecutableBinary: true) { executed += 1 }
+
+        #expect(opened == 0)
+        #expect(executed == 1)
+    }
+
+    @Test
+    func remoteURLRequestRejectsResultsForAnotherRepositoryOrRemote() {
+        let root = URL(fileURLWithPath: "/workspace/repository-a")
+        let request = GitRemoteURLRequest(root: root, remote: "origin")
+
+        #expect(request.matches(root: root, remote: "origin"))
+        #expect(!request.matches(root: URL(fileURLWithPath: "/workspace/repository-b"), remote: "origin"))
+        #expect(!request.matches(root: root, remote: "upstream"))
+        #expect(!request.matches(root: nil, remote: nil))
+    }
+
+    @Test
     @MainActor
     func standaloneEditorLoadsUtf8TextAndLeavesBinaryFilesInFailedState() async {
         let storage = InMemoryFileStorage()
@@ -2779,6 +2879,35 @@ struct LitheCoreLogicTests {
     }
 
     @Test
+    func resettingDoubleShiftRecognizerDropsPendingTap() {
+        var recognizer = DoubleShiftGestureRecognizer(threshold: 0.35)
+
+        _ = recognizer.handleFlagsChanged(
+            isShiftDown: true,
+            hasOtherModifiers: false,
+            timestamp: 1.00
+        )
+        _ = recognizer.handleFlagsChanged(
+            isShiftDown: false,
+            hasOtherModifiers: false,
+            timestamp: 1.05
+        )
+        recognizer.reset()
+        _ = recognizer.handleFlagsChanged(
+            isShiftDown: true,
+            hasOtherModifiers: false,
+            timestamp: 1.20
+        )
+        let triggered = recognizer.handleFlagsChanged(
+            isShiftDown: false,
+            hasOtherModifiers: false,
+            timestamp: 1.25
+        )
+
+        #expect(!triggered)
+    }
+
+    @Test
     func markdownImageInsertionSeparatesTheReferenceFromRawHTML() {
         let source = "<table>\n</table>\n"
         let reference = "![pasted image](assets/pasted-image.png)"
@@ -3233,9 +3362,11 @@ struct EditorDocumentTests {
         let document = try #require(model.activeDocument)
         if editBeforeSaving { document.applyLiveEditorText("changed\n") }
 
-        model.saveActiveDocument()
-        model.saveActiveDocument()
-        try model.save(document)
+        let save = model.saveActiveDocument()
+        let repeated = model.saveActiveDocument()
+        try await waitForDocumentTask(save)
+        try await waitForDocumentTask(repeated)
+        try await model.save(document)
 
         #expect(notifications.isEmpty)
         #expect(savedRevisions == (editBeforeSaving ? ["original\n"] : []))
@@ -3259,7 +3390,7 @@ struct EditorDocumentTests {
         document.applyLiveEditorText("keep this edit")
         // A removed parent deterministically fails the real filesystem write.
         document.relocate(to: fixture.root.appendingPathComponent("removed/file.txt"))
-        model.saveActiveDocument()
+        try await waitForDocumentTask(model.saveActiveDocument())
 
         #expect(document.isDirty)
         #expect(document.text == "keep this edit")
@@ -3286,7 +3417,7 @@ struct EditorDocumentTests {
             operationID: "external-change"
         )
         document.applyLifecycleState(decision.state)
-        model.saveActiveDocument()
+        try await waitForDocumentTask(model.saveActiveDocument())
 
         #expect(document.hasExternalConflict)
         #expect(try String(contentsOf: fixture.file, encoding: .utf8) == "original\n")
@@ -3475,7 +3606,7 @@ struct EditorDocumentTests {
             let lease = try #require(document.acquireMutationLease())
             defer { document.releaseMutationLease(lease) }
             feature.beginBufferMutation([document])
-            #expect(throws: EditorDocument.DocumentError.self) { try feature.save(document) }
+            await #expect(throws: EditorDocument.DocumentError.self) { try await feature.save(document) }
             if externalChange {
                 try "external".write(to: url, atomically: true, encoding: .utf8)
                 try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 123_456_789)], ofItemAtPath: url.path)
@@ -3486,6 +3617,7 @@ struct EditorDocumentTests {
             document.releaseMutationLease(lease)
             feature.endBufferMutation([document])
             if externalChange {
+                await feature.reconcileExternalChanges([url])
                 #expect(document.hasExternalConflict)
                 #expect(document.text == "replaced")
                 #expect(try String(contentsOf: url, encoding: .utf8) == "external")
@@ -4883,7 +5015,7 @@ struct EditorDocumentTests {
 
         if trigger == "watcher" || trigger == "reopen" {
             if trigger == "watcher" {
-                #expect(!model.processExternalChanges([file]))
+                await model.reconcileExternalChanges([file])
             } else {
                 #expect(await model.previewDocument(at: file) === document)
             }
@@ -4892,22 +5024,23 @@ struct EditorDocumentTests {
             #expect(model.openDocuments.isEmpty)
             document.applyLiveEditorText("external + local")
             model.promotePreviewDocument(document)
-            try model.save(document)
+            try await model.save(document)
             #expect(try String(contentsOf: file, encoding: .utf8) == "external + local")
         } else {
             // The watcher has not delivered its event before editing/promotion or saving.
             document.applyLiveEditorText("A + local")
             if trigger == "promotion" {
                 model.promotePreviewDocument(document)
+                await model.reconcileExternalChanges([file])
                 #expect(document.hasExternalConflict)
             }
-            #expect(throws: (any Error).self) { try model.save(document) }
+            await #expect(throws: (any Error).self) { try await model.save(document) }
             #expect(document.hasExternalConflict)
             #expect(document.text == "A + local")
             #expect(try String(contentsOf: file, encoding: .utf8) == "external")
             // Explicit conflict resolution remains the only way to replace that disk version.
             model.keepEditorVersion(of: document)
-            try model.save(document)
+            try await model.save(document)
             #expect(try String(contentsOf: file, encoding: .utf8) == "A + local")
         }
     }
@@ -5358,6 +5491,7 @@ private final class InMemoryFileStorage: FileStorage, GitShelfStorage, DatabaseF
     private let support = URL(fileURLWithPath: "/in-memory-application-support", isDirectory: true)
     private var files: [String: Data] = [:]
     private var directories: Set<String> = []
+    private var executablePaths: Set<String> = []
 
     func homeDirectory() -> URL { support }
     func cacheDirectory() -> URL { support }
@@ -5391,13 +5525,23 @@ private final class InMemoryFileStorage: FileStorage, GitShelfStorage, DatabaseF
         lock.unlock()
     }
 
+    func markExecutable(_ url: URL) {
+        lock.lock()
+        executablePaths.insert(url.path)
+        lock.unlock()
+    }
+
     func fileExists(at url: URL) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         return files[url.path] != nil || directories.contains(url.path)
     }
 
-    func isExecutable(at url: URL) -> Bool { false }
+    func isExecutable(at url: URL) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return executablePaths.contains(url.path)
+    }
 
     func listDirectory(at url: URL) -> [URL] {
         lock.lock()
@@ -5754,6 +5898,16 @@ private struct ExistingWorkspaceFileOperations: WorkspaceFileOperations {
 }
 
 private struct EmptyWorkspaceFileOperations: WorkspaceFileOperations {
+    var guardedRead: (@Sendable () async throws -> String?)? = nil
+    func readDocumentTextAsync(from url: URL) async throws -> String? {
+        if let guardedRead { return try await guardedRead() }
+        return try readText(from: url)
+    }
+    var guardedWrite: (@Sendable (String, String?) async throws -> DocumentWriteResult)? = nil
+    func writeDocumentTextAsync(_ text: String, to url: URL, expectedContent: String?) async throws -> DocumentWriteResult {
+        guard let guardedWrite else { throw CocoaError(.featureUnsupported) }
+        return try await guardedWrite(text, expectedContent)
+    }
     func fileExists(at url: URL) -> Bool { false }
     func isDirectory(at url: URL) -> Bool { false }
     func createFile(at url: URL) throws {}
@@ -5854,11 +6008,492 @@ private final class TestDirectoryWatcherFactory: DirectoryWatcherFactory {
     }
 }
 
+@Suite("Document feature guarded persistence")
+@MainActor
+struct DocumentFeatureGuardedPersistenceTests {
+    // Unit tests exercise the persistence orchestration. Shared reducer behavior is
+    // independently verified by the linked Core verifier and lifecycle fixtures.
+    private struct PersistenceDecider: DocumentLifecycleDeciding {
+        func decide(state: DocumentLifecycleState, event: DocumentLifecycleEvent, operationID: String) throws -> DocumentLifecycleDecision {
+            switch event.type {
+            case .saveStarted:
+                return .init(state: .init(status: .saving, revision: state.revision,
+                    savedRevision: state.savedRevision, saveRevision: state.revision,
+                    operationId: event.operationId), action: .writeToDisk)
+            case .diskConflict:
+                return .init(state: .init(status: .conflict, revision: state.revision,
+                    savedRevision: state.savedRevision, saveRevision: nil, operationId: nil), action: .showConflict)
+            case .saveSucceeded:
+                let revision = state.saveRevision ?? state.revision
+                return .init(state: state.revision == revision ? .clean(revision: revision)
+                    : .dirty(revision: state.revision, savedRevision: revision), action: .none)
+            case .saveFailed:
+                return .init(state: state, action: .none)
+            default:
+                Issue.record("Unexpected lifecycle event in persistence test")
+                throw CocoaError(.featureUnsupported)
+            }
+        }
+    }
+
+    private func feature(
+        _ files: EmptyWorkspaceFileOperations,
+        delay: @escaping @Sendable (Duration) async throws -> Void = { _ in }
+    ) -> DocumentFeatureModel {
+        var files = files
+        // These orchestration doubles do not own a disk image. Avoid inventing
+        // an external empty-file change when the post-save observer runs.
+        files.guardedRead = { throw CocoaError(.fileReadNoPermission) }
+        return DocumentFeatureModel(operations: EmptyWorkspaceOperations(readFileValue: "baseline"),
+            documentLifecycleDecider: PersistenceDecider(),
+            fileOperations: files, fileStorage: InMemoryFileStorage(),
+            binaryFileViewerRegistry: BinaryFileViewerRegistry(), autoSaveDelay: delay)
+    }
+
+    private actor ManualSaveWrites {
+        let firstStarted = TestGate(), secondStarted = TestGate(), release = TestGate()
+        var contents: [String] = []
+
+        func write(_ content: String) async -> DocumentWriteResult {
+            contents.append(content)
+            if content == "first edit" { firstStarted.open() }
+            if content == "second edit" { secondStarted.open() }
+            #expect(await release.waitUntilOpen(timeout: .seconds(2)), "Manual save gate timed out")
+            return .saved
+        }
+    }
+
+    @Test func switchingDocumentsDoesNotDropAManualSaveDuringAnotherWrite() async throws {
+        let writes = ManualSaveWrites()
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { content, _ in
+            await writes.write(content)
+        }))
+        configure(model)
+        defer { writes.release.open(); model.reset() }
+        let firstDocument = try await open(model)
+        let secondDocument = try await open(model, name: "B.swift")
+        firstDocument.text = "first edit"
+        secondDocument.text = "second edit"
+
+        model.activeDocumentID = firstDocument.id
+        let first = try #require(model.saveActiveDocument())
+        defer { first.cancel() }
+        let repeatedFirst = try #require(model.saveActiveDocument())
+        defer { repeatedFirst.cancel() }
+        try #require(await writes.firstStarted.waitUntilOpen(timeout: .seconds(2)), "First document did not start saving")
+
+        // The first disk operation still owns its gate when Cmd-S targets B.
+        model.activeDocumentID = secondDocument.id
+        let second = try #require(model.saveActiveDocument())
+        defer { second.cancel() }
+        let repeatedSecond = try #require(model.saveActiveDocument())
+        defer { repeatedSecond.cancel() }
+        try #require(await writes.secondStarted.waitUntilOpen(timeout: .seconds(2)), "Second document save was dropped")
+        writes.release.open()
+        try await waitForDocumentTask(first)
+        try await waitForDocumentTask(repeatedFirst)
+        try await waitForDocumentTask(second)
+        try await waitForDocumentTask(repeatedSecond)
+
+        #expect(await writes.contents.sorted() == ["first edit", "second edit"])
+        #expect(!firstDocument.isDirty && !secondDocument.isDirty)
+        #expect(firstDocument.savedText == "first edit")
+        #expect(secondDocument.savedText == "second edit")
+    }
+
+    @Test func cancellingAManualSaveBeforeItStartsAllowsTheSameDocumentToRetry() async throws {
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { _, _ in .saved }))
+        configure(model)
+        defer { model.reset() }
+        let document = try await open(model)
+        document.text = "retry edit"
+        let cancelled = try #require(model.saveActiveDocument())
+        cancelled.cancel()
+        try await waitForDocumentTask(cancelled)
+        #expect(document.isDirty)
+        let retry = try #require(model.saveActiveDocument())
+        defer { retry.cancel() }
+        try await waitForDocumentTask(retry)
+        #expect(!document.isDirty)
+        #expect(document.savedText == "retry edit")
+    }
+
+    @Test func workspaceLeaseAndNativeSaveCannotOwnTheSameDocument() async throws {
+        let started = TestGate(), release = TestGate()
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { _, _ in
+            started.open()
+            #expect(await release.waitUntilOpen(), "Save gate timed out")
+            return .saved
+        }))
+        defer { release.open(); model.reset() }
+        let document = EditorDocument(url: URL(fileURLWithPath: "/fixture/main.go"), text: "old", modificationDate: nil)
+        document.text = "new"
+        let lease = try #require(document.acquireMutationLease())
+        defer { document.releaseMutationLease(lease) }
+        await #expect(throws: EditorDocument.DocumentError.self) { try await model.save(document) }
+        #expect(!started.isOpen)
+        document.releaseMutationLease(lease)
+        let save = Task {
+            do { #expect(try await model.save(document)) }
+            catch { Issue.record("Unexpected save error: \(error)") }
+        }
+        defer { save.cancel() }
+        try #require(await started.waitUntilOpen(), "Save did not reach the disk boundary")
+        #expect(document.acquireMutationLease() == nil)
+        release.open()
+        try await waitForDocumentTask(save)
+        let nextLease = try #require(document.acquireMutationLease())
+        document.releaseMutationLease(nextLease)
+        #expect(!document.isDirty)
+    }
+
+    @Test(arguments: ["rename", "lease"])
+    func staleObserverReadCannotReplaceARelocatedOrLeasedBuffer(boundary: String) async throws {
+        let started = TestGate(), release = TestGate()
+        let files = EmptyWorkspaceFileOperations(guardedRead: {
+            started.open()
+            #expect(await release.waitUntilOpen(), "Observer read gate timed out")
+            return "external"
+        })
+        let model = DocumentFeatureModel(operations: EmptyWorkspaceOperations(readFileValue: "baseline"),
+            documentLifecycleDecider: PreviewExternalChangeLifecycleDecider(), fileOperations: files,
+            fileStorage: InMemoryFileStorage(), binaryFileViewerRegistry: BinaryFileViewerRegistry())
+        configure(model)
+        defer { release.open(); model.reset() }
+        let document = try await open(model)
+        let originalURL = document.url
+        let read = Task { await model.reconcileExternalChanges([originalURL]) }
+        defer { read.cancel() }
+        try #require(await started.waitUntilOpen(), "Observer read did not start")
+        var lease: EditorDocument.MutationLease?
+        defer { if let lease { document.releaseMutationLease(lease) } }
+        if boundary == "rename" {
+            document.relocate(to: originalURL.deletingLastPathComponent().appendingPathComponent("renamed.swift"))
+            document.relocate(to: originalURL)
+        } else {
+            lease = try #require(document.acquireMutationLease())
+            model.beginBufferMutation([document])
+        }
+        release.open()
+        try await waitForDocumentTask(read)
+        #expect(document.text == "baseline")
+        if let lease {
+            document.commitMutationText("transaction", lease: lease)
+            document.releaseMutationLease(lease)
+            model.endBufferMutation([document])
+            let reconciled = Task { await model.reconcileExternalChanges([originalURL]) }
+            defer { reconciled.cancel() }
+            try await waitForDocumentTask(reconciled)
+            #expect(document.text == "transaction")
+            #expect(document.hasExternalConflict)
+        }
+    }
+
+    @Test func saveWithoutNotificationPreservesExternalConflict() async throws {
+        let document = EditorDocument(url: URL(fileURLWithPath: "/fixture/A.swift"), text: "baseline", modificationDate: nil)
+        document.text = "mine"
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { content, baseline in
+            #expect(content == "mine")
+            #expect(baseline == "baseline")
+            return .conflict("external")
+        }))
+        defer { model.reset() }
+        do { try await model.save(document); Issue.record("Conflict must abort saving") }
+        catch { #expect((error as NSError).domain == NSCocoaErrorDomain, "Unexpected save error: \(error)") }
+        #expect(document.text == "mine")
+        #expect(document.savedText == "baseline")
+        #expect(document.lifecycleState.status == .conflict)
+    }
+
+    @Test func editsDuringSaveStayDirtyAndPreventRunOrCloseFromUsingStaleSave() async throws {
+        let document = EditorDocument(url: URL(fileURLWithPath: "/fixture/A.swift"), text: "baseline", modificationDate: nil)
+        document.text = "saving snapshot"
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { content, baseline in
+            #expect(content == "saving snapshot")
+            #expect(baseline == "baseline")
+            // The native operation has captured its bytes; input arrives before its response.
+            await MainActor.run { document.text = "new input" }
+            return .saved
+        }))
+        defer { model.reset() }
+        do { try await model.save(document); Issue.record("New input must prevent dependent workflows from proceeding") }
+        catch { #expect(error is DocumentFeatureModel.SaveProgress, "Unexpected save error: \(error)") }
+        #expect(document.text == "new input")
+        #expect(document.savedText == "saving snapshot")
+        #expect(document.isDirty)
+    }
+
+    private func configure(_ model: DocumentFeatureModel, enabled: @escaping @MainActor () -> Bool = { false },
+                           projectClosed: @escaping @MainActor () -> Void = {},
+                           closeFailed: @escaping @MainActor () -> Void = {}) {
+        model.configure(workspaceURLProvider: { URL(fileURLWithPath: "/fixture") },
+            autoSaveEnabledProvider: enabled, autoSaveDelayProvider: { 1 }, notify: { _ in },
+            onDocumentOpened: { _ in }, onDocumentChanged: { _ in }, onDocumentClosed: { _ in },
+            onRecordSave: { _, _ in }, onRecordDiscard: { _ in }, onRecordExternalChanges: { _ in },
+            onDocumentCollectionChanged: {}, onProjectCloseReady: projectClosed, onCloseFailed: closeFailed)
+    }
+
+    private func open(_ model: DocumentFeatureModel, name: String = "A.swift") async throws -> EditorDocument {
+        await model.openFileAsync(URL(fileURLWithPath: "/fixture/" + name), isReadOnly: false,
+                                  displayPath: nil, activateWhenReady: true)
+        return try #require(model.activeDocument)
+    }
+
+    @Test func acceptedSaveSurvivesDialogDismissal() async throws {
+        let started = TestGate(), release = TestGate()
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { _, _ in
+            started.open()
+            #expect(await release.waitUntilOpen(), "Save gate timed out")
+            return .saved
+        }))
+        configure(model)
+        defer { release.open(); model.reset() }
+        let document = try await open(model)
+        document.text = "mine"
+        model.requestCloseDocument(document)
+        let confirmation = model.pendingCloseConfirmationID
+        let task = try #require(model.closePendingDocument(discardingChanges: false))
+        defer { task.cancel() }
+        // SwiftUI may dismiss before the Task begins or while native saving awaits.
+        model.dismissPendingCloseConfirmation(confirmation)
+        #expect(await started.waitUntilOpen(), "Save did not start")
+        model.dismissPendingCloseConfirmation(confirmation)
+        #expect(model.hasPendingDocumentClose)
+        release.open()
+        try await waitForDocumentTask(task)
+        #expect(model.openDocuments.isEmpty)
+        #expect(!model.hasPendingDocumentClose)
+    }
+
+    @Test func oldDialogDismissalCannotCancelNextQueuedDocument() async throws {
+        let model = feature(EmptyWorkspaceFileOperations())
+        configure(model)
+        defer { model.reset() }
+        let first = try await open(model)
+        let second = try await open(model, name: "B.swift")
+        first.text = "first"; second.text = "second"
+        model.requestCloseDocuments([first, second])
+        let firstConfirmation = model.pendingCloseConfirmationID
+        let task = try #require(model.closePendingDocument(discardingChanges: true))
+        defer { task.cancel() }
+        try await waitForDocumentTask(task)
+        model.dismissPendingCloseConfirmation(firstConfirmation)
+        #expect(model.pendingCloseDocument?.id == second.id)
+        model.dismissPendingCloseConfirmation(model.pendingCloseConfirmationID)
+        #expect(!model.hasPendingDocumentClose)
+        #expect(model.openDocuments.map(\.id) == [second.id])
+    }
+
+    @Test func explicitCancellationWhileSavingPreservesOpenDocument() async throws {
+        let started = TestGate(), release = TestGate()
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { _, _ in
+            started.open()
+            #expect(await release.waitUntilOpen(), "Save gate timed out")
+            return .saved
+        }))
+        configure(model)
+        defer { release.open(); model.reset() }
+        let document = try await open(model)
+        document.text = "mine"
+        model.requestCloseDocument(document)
+        let task = try #require(model.closePendingDocument(discardingChanges: false))
+        defer { task.cancel() }
+        #expect(await started.waitUntilOpen(), "Save did not start")
+        model.cancelPendingClose()
+        release.open()
+        try await waitForDocumentTask(task)
+        #expect(model.openDocuments.map(\.id) == [document.id])
+        #expect(!model.hasPendingDocumentClose)
+    }
+
+    @Test func projectCloseRechecksDocumentsEditedDuringSave() async throws {
+        let started = TestGate(), release = TestGate()
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { _, _ in
+            started.open()
+            #expect(await release.waitUntilOpen(), "Save gate timed out")
+            return .saved
+        }))
+        var closed = false
+        configure(model, projectClosed: { closed = true })
+        defer { release.open(); model.reset() }
+        let first = try await open(model)
+        let second = try await open(model, name: "B.swift")
+        first.text = "mine"
+        #expect(model.beginProjectClose())
+        let task = try #require(model.closePendingDocument(discardingChanges: false))
+        defer { task.cancel() }
+        #expect(await started.waitUntilOpen(), "Save did not start")
+        second.text = "new input"
+        release.open()
+        try await waitForDocumentTask(task)
+        #expect(!closed)
+        #expect(model.pendingCloseDocument?.id == second.id)
+        #expect(model.isPendingProjectClose)
+    }
+
+    @MainActor private final class AutoSavePreference { var enabled = true }
+
+    private actor AutoSaveDelay {
+        var calls = 0
+        let secondStarted = TestGate(), releaseSecond = TestGate()
+        func wait(_ duration: Duration) async throws {
+            calls += 1
+            if calls == 2 {
+                secondStarted.open()
+                _ = await releaseSecond.waitUntilOpen()
+                try Task.checkCancellation()
+            }
+        }
+    }
+
+    @Test func oldAutoSaveCompletionPreservesReplacementCancellation() async throws {
+        let started = TestGate(), release = TestGate()
+        let delay = AutoSaveDelay()
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { _, _ in
+            started.open()
+            _ = await release.waitUntilOpen()
+            return .saved
+        }), delay: { try await delay.wait($0) })
+        let preference = AutoSavePreference()
+        configure(model, enabled: { preference.enabled })
+        let releaseDelay = delay.releaseSecond
+        defer { release.open(); releaseDelay.open(); model.reset() }
+        let document = EditorDocument(url: URL(fileURLWithPath: "/fixture/A.swift"), text: "baseline", modificationDate: nil)
+        document.text = "first"
+        let first = try #require(model.documentDidChange(document))
+        defer { first.cancel() }
+        #expect(await started.waitUntilOpen(), "First save did not start")
+        document.text = "second"
+        let second = try #require(model.documentDidChange(document))
+        defer { second.cancel() }
+        let secondStarted = delay.secondStarted
+        #expect(await secondStarted.waitUntilOpen(), "Replacement delay did not start")
+        release.open()
+        try await waitForDocumentTask(first)
+        // The old task has completed; disabling and typing must still cancel B.
+        preference.enabled = false
+        document.text = "after disabling"
+        model.documentDidChange(document)
+        #expect(second.isCancelled)
+        releaseDelay.open()
+        try await waitForDocumentTask(second)
+        #expect(document.savedText == "first")
+        #expect(document.isDirty)
+    }
+
+    private actor OverlappingWrites {
+        let started = TestGate(), release = TestGate()
+        var contents: [String] = []
+        var baselines: [String?] = []
+        func write(_ content: String, baseline: String?) async -> DocumentWriteResult {
+            contents.append(content)
+            baselines.append(baseline)
+            if contents.count == 1 {
+                started.open()
+                // A dispatched native write completes independently of caller
+                // cancellation. Own the asynchronous gate wait separately so
+                // reset cannot turn an explicit cancellation into a timeout.
+                let completion = Task { await release.waitUntilOpen(timeout: .seconds(2)) }
+                defer { completion.cancel() }
+                #expect(await completion.value, "Write gate timed out")
+            }
+            return .saved
+        }
+    }
+
+    @Test(arguments: ["continue", "disable", "close"])
+    func overlappingAutoSaveFinishesLatestRevisionUnlessCancelled(ending: String) async throws {
+        let writes = OverlappingWrites()
+        let delay = AutoSaveDelay()
+        let preference = AutoSavePreference()
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { content, baseline in
+            await writes.write(content, baseline: baseline)
+        }), delay: { try await delay.wait($0) })
+        configure(model, enabled: { preference.enabled })
+        defer { writes.release.open(); delay.releaseSecond.open(); model.reset() }
+        let document = try await open(model)
+        document.text = "A"
+        let first = try #require(model.documentDidChange(document))
+        defer { first.cancel() }
+        #expect(await writes.started.waitUntilOpen(), "First write did not start")
+        document.text = "B"
+        let second = try #require(model.documentDidChange(document))
+        defer { second.cancel() }
+        #expect(await delay.secondStarted.waitUntilOpen(), "Second delay did not start")
+        delay.releaseSecond.open()
+        if ending == "disable" { preference.enabled = false }
+        if ending == "close" { model.reset() }
+        writes.release.open()
+        try await waitForDocumentTask(first)
+        try await waitForDocumentTask(second)
+        let contents = await writes.contents
+        if ending == "continue" {
+            #expect(contents == ["A", "B"])
+            #expect(await writes.baselines == ["baseline", "A"])
+            #expect(!document.isDirty)
+        } else {
+            #expect(contents == ["A"])
+        }
+    }
+
+    @Test func failedSaveReleasesCloseRequestAndAllowsRetry() async throws {
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { _, _ in
+            throw CocoaError(.fileWriteNoPermission)
+        }))
+        var failures = 0
+        var closed = false
+        configure(model, projectClosed: { closed = true }, closeFailed: { failures += 1 })
+        defer { model.reset() }
+        let document = try await open(model)
+        document.text = "mine"
+        #expect(model.beginProjectClose())
+        let failed = try #require(model.closePendingDocument(discardingChanges: false))
+        defer { failed.cancel() }
+        try await waitForDocumentTask(failed)
+        #expect(failures == 1)
+        #expect(!closed)
+        #expect(!model.hasPendingDocumentClose)
+        #expect(model.openDocuments.map(\.id) == [document.id])
+        #expect(model.beginProjectClose())
+        let retry = try #require(model.closePendingDocument(discardingChanges: true))
+        defer { retry.cancel() }
+        try await waitForDocumentTask(retry)
+        #expect(closed)
+        #expect(model.openDocuments.isEmpty)
+    }
+
+    @Test func alreadySavedQueuedDocumentClosesWithoutAnotherWrite() async throws {
+        let model = feature(EmptyWorkspaceFileOperations(guardedWrite: { _, _ in
+            Issue.record("A clean document must not be written again")
+            return .saved
+        }))
+        configure(model)
+        defer { model.reset() }
+        let first = try await open(model)
+        let second = try await open(model, name: "B.swift")
+        first.text = "first"; second.text = "second"
+        model.requestCloseDocuments([first, second])
+        let discard = try #require(model.closePendingDocument(discardingChanges: true))
+        defer { discard.cancel() }
+        try await waitForDocumentTask(discard)
+        // An automatic save completes while this document awaits its choice.
+        second.markSavedWithoutWriting()
+        let save = try #require(model.closePendingDocument(discardingChanges: false))
+        defer { save.cancel() }
+        try await waitForDocumentTask(save)
+        #expect(model.openDocuments.isEmpty)
+        #expect(!model.hasPendingDocumentClose)
+    }
+}
+
 /// Supplies lifecycle decisions so filesystem orchestration tests do not depend on a linked Rust runtime.
 private struct PreviewExternalChangeLifecycleDecider: DocumentLifecycleDeciding {
     func decide(state: DocumentLifecycleState, event: DocumentLifecycleEvent,
                 operationID: String) throws -> DocumentLifecycleDecision {
         switch event.type {
+        case .diskConflict:
+            return .init(state: .init(status: .conflict, revision: state.revision,
+                savedRevision: state.savedRevision, saveRevision: nil, operationId: nil), action: .showConflict)
         case .externalChanged:
             if state.status == .clean { return .init(state: state, action: .reloadFromDisk) }
             return .init(state: .init(status: .conflict, revision: state.revision,
@@ -5874,4 +6509,14 @@ private struct PreviewExternalChangeLifecycleDecider: DocumentLifecycleDeciding 
             throw CocoaError(.featureUnsupported)
         }
     }
+}
+
+/// Bounds asynchronous persistence completion independently of the suite watchdog.
+@MainActor
+private func waitForDocumentTask(_ task: Task<Void, Never>?) async throws {
+    guard let task else { return }
+    let finished = TestGate()
+    let observer = Task { await task.value; finished.open() }
+    defer { observer.cancel(); task.cancel(); finished.open() }
+    try #require(await finished.waitUntilOpen(timeout: .seconds(5)), "Document task did not finish")
 }

@@ -59,29 +59,37 @@ struct LitheSettingsSelect<Value: Hashable>: View {
     private let width: CGFloat
     private let accessibilityLabel: String
     private let title: (Value) -> String
+    private let isAvailable: (Value) -> Bool
+    private let onUnavailableSelection: ((Value) -> Void)?
 
     init(
         selection: Binding<Value>,
         options: [Value],
         width: CGFloat,
         accessibilityLabel: String,
-        title: @escaping (Value) -> String
+        title: @escaping (Value) -> String,
+        isAvailable: @escaping (Value) -> Bool = { _ in true },
+        onUnavailableSelection: ((Value) -> Void)? = nil
     ) {
         _selection = selection
         self.options = options
         self.width = width
         self.accessibilityLabel = accessibilityLabel
         self.title = title
+        self.isAvailable = isAvailable
+        self.onUnavailableSelection = onUnavailableSelection
     }
 
     var body: some View {
         Menu {
             ForEach(options, id: \.self) { option in
                 Button {
-                    selection = option
+                    if isAvailable(option) { selection = option }
+                    else { onUnavailableSelection?(option) }
                 } label: {
                     HStack {
                         Text(verbatim: localizedTitle(option))
+                            .foregroundStyle(isAvailable(option) ? LitheTheme.primaryText : LitheTheme.tertiaryText)
                         if selection == option { Image(systemName: "checkmark") }
                     }
                 }
@@ -91,7 +99,7 @@ struct LitheSettingsSelect<Value: Hashable>: View {
                 .lineLimit(1)
         }
         .font(.system(size: 13))
-        .foregroundStyle(LitheTheme.primaryText)
+        .foregroundStyle(isAvailable(selection) ? LitheTheme.primaryText : LitheTheme.tertiaryText)
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         // AppKit extracts the native menu label. Size and chrome must wrap

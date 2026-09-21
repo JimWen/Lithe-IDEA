@@ -2,11 +2,15 @@ import SwiftUI
 import LitheTerminalModule
 
 struct TerminalSettingsView: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var settings: AppSettings
     let displayDiagnostics: [String]
     let retryDisplay: () -> Void
     @State private var argumentIDs: [UUID]
     @State private var environmentIDs: [UUID]
+    @State private var detectedShells: [String] = []
+    @State private var knownShells: [String] = []
+    @State private var missingShellPath: String?
 
     init(settings: AppSettings, displayDiagnostics: [String], retryDisplay: @escaping () -> Void) {
         self.settings = settings
@@ -30,10 +34,32 @@ struct TerminalSettingsView: View {
             section("Shell") {
                 row("Default shell") {
                     LitheSettingsSelect(selection: $settings.terminalShell, options: TerminalShell.allCases,
-                                        width: 220, accessibilityLabel: "Default shell", title: \.title)
+                                        width: 320, accessibilityLabel: "Default shell", title: shellTitle,
+                                        isAvailable: shellIsAvailable,
+                                        onUnavailableSelection: { missingShellPath = shellPath($0) })
                 }
                 if settings.terminalShell == .custom {
                     row("Program") { field("Shell program", text: $settings.terminalConfiguration.customProgram) }
+                }
+                HStack(spacing: 10) {
+                    Menu("Detected shells") {
+                        ForEach(shellOptions, id: \.self) { path in
+                            Button {
+                                guard detectedShells.contains(path) else { missingShellPath = path; return }
+                                // Selecting a discovered executable changes only shell choice;
+                                // arguments, environment and virtual-environment settings stay intact.
+                                settings.terminalConfiguration.customProgram = path
+                                settings.terminalShell = .custom
+                            } label: {
+                                Text(verbatim: "\(URL(fileURLWithPath: path).lastPathComponent) (\(path))")
+                                    .foregroundStyle(detectedShells.contains(path) ? LitheTheme.primaryText : LitheTheme.tertiaryText)
+                            }
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    Button("Detect Installed Shells", action: refreshShellChoices)
+                        .buttonStyle(LitheSecondaryButtonStyle())
                 }
                 LitheSettingsCheckbox(isOn: $settings.terminalConfiguration.loginShell, title: "Run as login shell")
                 Text("Login adds -l before the arguments. Explicit -l or --login arguments are preserved.")
@@ -87,12 +113,77 @@ struct TerminalSettingsView: View {
             TerminalVirtualEnvironmentSettingsView(settings: settings)
         }
         .font(.system(size: 13)).foregroundStyle(LitheTheme.primaryText)
+        .task {
+            guard await model.activateTerminalModule(), !Task.isCancelled else { return }
+            refreshShellChoices()
+        }
+        .alert("Shell not found", isPresented: Binding(
+            get: { missingShellPath != nil },
+            set: { if !$0 { missingShellPath = nil } }
+        )) {
+            Button("OK", role: .cancel) { missingShellPath = nil }
+        } message: {
+            if let missingShellPath {
+                Text("No shell was found at \(missingShellPath). Choose a detected shell or run detection again.")
+            }
+        }
         .onChange(of: settings.terminalConfiguration.arguments.count) { count in
             if argumentIDs.count != count { argumentIDs = (0..<count).map { _ in UUID() } }
         }
         .onChange(of: settings.terminalConfiguration.environment.count) { count in
             if environmentIDs.count != count { environmentIDs = (0..<count).map { _ in UUID() } }
         }
+    }
+
+    private var shellOptions: [String] {
+        var options = knownShells
+        options += detectedShells.filter { !options.contains($0) }
+        if let selected = settings.terminalShellPath, !selected.isEmpty, !options.contains(selected) {
+            options.append(selected)
+        }
+        return options
+    }
+
+    private func refreshShellChoices() {
+        model.terminalFeature?.refreshAvailableShells()
+        detectedShells = model.availableTerminalShells
+        knownShells = MacTerminalShellDiscovery.knownShells()
+    }
+
+    private func shellPath(_ shell: TerminalShell) -> String {
+        switch shell {
+        case .system: return MacTerminalShellDiscovery.defaultShellPath()
+        case .custom: return settings.terminalConfiguration.customProgram
+        case .zsh, .bash:
+            var configuration = TerminalShellConfiguration()
+            configuration.shell = shell
+            return configuration.specifiedShellPath ?? ""
+        }
+    }
+
+    private func shellIsAvailable(_ shell: TerminalShell) -> Bool {
+        // Custom also accepts PATH names/wrappers; native launch validation owns
+        // that resolution. Choosing Custom must remain possible before editing it.
+        shell == .custom || detectedShells.contains(shellPath(shell))
+    }
+
+    private func shellTitle(_ shell: TerminalShell) -> String {
+        guard shell != .custom else { return shell.title }
+        let path = shellPath(shell)
+        if shell == .system {
+            guard detectedShells.contains(path) else {
+                return localizedShellString("System default · Shell not detected")
+            }
+            return String(format: localizedShellString("System default · %@ (%@)"),
+                          URL(fileURLWithPath: path).lastPathComponent, path)
+        }
+        return "\(URL(fileURLWithPath: path).lastPathComponent) (\(path))"
+    }
+
+    private func localizedShellString(_ key: String) -> String {
+        let bundle = Bundle.main.path(forResource: settings.language.locale.identifier, ofType: "lproj")
+            .flatMap(Bundle.init(path:)) ?? .main
+        return bundle.localizedString(forKey: key, value: key, table: nil)
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

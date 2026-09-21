@@ -166,6 +166,7 @@ extension AppModel {
             selectMediaDocument(media)
         }
     }
+    var pendingCloseConfirmationID: UUID? { documentFeature.pendingCloseConfirmationID }
     var pendingCloseDocument: EditorDocument? { documentFeature.pendingCloseDocument }
     var isPendingProjectClose: Bool { documentFeature.isPendingProjectClose }
 

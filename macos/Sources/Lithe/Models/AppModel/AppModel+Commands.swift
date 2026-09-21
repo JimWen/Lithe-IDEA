@@ -143,7 +143,7 @@ extension AppModel {
         case .newDirectory:
             if let root = workspaceURL { requestCreateDirectory(in: root) }
         case .save: saveActiveDocument()
-        case .saveAll: _ = saveAllDocuments()
+        case .saveAll: scheduleMenuCommand(request, canBegin: canBegin) { model in _ = await model.saveAllDocuments() }
         case .closeEditor: _ = requestCloseActiveWorkbenchItem()
         case .synchronize: scheduleMenuCommand(request, canBegin: canBegin) { model in await model.refreshWorkspace() }
         case .project, .commit, .find, .terminal, .run, .debug, .tests, .problems:

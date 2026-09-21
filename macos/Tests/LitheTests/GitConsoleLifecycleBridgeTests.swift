@@ -7,6 +7,69 @@ import LitheGitModule
 struct GitConsoleLifecycleBridgeTests {
     @MainActor
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LITHE_RUN_GIT_EXECUTION_INTEGRATION"] == "1"), arguments: [false, true])
+    func setupMutationsUseOneRealConsoleInvocationAndRespectClear(clearDuringOperation: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("lithe-setup-console-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = GitExecutionJournal()
+        let core = RustCoreBridge(gitExecutionJournal: journal)
+        try #require(core.isAvailable)
+        let feature = GitFeatureModel(service: GitService(operations: RustGitOperations(core: core)), executionJournal: journal)
+        defer { feature.reset() }
+        feature.configure(workspaceURLProvider: { root }, isGitLogVisibleProvider: { false },
+            notify: { _ in }, onStateRefreshed: {}, onGitOperationBegan: {
+                // The operation has captured its console generation, but Core
+                // has not delivered the invocation/result yet. This is an exact
+                // Clear-before-late-result boundary without sleeps or fake logs.
+                if clearDuringOperation { feature.clearGitConsole() }
+            })
+
+        func expectInvocation(_ arguments: [String]) throws {
+            #expect(journal.runningOperationIDs.isEmpty)
+            #expect(!feature.isGitExecutionRunning)
+            if clearDuringOperation {
+                #expect(feature.gitConsoleEntries.isEmpty)
+                #expect(journal.snapshot.isEmpty)
+            } else {
+                try #require(feature.gitConsoleEntries.count == 1)
+                try #require(journal.snapshot.count == 1)
+                let entry = try #require(journal.snapshot.first)
+                #expect(feature.gitConsoleEntries.first?.id == entry.id)
+                #expect(entry.arguments == arguments)
+                #expect(entry.workingDirectory.standardizedFileURL == root.standardizedFileURL)
+                #expect(entry.state == .completed && entry.succeeded)
+                #expect(entry.durationMilliseconds != nil && entry.executable != nil)
+            }
+        }
+
+        await feature.repositorySetup.load(at: root)
+        try #require(feature.repositorySetup.state?.isRepository == false)
+        #expect(journal.snapshot.isEmpty, "Successful setup inspection stays silent")
+        let initialized = await feature.initializeGitRepository()
+        try #require(initialized)
+        try expectInvocation(["init"])
+
+        feature.clearGitConsole()
+        await feature.identitySettings.load(at: root, scope: .local)
+        feature.identitySettings.name = "Console Fixture"
+        await feature.saveGitIdentity(.name, clear: false)
+        try #require(feature.identitySettings.errorMessage == nil)
+        #expect(feature.identitySettings.state?.configuredName == "Console Fixture")
+        try expectInvocation(["config", "--local", "--replace-all", "--", "user.name", "Console Fixture"])
+
+        feature.clearGitConsole()
+        await feature.saveGitIdentity(.name, clear: true)
+        try #require(feature.identitySettings.errorMessage == nil)
+        #expect(feature.identitySettings.state?.configuredName == nil)
+        try expectInvocation(["config", "--local", "--unset-all", "--", "user.name"])
+        if clearDuringOperation {
+            await feature.loadGitConsoleIfNeeded()
+            #expect(feature.gitConsoleEntries.isEmpty && journal.snapshot.isEmpty)
+        }
+    }
+
+    @MainActor
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LITHE_RUN_GIT_EXECUTION_INTEGRATION"] == "1"), arguments: [false, true])
     func featureSettingsPreflightFailureReachesConsoleUnlessCleared(clearDuringOperation: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("lithe-settings-console-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

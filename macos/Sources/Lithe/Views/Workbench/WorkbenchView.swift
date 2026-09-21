@@ -56,44 +56,8 @@ struct WorkbenchView: View {
 
     var body: some View {
         let _ = LitheSignpost.bodyEvaluated("WorkbenchView")
-        VStack(spacing: 0) {
-            if projectSessions.openProjects.count > 1 {
-                projectTabBar
-            }
-
-            GeometryReader { geometry in
-                // Keep the project tree and editor usable at the minimum window
-                // width, while preserving the preferred tool width on larger windows.
-                let panelWidth = WorkbenchLayoutMetrics.dockedToolWidth(
-                    availableWidth: geometry.size.width, preferredWidth: rightSidebarWidth)
-                HStack(spacing: 0) {
-                    activityBar
-                    workspaceArea
-                    rightHoverRegion(panelWidth: panelWidth)
-                }
-                .frame(maxHeight: .infinity)
-            }
-
-            statusBar
-        }
-        .background {
-            WorkbenchTitlebar(content: topBar
-                .environmentObject(model)
-                .environmentObject(updateChecker)
-                .environmentObject(projectSessions)
-                .environmentObject(settings)
-                .environment(\.locale, locale)
-                .environment(\.colorScheme, colorScheme))
-        }
-        .background {
-            if let feature = model.gitFeatureIfActive { GitAuthenticationHost(feature: feature) }
-        }
-        .background {
-            WorkbenchBackgroundImageView(
-                image: workbenchBackgroundImage,
-                opacity: settings.workbenchBackgroundOpacity
-            )
-        }
+        let closeConfirmationID = model.pendingCloseConfirmationID
+        workbenchContent
         .sheet(item: $model.editingRunConfiguration) { configuration in
             if let feature = model.runFeatureIfActive {
                 RunConfigurationEditorView(feature: feature, configuration: configuration)
@@ -191,7 +155,7 @@ struct WorkbenchView: View {
             "Save changes before closing?",
             isPresented: Binding(
                 get: { model.pendingCloseDocument != nil },
-                set: { if !$0 { model.cancelPendingClose() } }
+                set: { if !$0 { model.dismissPendingCloseConfirmation(closeConfirmationID) } }
             ),
             titleVisibility: .visible
         ) {
@@ -313,6 +277,47 @@ struct WorkbenchView: View {
         .onChange(of: model.workspaceURL?.standardizedFileURL.path) { _ in
             didRestoreLayout = false
             restoreLayout()
+        }
+    }
+
+    private var workbenchContent: some View {
+        VStack(spacing: 0) {
+            if projectSessions.openProjects.count > 1 {
+                projectTabBar
+            }
+
+            GeometryReader { geometry in
+                // Keep the project tree and editor usable at the minimum window
+                // width, while preserving the preferred tool width on larger windows.
+                let panelWidth = WorkbenchLayoutMetrics.dockedToolWidth(
+                    availableWidth: geometry.size.width, preferredWidth: rightSidebarWidth)
+                HStack(spacing: 0) {
+                    activityBar
+                    workspaceArea
+                    rightHoverRegion(panelWidth: panelWidth)
+                }
+                .frame(maxHeight: .infinity)
+            }
+
+            statusBar
+        }
+        .background {
+            WorkbenchTitlebar(content: topBar
+                .environmentObject(model)
+                .environmentObject(updateChecker)
+                .environmentObject(projectSessions)
+                .environmentObject(settings)
+                .environment(\.locale, locale)
+                .environment(\.colorScheme, colorScheme))
+        }
+        .background {
+            if let feature = model.gitFeatureIfActive { GitAuthenticationHost(feature: feature) }
+        }
+        .background {
+            WorkbenchBackgroundImageView(
+                image: workbenchBackgroundImage,
+                opacity: settings.workbenchBackgroundOpacity
+            )
         }
     }
 

@@ -46,6 +46,7 @@ rust_database=false
 macos_release=false
 rust_comments=false
 metadata=false
+git_validation=false
 
 enable_all_validation() {
     swift=true
@@ -54,6 +55,7 @@ enable_all_validation() {
     rust_core=true
     rust_database=true
     macos_release=true
+    git_validation=true
 }
 
 while IFS=$'\t' read -r status first_path _; do
@@ -83,6 +85,7 @@ while IFS=$'\t' read -r status first_path _; do
             swift=true
             rust_core=true
             macos_release=true
+            git_validation=true
             ;;
         .github/workflows/ci-plugins.yml)
             plugins=true
@@ -100,6 +103,7 @@ while IFS=$'\t' read -r status first_path _; do
             swift_database=true
             rust_core=true
             macos_release=true
+            git_validation=true
             ;;
         .agents/skills/write-stable-tests/scripts/*)
             # Test policy and timing infrastructure can select or reject every
@@ -108,6 +112,7 @@ while IFS=$'\t' read -r status first_path _; do
             plugins=true
             swift_database=true
             rust_core=true
+            git_validation=true
             ;;
         .github/*|docs/*|.agents/*|.idea/*|.gitignore|license)
             ;;
@@ -119,6 +124,7 @@ while IFS=$'\t' read -r status first_path _; do
             swift_database=true
             rust_core=true
             macos_release=true
+            git_validation=true
             ;;
         plugins/mac/*|macos/tests/litheofficialpluginverifier/*)
             plugins=true
@@ -226,9 +232,34 @@ while IFS=$'\t' read -r status first_path _; do
             swift=true
             rust_core=true
             ;;
-        macos/sources/*|macos/resources/*)
+        macos/sources/lithe/core/rust/rustgit*|macos/sources/lithe/core/rust/rustcorebridge+git*)
             swift=true
             macos_release=true
+            git_validation=true
+            ;;
+        macos/sources/lithe/core/rust/*)
+            # Swift bridge changes affect the release linkage boundary.
+            swift=true
+            macos_release=true
+            ;;
+        macos/sources/lithegitmodule/*|macos/sources/lithe/models/appmodel/appmodel+git*|macos/sources/lithe/models/bridges/gitmodulebridges.swift|macos/sources/lithe/platform/macos/storage/macgit*|macos/sources/lithe/views/git/*)
+            swift=true
+            git_validation=true
+            ;;
+        macos/sources/*)
+            # Swift tests compile the complete Lithe target. Ordinary product
+            # source changes do not also need two complete PR installer builds.
+            swift=true
+            ;;
+        macos/resources/*)
+            # Resource assembly is observable only in the packaged app, so keep
+            # both architecture package checks for these changes.
+            swift=true
+            macos_release=true
+            ;;
+        macos/tests/lithegitperformancetests/*|macos/tests/lithegitperformancesupport/*|macos/tests/lithegitperformanceverifier/*|macos/tests/lithetests/gitstatusobservationtests.swift)
+            swift=true
+            git_validation=true
             ;;
         macos/tests/*)
             swift=true
@@ -281,6 +312,7 @@ while IFS=$'\t' read -r status first_path _; do
             rust_core=true
             plugins=true
             swift_database=true
+            git_validation=true
             ;;
         scripts/package-macos-localizations.sh)
             # Localization assembly has Swift regression tests and is shared by
@@ -350,3 +382,4 @@ printf 'rust_database=%s\n' "$rust_database"
 printf 'macos_release=%s\n' "$macos_release"
 printf 'rust_comments=%s\n' "$rust_comments"
 printf 'metadata=%s\n' "$metadata"
+printf 'git_validation=%s\n' "$git_validation"

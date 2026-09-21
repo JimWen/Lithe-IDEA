@@ -506,7 +506,7 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     }
 
     func defaultShellPath() -> String {
-        inheritedEnvironment()["SHELL"] ?? "/bin/zsh"
+        MacTerminalShellDiscovery.defaultShellPath(environment: inheritedEnvironment())
     }
 
     func defaultEnvironment() -> [String: String] {

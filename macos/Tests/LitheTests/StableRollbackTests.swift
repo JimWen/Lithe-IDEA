@@ -145,8 +145,9 @@ struct StableRollbackTests {
             .write(to: app.appendingPathComponent("Contents/Info.plist"))
         let dmg = root.appendingPathComponent("stable.dmg")
         try await runFixtureTool("/usr/bin/codesign", ["--force", "--sign", "-", app.path])
+        // Keep the fixture uncompressed while retaining the existing local process deadline.
         try await runFixtureTool("/usr/bin/hdiutil", ["create", "-srcfolder", root.appendingPathComponent("payload").path,
-                                                   "-format", "UDZO", dmg.path])
+                                                   "-format", "UDRW", dmg.path])
         let archiveData = try Data(contentsOf: dmg)
         let checksum = SHA256.hash(data: archiveData).map { String(format: "%02x", $0) }.joined()
         let publisher = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))

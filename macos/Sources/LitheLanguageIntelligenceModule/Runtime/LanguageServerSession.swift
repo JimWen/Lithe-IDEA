@@ -537,9 +537,11 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
                     "operation=\(pending.name); \(Self.message(for: error))",
                     operationID
                 )
-                pending.completion(.failure(
-                    LanguageServerRuntimeSessionError.serverError(Self.message(for: error))
-                ))
+                if error.code == "staleDocumentVersion" || error.code == "requestCancelled" {
+                    pending.completion(.failure(CancellationError()))
+                } else {
+                    pending.completion(.failure(LanguageServerRuntimeSessionError.serverError(Self.message(for: error))))
+                }
             } else {
                 onLog?(
                     .info,

@@ -202,8 +202,14 @@ extension AppModel {
                       let document = self.openDocuments.first(where: { $0.url.standardizedFileURL == url.standardizedFileURL }) else { return false }
                 let previousText = document.text
                 document.text = text
-                do { try self.saveDocument(document); return true }
-                catch { document.text = previousText; throw error }
+                let revision = document.lifecycleState.revision
+                do { return try await self.saveDocument(document) }
+                catch {
+                    if document.lifecycleState.revision == revision, !document.hasMutationLease {
+                        document.text = previousText
+                    }
+                    throw error
+                }
             },
             applyTransaction: { [weak self] edits in
                 guard let self else { return ProjectReplacementApplyResult(changedFiles: 0, failedFiles: edits.map(\.path)) }
