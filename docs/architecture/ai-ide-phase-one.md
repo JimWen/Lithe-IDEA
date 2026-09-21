@@ -248,3 +248,7 @@ LITHE_RUN_LSP_SYNC_BRIDGE_INTEGRATION=1 \
 完整 1523 项测试中 1522 项通过，唯一失败为既有 `nativeRollbackUsesWrittenIdentityAndPreservesExternalWriter`。当时桌面已锁定，独立探针确认普通临时文件可读，使用 `.completeFileProtectionUnlessOpen` 写入并关闭的临时文件读取报 EPERM，与失败路径一致；记录为 `.artifacts/ui-gutter-settings-0922/file-protection-locked.log`。没有为让测试通过而修改文件保护行为。完整报告为 `.artifacts/test-stability/git-gutter-final-full.html`：14 个既有性能警告，无硬预算超限；本轮新增 Git 策略测试各 1 ms、绘图回归 64 ms，两个设置窗口回归 242 / 131 ms。
 
 当前剩余验收：解锁后复跑文件回滚和完整测试，并对重新构建的安装版执行 Go/Rust 新文件、局部连续新增、变更清除及多项目切换界面操作。上述项目完成前，本节不声明最终安装版整体实机验收通过。
+
+ARM64 Release 构建已成功（198.01 秒），产品提交 `69a56d679f43c6fb139989aa7aaffa79eda40410`，并已原子替换 `/Applications/Lithe.app`。签名、架构、必需资源与程序校验值核验一致，主程序 SHA-256 为 `b297731f5e5cf124cbc3e424444bf6a0ab68e526ba515eb2d3c8f8a837e1df89`，安装凭据为 `.artifacts/ui-gutter-settings-0922/installed-final/installation.json`。版本仍为 `0.1.0`；`dirty=true` 仅对应前述四份并行修改的架构文档。本段为安装后的文字补记，不重建产品。
+
+安装后未在锁屏状态下留下新的 Lithe 实例。Lithe、数据库 helper 及本次启动的 RustRover 已退出，输入法恢复原选择。原先已运行的 GoLand 进程保持不动，其中本次创建的 `git-gutter-comparison` 对照项目窗口因锁屏无法可靠操作，待解锁后关闭；清理记录为 `.artifacts/ui-gutter-settings-0922/cleanup-before-install.json`。
