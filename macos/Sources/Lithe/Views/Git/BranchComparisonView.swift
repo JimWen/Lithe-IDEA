@@ -27,12 +27,12 @@ struct BranchComparisonView: View {
             Image(systemName: "arrow.left.arrow.right")
                 .font(.system(size: 11.5))
                 .foregroundStyle(LitheTheme.accent)
-            Text("Diff: \(comparison.reference.shortName) with \(comparison.targetTitle)")
+            Text("Diff: \(comparison.reference.shortName) with \(targetTitle)")
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(LitheTheme.primaryText)
                 .lineLimit(1)
             Spacer()
-            Text(comparison.files.count == 1 ? "1 file" : "\(comparison.files.count) files")
+            Text("\(comparison.files.count) files")
                 .font(.system(size: 11.5))
                 .foregroundStyle(LitheTheme.secondaryText)
             Button("Close") {
@@ -91,7 +91,7 @@ struct BranchComparisonView: View {
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(LitheTheme.secondaryText)
             } else {
-                Text(comparison.files.isEmpty ? "No changed files" : "Select a file")
+                Text(LocalizedStringKey(comparison.files.isEmpty ? "No changed files" : "Select a file"))
                     .font(.system(size: 11.5))
                     .foregroundStyle(LitheTheme.secondaryText)
             }
@@ -193,7 +193,7 @@ struct BranchComparisonView: View {
                 .foregroundStyle(LitheTheme.secondaryText)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.selectedBranchComparisonFile == nil {
-                Text(comparison.files.isEmpty ? "The selected versions match" : "Select a file")
+                Text(LocalizedStringKey(comparison.files.isEmpty ? "The selected versions match" : "Select a file"))
                     .font(LitheTheme.uiFont)
                     .foregroundStyle(LitheTheme.secondaryText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -212,16 +212,23 @@ struct BranchComparisonView: View {
         .litheWorkbenchSurface(LitheTheme.editor)
     }
 
+    private var targetTitle: Text {
+        if let reference = comparison.targetReference {
+            return Text(verbatim: reference.shortName)
+        }
+        return Text("Working Tree")
+    }
+
     private var versionHeader: some View {
         HStack(spacing: 0) {
-            versionTitle(comparison.reference.shortName, icon: "lock")
+            versionTitle(Text(verbatim: comparison.reference.shortName), icon: "lock")
             ZStack {
                 LitheTheme.window
                 Rectangle().fill(LitheTheme.divider).frame(width: 1)
             }
             .frame(width: 34)
             versionTitle(
-                comparison.targetTitle,
+                targetTitle,
                 icon: comparison.targetReference == nil ? "folder" : "lock"
             )
         }
@@ -229,12 +236,12 @@ struct BranchComparisonView: View {
         .background(LitheTheme.window)
     }
 
-    private func versionTitle(_ title: String, icon: String) -> some View {
+    private func versionTitle(_ title: Text, icon: String) -> some View {
         HStack(spacing: 7) {
             Image(systemName: icon)
                 .font(.system(size: 10.5))
                 .foregroundStyle(LitheTheme.secondaryText)
-            Text(LocalizedStringKey(title))
+            title
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(LitheTheme.primaryText)
             if let file = model.selectedBranchComparisonFile {

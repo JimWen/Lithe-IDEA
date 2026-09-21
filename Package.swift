@@ -31,6 +31,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "third_party/SwiftTerm"),
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.9.6"),
         .package(url: "https://github.com/swiftlang/swift-testing.git", exact: "6.2.4")
     ],
     targets: [
@@ -113,7 +114,8 @@ let package = Package(
                 "LitheLanguageIntelligenceModule",
                 "LitheWorkspaceModule",
                 "LitheRustCore",
-                .product(name: "SwiftTerm", package: "SwiftTerm")
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
+                .product(name: "Sparkle", package: "Sparkle")
             ],
             path: "macos/Sources/Lithe",
             resources: [
@@ -128,6 +130,9 @@ let package = Package(
                 // CGFloat captures in layout helpers. Keep direct SwiftPM builds
                 // consistent with the supported build and preview scripts.
                 .unsafeFlags(["-Xfrontend", "-disable-round-trip-debug-types"])
+            ],
+            linkerSettings: [
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
             ]
         ),
         .testTarget(

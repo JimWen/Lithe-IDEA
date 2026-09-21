@@ -24,6 +24,9 @@ fi
 
 required_executables=(
     "$app_path/Contents/MacOS/Lithe"
+    "$app_path/Contents/Frameworks/Sparkle.framework/Sparkle"
+    "$app_path/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+    "$app_path/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app/Contents/MacOS/Updater"
     "$app_path/Contents/Helpers/lithe-db-sidecar"
     "$app_path/Contents/Helpers/lithe-db-mcp"
 )
@@ -55,6 +58,8 @@ for retired_resource in "$app_path/Contents/Resources/LanguageServers"/jdk*(N) \
         exit 1
     fi
 done
+/usr/bin/lipo "$app_path/Contents/Frameworks/Sparkle.framework/Sparkle" -verify_arch arm64 x86_64
+/usr/bin/otool -l "$app_path/Contents/MacOS/Lithe" | /usr/bin/grep -F '@executable_path/../Frameworks' >/dev/null
 
 plugin_manifests=("$app_path/Contents/Resources/OfficialPlugins"/*/plugin.json(N))
 if (( ${#plugin_manifests[@]} == 0 )); then

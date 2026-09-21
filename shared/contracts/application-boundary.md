@@ -25,7 +25,7 @@ verification scripts are the executable source of boundary checks.
 | Workspace | visible snapshot, relative paths, file metadata, deterministic ordering | workspace root selection, native dialogs, and watchers |
 | Documents | relative-path validation, UTF-8 read/write results, dirty/save state | native file integration and external-change notifications |
 | Search | query matching, deterministic result ordering, symbols, and replacement preview | workspace lifecycle and optional index persistence |
-| Git | changes, commits, branches, diffs, history, worktree listing and safe management, worktree-aware PR publication context, validation, and mutation results | Git executable discovery, credentials, process environment, opening checkout paths |
+| Git | changes, commits, branches, diffs, reviewed history actions and recovery, worktree listing and safe management, worktree-aware PR publication context, validation, and mutation results | Git executable discovery, credentials, process environment, opening checkout paths |
 | GitHub | remote parsing, trusted request plans, normalized branch comparisons and pull requests/reviews/comments, deterministic ordering, and stable errors | OAuth configuration, HTTPS, browser opening, and operating-system credential storage |
 | Runtime | Java requirements, normalized candidates, and effective toolchain references | JDK probing and executable paths |
 | Language tooling | provider catalog, local fallback results, complete LSP process/session runtime, capabilities, diagnostics, UTF-16 edits, and normalized feature results | executable/environment discovery and UI provider routing |
@@ -35,6 +35,7 @@ verification scripts are the executable source of boundary checks.
 | Workbench background | versioned source (`none`, bundled slot `01`–`10`, or `custom`) and opacity | UI, image rendering, bundled-resource packaging, local-image access permission and persistence |
 | Local History | revision metadata, text content, restore result | persistence location and file operations |
 | Modules | stable IDs, manifests, enabled state, lifecycle snapshots, dependencies, capabilities, and contributions | native factories, processes, timers, PTY/ConPTY, watchers, connections, and UI rendering |
+| Updates | [versioned release metadata, states, preference semantics, and stable errors](update-v1.md) | update feeds, package verification, download, installation, restart, and native UI |
 
 ## Module Lifecycle Contract
 
@@ -313,3 +314,17 @@ path is session-effective: validation and launch share it, but persistence
 still requires an explicit user selection.
 
 The default macOS distribution omits JDK, JDTLS, and Java Debug/Test resources. Opening a Java file retains text editing and syntax highlighting and does not prewarm a missing runtime. Maven/Spring workflows and the community integration are not part of this product.
+
+## SVG document preview
+
+The portable SVG preview contract matches extensions case-insensitively and
+uses editable text in workspace and standalone file flows. Platform adoption
+must be verified separately; this contract is not an installed-app acceptance
+record. The default presentation is editor plus preview, with editor-only and preview-only modes available. All modes use the
+same document buffer and preserve normal dirty, save, undo, and read-only rules.
+Preview rendering uses the current unsaved source. Malformed source shows a
+rendering failure while the editor remains accessible; correcting the source
+restores the preview. SVG is rendered as image data, never inserted into the
+application DOM as executable markup. Rendering and resizable layout are owned
+by the platform. The behavior fixture is
+[`svg-preview-v1.json`](../fixtures/editor/svg-preview-v1.json).

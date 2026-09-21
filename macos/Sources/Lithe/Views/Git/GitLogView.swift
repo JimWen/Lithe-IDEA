@@ -3,6 +3,7 @@ import SwiftUI
 import LitheGitModule
 
 struct GitLogView: View {
+    @ObservedObject var feature: GitFeatureModel
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.colorScheme) private var colorScheme
@@ -162,7 +163,7 @@ struct GitLogView: View {
             Text("This sends the selected local branch to its configured remote.")
         }
         .confirmationDialog(
-            pendingCommitOperation?.kind.title ?? "Git operation",
+            LocalizedStringKey(pendingCommitOperation?.kind.title ?? "Git operation"),
             isPresented: Binding(
                 get: { pendingCommitOperation != nil },
                 set: { if !$0 { pendingCommitOperation = nil } }
@@ -170,7 +171,7 @@ struct GitLogView: View {
             titleVisibility: .visible
         ) {
             if let operation = pendingCommitOperation {
-                Button(operation.kind.actionTitle) {
+                Button(LocalizedStringKey(operation.kind.actionTitle)) {
                     pendingCommitOperation = nil
                     Task {
                         switch operation.kind {
@@ -196,7 +197,7 @@ struct GitLogView: View {
             }
         }
         .confirmationDialog(
-            pendingBranchOperation?.kind.title ?? "Git branch operation",
+            LocalizedStringKey(pendingBranchOperation?.kind.title ?? "Git branch operation"),
             isPresented: Binding(
                 get: { pendingBranchOperation != nil },
                 set: { if !$0 { pendingBranchOperation = nil } }
@@ -204,7 +205,7 @@ struct GitLogView: View {
             titleVisibility: .visible
         ) {
             if let operation = pendingBranchOperation {
-                Button(operation.kind.actionTitle, role: operation.kind == .delete ? .destructive : nil) {
+                Button(LocalizedStringKey(operation.kind.actionTitle), role: operation.kind == .delete ? .destructive : nil) {
                     pendingBranchOperation = nil
                     Task {
                         switch operation.kind {
@@ -239,6 +240,9 @@ struct GitLogView: View {
             tagDialogRequest: $tagDialogRequest,
             pendingTagDeletion: $pendingTagDeletion
         ))
+        .modifier(GitHistoryEditingPresentation(editor: feature.historyEditing))
+        .modifier(GitInteractiveRebasePresentation(editor: feature.interactiveRebase))
+        .modifier(GitPatchPresentation(editor: feature.patchExchange, surface: .log))
     }
 
     /// The tab split lives outside `body` because the main expression is
@@ -249,7 +253,7 @@ struct GitLogView: View {
         case .log:
             logTabContent
         case .worktrees:
-            GitWorktreesView()
+            GitWorktreesView(feature: feature)
         case .console:
             gitConsolePane
         }
@@ -257,6 +261,12 @@ struct GitLogView: View {
 
     private var logTabContent: some View {
         Group {
+            GitInteractiveRebaseStatusView(editor: feature.interactiveRebase) { name, session in
+                await feature.createHistoryRecoveryBranch(named: name, from: session)
+            }
+            GitHistoryRewriteOutcomeView(editor: feature.historyEditing) { name, rewrite in
+                await feature.createHistoryRecoveryBranch(named: name, from: rewrite)
+            }
             if let deletedBranch = model.recentlyDeletedBranch {
                 deletedReferenceBanner(
                     icon: "arrow.triangle.branch",
@@ -498,7 +508,7 @@ struct GitLogView: View {
                 }
                 .litheIconButton()
                 .foregroundStyle(gitConsoleWrapsLines ? LitheTheme.accent : LitheTheme.secondaryText)
-                .help(gitConsoleWrapsLines ? "Disable soft wraps" : "Use soft wraps")
+                .help(LocalizedStringKey(gitConsoleWrapsLines ? "Disable soft wraps" : "Use soft wraps"))
 
                 Button {
                     gitConsoleAutoScrolls.toggle()
@@ -507,7 +517,7 @@ struct GitLogView: View {
                 }
                 .litheIconButton()
                 .foregroundStyle(gitConsoleAutoScrolls ? LitheTheme.accent : LitheTheme.secondaryText)
-                .help(gitConsoleAutoScrolls ? "Disable automatic scrolling" : "Scroll to new Git output")
+                .help(LocalizedStringKey(gitConsoleAutoScrolls ? "Disable automatic scrolling" : "Scroll to new Git output"))
 
                 Button(action: model.clearGitConsole) {
                     Image(systemName: "trash")
@@ -686,7 +696,7 @@ struct GitLogView: View {
     /// in session state, so closing the banner ends the restore opportunity.
     private func deletedReferenceBanner(
         icon: String,
-        message: String,
+        message: LocalizedStringKey,
         onRestore: @escaping () async -> Void,
         onDismiss: @escaping () -> Void
     ) -> some View {
@@ -948,6 +958,7 @@ struct GitLogView: View {
             .help("Search commit messages and hashes; use author:, branch: or path: filters")
 
             gitLogFilterBar
+            GitPatchToolbar(feature: feature, surface: .log)
 
             HStack(spacing: 0) {
                 gitToolbarButton(systemImage: "arrow.clockwise", help: "Refresh Git log") {
@@ -979,18 +990,17 @@ struct GitLogView: View {
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
 
             if (visibleCommitHashes?.isEmpty == true || (visibleCommitHashes == nil && model.gitCommits.isEmpty)) && !model.isLoadingGitHistory {
-                VStack(spacing: 8) {
-                    LitheSystemIcon(systemImage: "point.3.connected.trianglepath.dotted")
-                        .font(.system(size: 27, weight: .light))
-                    Text("No commits match this view")
-                }
-                .font(LitheTheme.uiFont)
-                .foregroundStyle(LitheTheme.secondaryText)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                GitRepositoryEmptyView(
+                    feature: feature,
+                    setup: feature.repositorySetup,
+                    openSettings: { model.showSettings(category: .git) },
+                    openChanges: { model.selectedSidebar = .changes }
+                )
             } else {
-                GitGraphScrollView(
+                GitHistorySelectionGraphView(
+                    editor: feature.historyEditing,
                     presentation: graphPresentation,
-                    selectedHash: model.selectedGitCommit?.hash,
+                    focusedHash: model.selectedGitCommit?.hash,
                     showCommitDecorations: showCommitDecorations,
                     canLoadMore: model.canLoadMoreGitHistory,
                     isLoadingMore: model.isLoadingMoreGitHistory,
@@ -1162,7 +1172,13 @@ struct GitLogView: View {
             selectedHash: model.selectedGitCommit?.hash,
             offset: offset
         ) else { return }
-        model.previewGitCommitSelection(commit)
+        feature.historyEditing.select(
+            commit.hash,
+            visibleHashes: filteredCommits.map(\.hash),
+            additive: false,
+            range: NSEvent.modifierFlags.contains(.shift)
+        )
+        feature.previewGitCommitSelection(commit)
         scheduleGitCommitFileLoad(for: commit)
     }
 
@@ -1215,6 +1231,27 @@ struct GitLogView: View {
             },
             onCreateTag: { commit in
                 tagDialogRequest = GitTagDialogRequest(commit: commit)
+            },
+            onSelectWithModifiers: { commit, modifiers in
+                gitLogCommitListFocused = true
+                feature.historyEditing.select(
+                    commit.hash,
+                    visibleHashes: feature.gitCommits.filter {
+                        feature.gitLogMatchedCommitHashes?.contains($0.hash) ?? true
+                    }.map(\.hash),
+                    additive: modifiers.contains(.command),
+                    range: modifiers.contains(.shift)
+                )
+                feature.previewGitCommitSelection(commit)
+                scheduleGitCommitFileLoad(for: commit)
+            },
+            onContextSelect: { commit in
+                feature.historyEditing.selectForContextMenu(commit.hash)
+                feature.previewGitCommitSelection(commit)
+                scheduleGitCommitFileLoad(for: commit)
+            },
+            additionalContextMenuItems: { commit in
+                GitHistoryRewriteMenu.items(feature: feature, commit: commit)
             }
         )
     }
@@ -1336,7 +1373,7 @@ struct GitLogView: View {
                 Button {
                     showsGitLogAuthorFilterPopover = true
                 } label: {
-                    gitLogFilterLabel(title: "User", selection: selectedGitLogAuthor?.displayName)
+                    gitLogFilterLabel(title: "User", selection: selectedGitLogAuthor?.displayName, localizeSelection: selectedGitLogAuthor == .currentUser)
                 }
                 .buttonStyle(.plain)
                 .lithePointer()
@@ -1452,9 +1489,16 @@ struct GitLogView: View {
         .frame(width: 300)
     }
 
-    private func gitLogFilterLabel(title: String, selection: String?) -> some View {
+    private func gitLogFilterLabel(title: LocalizedStringKey, selection: String?, localizeSelection: Bool = false) -> some View {
         HStack(spacing: 3) {
-            Text(selection.map { "\(title): \($0)" } ?? title)
+            Group {
+                if let selection {
+                    let value = localizeSelection ? Text(LocalizedStringKey(selection)) : Text(verbatim: selection)
+                    Text("\(Text(title)): \(value)")
+                } else {
+                    Text(title)
+                }
+            }
                 .font(GitVisual.toolbar)
                 .foregroundStyle(LitheTheme.secondaryText)
             if selection == nil {
@@ -1489,7 +1533,7 @@ struct GitLogView: View {
             if let systemImage {
                 Image(systemName: systemImage)
             }
-            Text(title)
+            Text(LocalizedStringKey(title))
             Spacer()
             if selected { Image(systemName: "checkmark") }
         }
@@ -1754,7 +1798,7 @@ private enum GitCommitOperationKind {
         }
     }
 
-    func message(for commit: GitCommit) -> String {
+    func message(for commit: GitCommit) -> LocalizedStringKey {
         switch self {
         case .cherryPick:
             "Apply \(commit.shortHash) to the current branch."
@@ -1814,7 +1858,7 @@ private enum GitBranchOperationKind {
         }
     }
 
-    func message(for reference: GitReference) -> String {
+    func message(for reference: GitReference) -> LocalizedStringKey {
         switch self {
         case .delete:
             return "Delete the local branch \(reference.shortName)? Git will refuse if it contains unmerged work."
@@ -1883,7 +1927,7 @@ private struct GitBranchNameDialog: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .lithePointer()
-                Button(actionTitle, action: submit)
+                Button(LocalizedStringKey(actionTitle), action: submit)
                     .buttonStyle(.borderedProminent)
                     .lithePointer()
                     .tint(LitheTheme.accent)
@@ -1904,7 +1948,7 @@ private struct GitBranchNameDialog: View {
         }
     }
 
-    private var message: String {
+    private var message: LocalizedStringKey {
         switch request.kind {
         case .create: "Create from '\(request.reference.shortName)'."
         case .rename: "Rename '\(request.reference.shortName)'."
@@ -1972,7 +2016,7 @@ private struct GitTagNameDialog: View {
             }
 
             if let error = validationError ?? submitError {
-                Text(error)
+                Text(LocalizedStringKey(error))
                     .font(.system(size: 11.5))
                     .foregroundStyle(LitheTheme.error)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2148,25 +2192,13 @@ struct GitIntegrationConflictDialog: View {
         }
     }
 
-    private var explanation: String {
-        // A rebase refuses over any uncommitted change; the others only over the
-        // files they would write. Saying which keeps the list from looking arbitrary.
+    private var explanation: LocalizedStringKey {
+        // Rebase blocks on all uncommitted changes; other operations only block
+        // on files they would overwrite. Preserve the interpolated target name.
         if request.blocksEntirely {
-            return String(
-                format: NSLocalizedString(
-                    "A rebase cannot start with any uncommitted changes, including these unrelated to '%@':",
-                    comment: "Rebase preflight explanation"
-                ),
-                request.target.displayName
-            )
+            return "A rebase cannot start with any uncommitted changes, including these unrelated to '\(request.target.displayName)':"
         }
-        return String(
-            format: NSLocalizedString(
-                "Your changes to these files would be overwritten by '%@':",
-                comment: "Merge preflight explanation"
-            ),
-            request.target.displayName
-        )
+        return "Your changes to these files would be overwritten by '\(request.target.displayName)':"
     }
 }
 
@@ -2268,13 +2300,14 @@ struct GitPullStrategyDialog: View {
 /// A compact IDEA-style push review. The branch row is deliberately separate
 /// from the action so the user can verify the destination before pushing.
 struct GitPushDialog: View {
+    @Environment(\.locale) private var locale
     @Environment(\.dismiss) private var dismiss
     let projectName: String
     let reference: GitReference
     let onPush: () -> Void
 
     var body: some View {
-        let presentation = GitPushDialogPresentation(reference: reference)
+        let presentation = GitPushDialogPresentation(reference: reference, locale: locale)
 
         VStack(spacing: 0) {
             HStack {
@@ -2365,7 +2398,7 @@ struct GitPushDialog: View {
                 .keyboardShortcut(.cancelAction)
                 .lithePointer()
 
-                Button(presentation.actionTitle) {
+                Button(LocalizedStringKey(presentation.actionTitle)) {
                     onPush()
                     dismiss()
                 }
@@ -2385,12 +2418,12 @@ struct GitPushDialogPresentation {
     let destination: String
     let actionTitle: String
 
-    init(reference: GitReference) {
+    init(reference: GitReference, locale: Locale = .current, bundle: Bundle = .main) {
         if let upstream = reference.upstreamShortName {
-            destination = "Tracking \(upstream)"
+            destination = gitLocalizedFormat("Tracking %@", upstream, locale: locale, bundle: bundle)
             actionTitle = "Push"
         } else {
-            destination = "Publish \(reference.shortName) (Core selects default remote)"
+            destination = gitLocalizedFormat("Publish %@ (Core selects default remote)", reference.shortName, locale: locale, bundle: bundle)
             actionTitle = "Publish Branch"
         }
     }
@@ -2584,7 +2617,7 @@ private struct GitReferenceRowView: View, Equatable {
 
             if let comparisonSourceID, comparisonSourceID != reference.id,
                let sourceName = actions.comparisonSourceName {
-                items.append(.action("Compare '\(sourceName)' with '\(reference.shortName)'", action: {
+                items.append(.action(gitLocalizedFormat("Compare '%@' with '%@'", sourceName, reference.shortName, locale: locale), action: {
                     actions.compareWithSelectedSource(reference)
                 }))
             } else {
@@ -2747,8 +2780,14 @@ private struct GitLogThreePaneLayout<ReferencePane: View, CommitPane: View, Deta
 }
 
 func gitNewBranchMenuTitle(_ name: String, locale: Locale, bundle: Bundle = .main) -> String {
-    let key = "New Branch from '%@'…"
+    gitLocalizedFormat("New Branch from '%@'…", name, locale: locale, bundle: bundle)
+}
+
+/// Resolve native UI text with the app locale, independently of the system language.
+func gitLocalizedFormat(_ key: String, _ arguments: CVarArg..., locale: Locale, bundle: Bundle = .main) -> String {
     let localizedBundle = bundle.url(forResource: locale.identifier, withExtension: "lproj")
         .flatMap(Bundle.init(url:)) ?? bundle
-    return String(format: localizedBundle.localizedString(forKey: key, value: key, table: nil), name)
+    let format = localizedBundle.localizedString(forKey: key, value: key, table: nil)
+    guard !arguments.isEmpty else { return format }
+    return String(format: format, locale: locale, arguments: arguments)
 }

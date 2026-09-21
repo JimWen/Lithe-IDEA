@@ -35,6 +35,9 @@ extension AppModel {
                     await self?.workspaceFeature.endGitOperationFreeze()
                 }
             )
+            feature.historyEditing.onCommitUndone = { [weak self] message in
+                self?.prepareForUndoneGitCommit(message: message)
+            }
             cacheModuleCapability(capability, id: .gitWorkspace, moduleID: .git)
             observeModuleFeature(.git, observation: feature.objectWillChange.sink { [weak self] _ in
                 self?.scheduleObjectWillChangeRelay()
@@ -44,6 +47,16 @@ extension AppModel {
             showNotification(error.localizedDescription)
             return nil
         }
+    }
+
+    /// Keep an existing draft, and leave Amend off because undo moved HEAD to its parent.
+    func prepareForUndoneGitCommit(message originalMessage: String) {
+        if commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            commitMessage = originalMessage
+        }
+        amendCommit = false
+        commitEditorRequestVersion &+= 1
+        selectedSidebar = .changes
     }
 
     func previewGitCommitSelection(_ commit: GitCommit) {

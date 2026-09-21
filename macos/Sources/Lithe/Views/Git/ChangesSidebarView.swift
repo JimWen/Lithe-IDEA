@@ -3,6 +3,20 @@ import LitheGitModule
 
 struct ChangesSidebarView: View {
     @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if let feature = model.gitFeatureIfActive {
+            GitChangesSidebarContent(feature: feature)
+        } else {
+            ProgressView()
+                .task { _ = await model.activateGitModule() }
+        }
+    }
+}
+
+private struct GitChangesSidebarContent: View {
+    @ObservedObject var feature: GitFeatureModel
+    @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var settings: AppSettings
     @State private var selectedTab = CommitTab.commit
     @State private var trackedExpanded = true
@@ -26,10 +40,7 @@ struct ChangesSidebarView: View {
             }
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
 
-            if let operation = model.gitOperationState {
-                GitOperationBanner(operation: operation)
-                Rectangle().fill(LitheTheme.divider).frame(height: 1)
-            }
+            GitChangesOperationStatus(feature: feature, editor: feature.interactiveRebase)
 
             if let conflict = model.pendingStashRestoreConflict {
                 if model.isStashRestoreConflictNoticeVisible {
@@ -63,6 +74,8 @@ struct ChangesSidebarView: View {
         }
         .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.sidebar)
         .onAppear { selectRequestedStashIfNeeded() }
+        .onChange(of: model.commitEditorRequestVersion) { _ in selectedTab = .commit }
+        .modifier(GitPatchPresentation(editor: feature.patchExchange, surface: .changes))
         .onChange(of: model.requestedStashReference) { _ in
             selectRequestedStashIfNeeded()
         }
@@ -145,6 +158,7 @@ struct ChangesSidebarView: View {
                 .lithePointer()
             }
             Spacer()
+            GitPatchToolbar(feature: feature)
         }
         .padding(.horizontal, 10)
         .frame(height: 40)
@@ -546,7 +560,7 @@ struct ChangesSidebarView: View {
                         Text(LocalizedStringKey(title))
                             .font(.system(size: 12.5, weight: .semibold))
                             .foregroundStyle(LitheTheme.primaryText)
-                        Text(changes.count == 1 ? "1 file" : "\(changes.count) files")
+                        Text("\(changes.count) files")
                             .font(.system(size: 11))
                             .foregroundStyle(LitheTheme.secondaryText)
                         Spacer()
@@ -769,19 +783,12 @@ struct ChangesSidebarView: View {
     }
 
     private var noRepository: some View {
-        VStack(spacing: 10) {
-            LitheIDEAIcon(
-                resourcePath: "toolwindows/toolWindowVcs.svg",
-                size: 30,
-                fallbackSystemImage: "point.3.connected.trianglepath.dotted"
-            )
-            Text("This project is not a Git repository")
-                .multilineTextAlignment(.center)
-        }
-        .font(LitheTheme.uiFont)
-        .foregroundStyle(LitheTheme.secondaryText)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(24)
+        GitRepositoryEmptyView(
+            feature: feature,
+            setup: feature.repositorySetup,
+            openSettings: { model.showSettings(category: .git) },
+            openChanges: { selectedTab = .commit }
+        )
     }
 
     /// All four sections come from one pass over `gitChanges`; see
@@ -881,6 +888,23 @@ struct ChangesSidebarView: View {
 /// Persistent banner for a merge, rebase, cherry-pick, or revert that Git stopped
 /// partway through. Deliberately not a dialog: resolving conflicts means editing
 /// files, so the controls have to stay reachable rather than block the window.
+private struct GitChangesOperationStatus: View {
+    @ObservedObject var feature: GitFeatureModel
+    @ObservedObject var editor: GitInteractiveRebaseFeatureModel
+
+    var body: some View {
+        if editor.session?.isActive == true || (editor.session != nil && feature.gitOperationState == nil) {
+            GitInteractiveRebaseStatusView(editor: editor) { name, session in
+                await feature.createHistoryRecoveryBranch(named: name, from: session)
+            }
+            Rectangle().fill(LitheTheme.divider).frame(height: 1)
+        } else if let operation = feature.gitOperationState {
+            GitOperationBanner(operation: operation)
+            Rectangle().fill(LitheTheme.divider).frame(height: 1)
+        }
+    }
+}
+
 private struct GitOperationBanner: View {
     @EnvironmentObject private var model: AppModel
     let operation: GitOperationState
@@ -966,7 +990,7 @@ private struct GitStashRestoreConflictBanner: View {
                 Spacer(minLength: 0)
             }
 
-            Text("Your local changes are safe in \(conflict.stashReference). The \(conflict.operationTitle) is incomplete. Resolve the conflicts, then drop this stash manually.")
+            Text("Your local changes are safe in \(conflict.stashReference). The \(Text(LocalizedStringKey(conflict.operationTitle))) is incomplete. Resolve the conflicts, then drop this stash manually.")
                 .font(.system(size: 10.5))
                 .foregroundStyle(LitheTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)

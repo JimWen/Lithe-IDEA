@@ -144,7 +144,7 @@ struct BranchSwitcherPopover: View {
             HStack(spacing: 7) {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .bold))
-                Text(searchQuery.isEmpty ? "Recent" : "Branches")
+                Text(LocalizedStringKey(searchQuery.isEmpty ? "Recent" : "Branches"))
                     .font(.system(size: 12, weight: .medium))
                 Spacer()
                 if model.isLoadingGitHistory || model.isPerformingBranchOperation {
@@ -157,7 +157,7 @@ struct BranchSwitcherPopover: View {
 
             Group {
                 if filteredReferences.isEmpty {
-                    Text(model.isLoadingGitHistory ? "Loading branches…" : "No matching branches")
+                    Text(LocalizedStringKey(model.isLoadingGitHistory ? "Loading branches…" : "No matching branches"))
                         .font(LitheTheme.uiFont)
                         .foregroundStyle(LitheTheme.secondaryText)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

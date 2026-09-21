@@ -12,6 +12,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     case rust = "Rust"
     case python = "Python"
     case ai = "AI & Commit"
+    case git = "Git"
     case updates = "Updates"
     case diagnostics = "Diagnostics"
 
@@ -26,6 +27,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .lsp: "server.rack"
         case .go, .rust, .python: "chevron.left.forwardslash.chevron.right"
         case .ai: "wand.and.stars"
+        case .git: "arrow.triangle.branch"
         case .updates: "arrow.down.circle"
         case .diagnostics: "stethoscope"
         }

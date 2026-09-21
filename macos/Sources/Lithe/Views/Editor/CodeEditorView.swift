@@ -2250,7 +2250,6 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     private var trackingArea: NSTrackingArea?
     private var hoveredFoldID: String?
     private var lineIndex = TextLineIndex(source: "" as NSString)
-    nonisolated(unsafe) private var windowResignObserver: NSObjectProtocol?
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -3253,23 +3252,25 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if let windowResignObserver {
-            NotificationCenter.default.removeObserver(windowResignObserver)
-            self.windowResignObserver = nil
-        }
-        if let window {
-            windowResignObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.didResignKeyNotification,
-                object: window,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.clearLinkHighlight()
-                }
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.removeObserver(self, name: name, object: nil)
+            if let window {
+                NotificationCenter.default.addObserver(
+                    self, selector: #selector(windowFocusDidChange), name: name, object: window
+                )
             }
         }
+        windowFocusDidChange()
         updateTrackingAreas()
         onWindowAttached?()
+    }
+
+    @objc private func windowFocusDidChange() {
+        if window?.isKeyWindow != true { clearLinkHighlight() }
+        // AppKit owns caret timing and selection geometry. Repaint on native
+        // focus changes even when the editor receives no new text or layout.
+        updateInsertionPointStateAndRestartTimer(true)
+        needsDisplay = true
     }
 
     override func flagsChanged(with event: NSEvent) {
@@ -3363,13 +3364,18 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         updateFoldHover(to: nil)
         clearLinkHighlight()
         clearDebugHover()
-        return super.resignFirstResponder()
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            needsDisplay = true
+        }
+        return resigned
     }
 
     override func becomeFirstResponder() -> Bool {
         let becameFirstResponder = super.becomeFirstResponder()
         if becameFirstResponder {
             updateInsertionPointStateAndRestartTimer(true)
+            needsDisplay = true
         }
         return becameFirstResponder
     }
@@ -4066,9 +4072,6 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-        if let windowResignObserver {
-            NotificationCenter.default.removeObserver(windowResignObserver)
-        }
     }
 
     @objc private func handleFindQueryChanged(_ notification: Notification) {

@@ -142,6 +142,7 @@ final class AppModel: ObservableObject, Identifiable {
     }
     @Published var blameVisibleURL: URL?
     @Published var gitLogSearchQuery = ""
+    @Published var commitEditorRequestVersion = 0
     var shortcutDetector: (any ShortcutDetector)?
     var commandStateFeatureStorage: ProjectCommandStateFeatureModel?
     var menuCommandTasks: [UUID: Task<Void, Never>] = [:]
@@ -157,6 +158,7 @@ final class AppModel: ObservableObject, Identifiable {
     private var fileVisibilityRulesObserverID: UUID?
     private var requestProjectOpen: ((URL) -> Void)?
     private var requestProjectClose: (() -> Void)?
+    private var requestProjectOpenAtPlacement: ((URL, ProjectOpenPlacement) -> Void)?
     private var didCloseProject: (() -> Void)?
     private var securityScopedWorkspaceURL: URL?
     let javaTestWorkflowState = JavaTestWorkflowState()
@@ -520,7 +522,7 @@ final class AppModel: ObservableObject, Identifiable {
             },
             refreshGit: { [weak self] in
                 guard let feature = self?.gitFeatureIfActive else { return }
-                await feature.refreshGit()
+                await feature.refreshGitFromMetadataChange()
             },
             updateHistoryVisibilityRules: { [weak self] rules in
                 guard let feature = await self?.activateHistoryModule() else { return }
@@ -717,11 +719,13 @@ final class AppModel: ObservableObject, Identifiable {
     func configureProjectSession(
         requestOpen: @escaping (URL) -> Void,
         requestClose: (() -> Void)? = nil,
-        didClose: @escaping () -> Void
+        didClose: @escaping () -> Void,
+        requestOpenAtPlacement: ((URL, ProjectOpenPlacement) -> Void)? = nil
     ) {
         requestProjectOpen = requestOpen
         requestProjectClose = requestClose
         didCloseProject = didClose
+        requestProjectOpenAtPlacement = requestOpenAtPlacement
     }
 
     func setProjectSessionActive(_ isActive: Bool) {
@@ -952,6 +956,16 @@ final class AppModel: ObservableObject, Identifiable {
         openProjectDirectly(url)
     }
 
+    func openProject(_ url: URL, placement: ProjectOpenPlacement) {
+        if let requestProjectOpenAtPlacement {
+            requestProjectOpenAtPlacement(url.standardizedFileURL, placement)
+        } else if placement == .thisWindow {
+            openProjectDirectly(url)
+        } else {
+            showNotification("Project window management is unavailable.")
+        }
+    }
+
     func openProjectDirectly(_ url: URL) {
         let normalizedURL = url.standardizedFileURL
         beginModuleRuntimeShutdown()
@@ -1152,6 +1166,11 @@ final class AppModel: ObservableObject, Identifiable {
         selectedChange = nil
         closeBranchComparison()
         editorNavigationTarget = nil
+        // SVG remains a text document so edits, saves, and previews share one buffer.
+        if let mediaKind = MediaDocumentKind.from(url: url) {
+            openMediaFile(url, kind: mediaKind)
+            return
+        }
         documentFeature.openFile(url, isReadOnly: isReadOnly, displayPath: displayPath)
     }
 

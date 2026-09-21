@@ -40,7 +40,8 @@ struct ContextMenuCoverageTests {
         #expect(try #require(lockedMenu.first { $0.title == "Unlock Worktree" }).isEnabled)
         #expect(try #require(lockedMenu.first { $0.title == "Remove Worktree…" }).isEnabled == false)
         let staleMenu = view.contextMenuItems(for: stale)
-        #expect(try #require(staleMenu.first { $0.title == "Open in Lithe" }).isEnabled == false)
+        #expect(try #require(staleMenu.first { $0.title == "Open in Current Window" }).isEnabled == false)
+        #expect(try #require(staleMenu.first { $0.title == "Open in New Window" }).isEnabled == false)
         view.update(items: [locked, stale], selectedWorktreeID: nil, isPerformingWorktreeOperation: true, onSelect: { _ in })
         let busyMenu = view.contextMenuItems(for: locked)
         #expect(try #require(busyMenu.first { $0.title == "Unlock Worktree" }).isEnabled == false)
@@ -66,6 +67,30 @@ struct ContextMenuCoverageTests {
             try #require(menu.first { $0.title == title }).action()
         }
         #expect(received == ["tag:abcdef123456", "cherry:abcdef123456", "revert:abcdef123456", "reset:abcdef123456"])
+    }
+
+    @Test
+    func nativeCommitRowsForwardRangeAndAdditiveSelection() {
+        let commit = GitCommit(
+            hash: "abcdef123456", shortHash: "abcdef1", parentHashes: [],
+            authorName: "Test", authorEmail: "test@example.invalid", date: "", subject: "Test", decorations: ""
+        )
+        let rows = GitGraphLayoutService.layout(commits: [commit]).rows
+        var received: [NSEvent.ModifierFlags] = []
+        let actions = GitGraphRowActions(
+            onSelect: { _ in Issue.record("Native rows must preserve selection modifiers") },
+            onCherryPick: { _ in }, onRevert: { _ in }, onReset: { _ in }, onCreateTag: { _ in },
+            onSelectWithModifiers: { selected, modifiers in
+                #expect(selected.hash == commit.hash)
+                received.append(modifiers)
+            }
+        )
+        let view = GitGraphCommitRowsNSView()
+        view.update(rows: rows, selectedHash: nil, showDecorations: false,
+                    graphWidth: 30, rowHeight: 24, actions: actions)
+        view.select(rowIndex: 0, modifiers: .shift)
+        view.select(rowIndex: 0, modifiers: .command)
+        #expect(received == [.shift, .command])
     }
 
     @Test

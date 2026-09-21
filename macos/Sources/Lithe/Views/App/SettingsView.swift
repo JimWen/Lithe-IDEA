@@ -174,6 +174,8 @@ struct SettingsView: View {
             ["Python", "Interpreter", "Virtual environment", "Language server"]
         case .ai:
             ["AI & Commit", "AI provider", "Model", "API key", "Commit message"]
+        case .git:
+            ["Git", "Commit identity", "Committer name", "Committer email", "Configuration scope", "user.name", "user.email"]
         case .updates:
             ["Updates", "Application version", "Update status", "Check for Updates"]
         case .diagnostics:
@@ -239,6 +241,7 @@ struct SettingsView: View {
                                              retryDisplay: model.retryTerminalDisplayConfiguration)
                     case .lsp, .go, .rust, .python: EmptyView()
                     case .ai: aiSettings
+                    case .git: GitIdentitySettingsView()
                     case .updates: updatesSettings
                     case .diagnostics: diagnosticsSettings
                     }
@@ -1074,7 +1077,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             group("Application version") {
                 row("Current version") {
-                    Text(updateChecker.currentVersion)
+                    Text(updateChecker.versionDescription)
                         .foregroundStyle(LitheTheme.secondaryText)
                         .monospacedDigit()
                 }
@@ -1085,6 +1088,7 @@ struct SettingsView: View {
 
             group("Update status") {
                 updateStatusDescription
+                StableRollbackControl()
 
                 HStack(spacing: 10) {
                     Button {
@@ -1101,11 +1105,23 @@ struct SettingsView: View {
                     ))
                     .disabled(updateChecker.isBusy)
 
+                    if case .waitingForTermination = updateChecker.status {
+                        Button {
+                            Task { await updateChecker.retryInstallation() }
+                        } label: {
+                            Label("Continue Installation", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(LitheSecondaryButtonStyle())
+                    }
                     if case .available(let version, _) = updateChecker.status {
                         Button {
                             Task { await updateChecker.installAvailableUpdate() }
                         } label: {
-                            Label("Update \(version)", systemImage: "arrow.down.circle.fill")
+                            if updateChecker.isPreview {
+                                Label("Install Preview", systemImage: "arrow.down.circle.fill")
+                            } else {
+                                Label("Update \(version)", systemImage: "arrow.down.circle.fill")
+                            }
                         }
                         .buttonStyle(LitheSecondaryButtonStyle())
                         .disabled(updateChecker.isBusy)
@@ -1175,11 +1191,16 @@ struct SettingsView: View {
                 }
                 Text("Downloading update \(version)…")
                     .font(LitheTheme.smallFont)
-                Text(progress.byteCountDescription)
-                    .font(LitheTheme.smallFont)
-                    .foregroundStyle(LitheTheme.tertiaryText)
+                if progress.downloadedBytes > 0 {
+                    Text(progress.byteCountDescription)
+                        .font(LitheTheme.smallFont)
+                        .foregroundStyle(LitheTheme.tertiaryText)
+                }
             }
             .foregroundStyle(LitheTheme.secondaryText)
+        case .waitingForTermination:
+            Text("Waiting to quit to complete the update.")
+                .foregroundStyle(LitheTheme.secondaryText)
         case .installing(let version):
             HStack(spacing: 8) {
                 ProgressView()
@@ -1190,10 +1211,7 @@ struct SettingsView: View {
         case .upToDate(let version):
             Label("Lithe is up to date at version \(version).", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(LitheTheme.success)
-        case .noRelease:
-            Text("No published release is available yet.")
-                .foregroundStyle(LitheTheme.secondaryText)
-        case .failed(let message):
+        case .failed(_, let message):
             Label(message, systemImage: "exclamationmark.triangle")
                 .foregroundStyle(LitheTheme.warning)
                 .fixedSize(horizontal: false, vertical: true)

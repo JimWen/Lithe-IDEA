@@ -51,7 +51,12 @@ enum WorkbenchModuleUIComposition {
                 ideaAssetPath: "toolwindows/toolWindowVcs.svg",
                 isVisible: { _ in true },
                 isSelected: { $0.isGitLogVisible },
-                content: { _ in AnyView(GitLogView()) }
+                content: { model in
+                    guard let feature = model.gitFeatureIfActive else {
+                        return AnyView(WorkbenchModuleUIRegistry.moduleLoadingView)
+                    }
+                    return AnyView(GitLogView(feature: feature))
+                }
             )
         ]
     )

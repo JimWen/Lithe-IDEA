@@ -17,6 +17,8 @@ plugin_fixture="shared/fixtures/plugins/official-v1.json"
 github_fixture="shared/fixtures/github/pull-request-v1.json"
 workbench_background_fixture="shared/fixtures/settings/workbench-background-v1.json"
 syntax_theme_fixture="shared/fixtures/editor-themes/lithe-v1.json"
+update_schema="shared/contracts/update-v1.schema.json"
+update_fixture="shared/fixtures/updates/update-v1.json"
 macos_syntax_colors="macos/Sources/Lithe/Resources/SyntaxHighlighting/color-mappings.json"
 
 fixture_ids=$(/usr/bin/ruby -rjson -e 'puts JSON.parse(File.read(ARGV.fetch(0))).fetch("modules").map { |m| m.fetch("id") }.sort' "$module_fixture")
@@ -204,5 +206,28 @@ fi
     abort "non-bundled workbench background must not carry platform data" unless source.keys == ["kind"]
   end
 ' "$workbench_background_fixture"
+
+/usr/bin/ruby -rjson -e '
+  schema = JSON.parse(File.read(ARGV.fetch(0)))
+  fixture = JSON.parse(File.read(ARGV.fetch(1)))
+
+  abort "update schema ID mismatch" unless schema.fetch("$id").end_with?("/update-v1.schema.json")
+  abort "update schema version mismatch" unless schema.dig("properties", "schemaVersion", "const") == 1
+  expected_states = %w[idle checking available downloading installing upToDate failed]
+  abort "update states differ from v1" unless fixture.fetch("states") == expected_states
+  error_codes = fixture.fetch("errorCodes")
+  abort "update error codes must be unique" unless error_codes.uniq.length == error_codes.length
+  abort "update error codes must be sorted" unless error_codes == error_codes.sort
+  preferences = fixture.fetch("preferenceSemantics")
+  abort "Later must suppress for 24 hours" unless preferences.fetch("laterHours") == 24
+  abort "manual checks must ignore suppression" unless preferences.fetch("manualChecksIgnoreSuppression") == true
+
+  sample = fixture.fetch("availableState")
+  required = %w[schemaVersion currentVersion targetVersion releaseDate releaseNotes releaseURL status downloadProgress errorCode]
+  abort "update fixture fields differ from v1" unless sample.keys.sort == required.sort
+  abort "update fixture schema version mismatch" unless sample.fetch("schemaVersion") == 1
+  abort "update fixture state mismatch" unless sample.fetch("status") == "available"
+  abort "update fixture release URL must be HTTPS" unless sample.fetch("releaseURL").start_with?("https://")
+' "$update_schema" "$update_fixture"
 
 print "Shared contract verification passed: JSON fixtures are valid"

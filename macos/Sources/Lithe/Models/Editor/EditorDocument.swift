@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import LitheCoreContracts
 
@@ -25,6 +26,8 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     private(set) var url: URL
     let isReadOnly: Bool
     let displayPath: String?
+    /// Preview subscribers receive live edits without invalidating the editor hierarchy.
+    let textDidChange = PassthroughSubject<Void, Never>()
     private var storedText: String
     var text: String {
         get { storedText }
@@ -196,6 +199,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         }
         storedText = newText
         lifecycleState = nextLifecycle
+        textDidChange.send()
     }
 
     func save() throws {
@@ -212,6 +216,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         savedText = contents
         lifecycleState = .clean(revision: lifecycleState.revision + 1)
         lastKnownModificationDate = Self.modificationDate(for: url)
+        textDidChange.send()
     }
 
     func keepEditorVersion() {

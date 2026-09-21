@@ -133,6 +133,12 @@ launches. Language-server configuration continues to use the Language
 Intelligence module. Editing a run configuration waits for the current
 workspace snapshot before identifying entry points or presenting the editor.
 
+## Update adapter
+
+In-app updates use Sparkle through the macOS update adapter. See
+[`macos-updates.md`](macos-updates.md) for signing, differential archives,
+legacy-client compatibility, and release verification.
+
 ## Verification
 
 Run this check after changing an application boundary:
@@ -208,3 +214,15 @@ create runtime configurations; and Go environment, arguments, and working
 directory persist in `.lithe/run/local.json`. Go and Rust runs produced their
 fixture `GO_OK` and `RUST_OK` output. Raw test, package, and UI evidence is in
 `.artifacts/main-merge-*` and `.artifacts/test-stability/`.
+
+## Upstream 0.4.5 integration status (2026-09-21)
+
+Base: fork `fd7d3cd1`; incoming upstream release: `f620ab70` (`v0.4.5`).
+
+The current integration retains the existing project-window, language-tooling,
+Run/Debug, and syntax ownership contracts while adding generic Git history
+review/recovery and native update behavior. Maven/Spring workflows, bundled Java
+toolchains, Windows product code, and Linux.do remain outside this fork. The
+verification record above describes the earlier integration; the current
+0.4.5 build, package, and installed-app UI checks are pending. Raw integration
+records are kept in `.artifacts/upstream-045-050/`.

@@ -37,7 +37,7 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
     /// Upper bound for module/session teardown during in-app update replacement.
     /// A hung language server or plugin must not leave the installer spinner forever.
     private static let updateTerminationCleanupTimeoutNanoseconds: UInt64 = 5_000_000_000
-    /// Hard ceiling after requesting update termination; the helper force-kills later.
+    /// Hard ceiling after unsaved documents have been confirmed for update termination.
     private static let updateTerminationForceExitNanoseconds: UInt64 = 8_000_000_000
 
     private var pendingFileURLs: [URL] = []
@@ -55,6 +55,8 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
     }
     var recordCleanPluginShutdown: (() -> Void)?
     var stopCommandPresentation: (() -> Void)?
+    var prepareStableRollbackTermination: (() -> Bool)?
+    var cancelStableRollbackTermination: (() -> Bool)?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
@@ -71,33 +73,30 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    /// Confirms unsaved work before an update download starts so termination
-    /// during replacement cannot be cancelled mid-install.
-    func prepareForUpdateInstall() -> Bool {
-        guard let projectWindows else { return true }
-        return Self.confirmUnsavedDocuments(
-            for: projectWindows,
-            context: .applicationTermination
-        )
+    func prepareForUpdateRelaunch() {
+        isUpdateInstallTermination = true
     }
 
-    /// Starts the post-helper quit path used by the in-app updater.
-    /// Skips cancelable prompts and bounds cleanup so replacement can proceed.
-    func requestTerminationForUpdateInstall() {
-        isUpdateInstallTermination = true
+    func finishUpdateCycle() {
+        if terminationCleanupState == .idle {
+            isUpdateInstallTermination = false
+        }
+    }
+
+    private func boundUpdateTermination() {
         updateForceExitTask?.cancel()
         updateForceExitTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: Self.updateTerminationForceExitNanoseconds)
             guard let self, self.isUpdateInstallTermination, !Task.isCancelled else { return }
-            // Soft AppKit termination can stall on module shutdown; the staged
-            // helper is already waiting and will replace the bundle after exit.
+            // Sparkle's installer is waiting, and the user has confirmed unsaved work.
             Foundation.exit(EXIT_SUCCESS)
         }
-        NSApp.terminate(nil)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let projectWindows else { return .terminateNow }
+        guard let projectWindows else {
+            return (prepareStableRollbackTermination?() ?? true) ? .terminateNow : .terminateCancel
+        }
 
         // AppKit may ask more than once while a previous asynchronous reply is
         // pending. Do not show another confirmation dialog or start a second
@@ -113,6 +112,19 @@ final class LitheAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if isUpdateInstallTermination {
+            guard Self.confirmUnsavedDocuments(for: projectWindows, context: .applicationTermination) else {
+                if cancelStableRollbackTermination?() == true {
+                    isUpdateInstallTermination = false
+                }
+                // Sparkle only announces relaunch once, even if the user retries
+                // after cancelling termination. Keep the pending-update marker.
+                return .terminateCancel
+            }
+            guard prepareStableRollbackTermination?() ?? true else {
+                isUpdateInstallTermination = false
+                return .terminateCancel
+            }
+            boundUpdateTermination()
             return beginTerminationCleanup(
                 for: projectWindows,
                 sender: sender,
@@ -347,7 +359,9 @@ struct LitheApp: App {
             memorySampler: MacProcessMemorySampler()
         ))
         Self.emitPerformanceBaselineMarker(LithePerformanceBaseline.configurationMarker())
-        let updateChecker = UpdateChecker()
+        let updateChecker = UpdateChecker(diagnosticSink: { message in
+            Self.appendApplicationLog(applicationLogWriter, message: message)
+        })
         _updateChecker = StateObject(wrappedValue: updateChecker)
         let commandEnvironmentObserver = MacServiceContainer.makeCommandEnvironmentObserver()
         self.commandEnvironmentObserver = commandEnvironmentObserver
@@ -382,11 +396,21 @@ struct LitheApp: App {
             pluginRuntimeRecovery.recordCleanShutdown(using: moduleStore)
         }
         let appDelegate = appDelegate
-        updateChecker.prepareForInstall = { [weak appDelegate] in
-            appDelegate?.prepareForUpdateInstall() ?? true
+        updateChecker.willRelaunchForUpdate = { [weak appDelegate] in
+            appDelegate?.prepareForUpdateRelaunch()
         }
-        updateChecker.requestTerminationForInstall = { [weak appDelegate] in
-            appDelegate?.requestTerminationForUpdateInstall()
+        updateChecker.didFinishUpdateCycle = { [weak appDelegate] in
+            appDelegate?.finishUpdateCycle()
+        }
+        updateChecker.stableRollback.requestTermination = { [weak appDelegate] in
+            appDelegate?.prepareForUpdateRelaunch()
+            NSApp.terminate(nil)
+        }
+        appDelegate.prepareStableRollbackTermination = { [weak updateChecker] in
+            updateChecker?.stableRollback.prepareConfirmedTermination() ?? true
+        }
+        appDelegate.cancelStableRollbackTermination = { [weak updateChecker] in
+            updateChecker?.stableRollback.terminationCancelled() ?? false
         }
     }
 
