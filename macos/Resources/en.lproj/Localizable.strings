@@ -1823,3 +1823,10 @@
 "Do not push by default" = "Do not push by default";
 
 "Detected shells" = "Detected shells";
+
+"HTML view mode" = "HTML view mode";
+
+"Open Saved HTML in Browser" = "Open Saved HTML in Browser";
+
+"No default web browser is available." = "No default web browser is available.";
+"Could not open the file in the browser." = "Could not open the file in the browser.";

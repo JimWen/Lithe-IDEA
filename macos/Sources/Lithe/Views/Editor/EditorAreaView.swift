@@ -170,7 +170,7 @@ struct EditorAreaView: View {
             EditorOpenTabsMenu(selectedTab: selectedTab)
             if let document = model.activeDocument,
                model.activeEditorTerminalSession == nil,
-               (isMarkdownFile(document) || isSVGFile(document)),
+               (isMarkdownFile(document) || isSVGFile(document) || isHTMLFile(document)),
                splitDocumentID == nil {
                 documentPreviewModePicker
             }
@@ -1060,7 +1060,7 @@ struct EditorAreaView: View {
 
     private var selectedDocumentPreviewMode: DocumentPreviewMode {
         guard let document = model.activeDocument else { return .editor }
-        return documentPreviewModes[document.id] ?? (isSVGFile(document) ? .split : .editor)
+        return documentPreviewModes[document.id] ?? (isSVGFile(document) || isHTMLFile(document) ? .split : .editor)
     }
 
     private func selectDocumentPreviewMode(_ mode: DocumentPreviewMode) {
@@ -1070,6 +1070,10 @@ struct EditorAreaView: View {
 
     private func isSVGFile(_ document: EditorDocument) -> Bool {
         document.url.pathExtension.lowercased() == "svg"
+    }
+
+    private func isHTMLFile(_ document: EditorDocument) -> Bool {
+        ["html", "htm"].contains(document.url.pathExtension.lowercased())
     }
 
     private func isMarkdownFile(_ document: EditorDocument) -> Bool {
@@ -1273,6 +1277,18 @@ struct EditorAreaView: View {
                     }
                 case .preview:
                     MarkdownPreviewView(document: document)
+                }
+            } else if isHTMLFile(document) {
+                switch documentPreviewModes[document.id] ?? .split {
+                case .editor:
+                    editorWithFindBar(document)
+                case .split:
+                    SourcePreviewSplitView(
+                        editor: editorWithFindBar(document),
+                        preview: HTMLPreviewView(document: document)
+                    )
+                case .preview:
+                    HTMLPreviewView(document: document)
                 }
             } else {
                 editorWithFindBar(document)

@@ -166,3 +166,26 @@ The migration is complete only when tests demonstrate all of the following:
 Architecture searches must additionally show no production Swift ownership of
 LSP `Content-Length`, raw JSON-RPC request IDs, frame buffers, open-document
 sets, pending LSP requests, or language-server child processes.
+
+## Outbound cancellation isolation
+
+The generic part of upstream `5f3b3064` separates deadline monitoring from
+advisory cancellation writes. The session owns a cancellation queue and an
+outbound maintenance worker; existing outbound ordering is preserved. The
+monitor keeps expiring independent requests while stdin is blocked, and a
+maintenance write receives its own request-duration deadline. Timeout fails
+remaining operations once, clears runtime queues, and terminates the child to
+release native stdin. The worker exits with the session's existing active flag.
+No Java build coordinator, JDT preparation gate, or new Java timeout is included.
+
+A scripted Go-provider regression uses three ordinary hover requests and
+controlled past deadlines: the first cancellation reaches a pause barrier, the
+second request must still expire, then the write deadline fails the remaining
+request and releases the writer. Event waits have two-second local bounds; the
+scripted pause/resume waits have five-second bounds. Cleanup terminates the
+owned process and waits for writer release even during assertion unwinding.
+
+2026-09-21 acceptance status: extracted against fixed fork `3c1d7119`, source
+and static checks prepared under `.artifacts/upstream-045-050/`; Rust runtime
+regression and full integration verification remain pending the final merged
+tree. Historical migration results elsewhere in this document are unchanged.

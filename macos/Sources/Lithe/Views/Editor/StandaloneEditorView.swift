@@ -3,6 +3,7 @@ import SwiftUI
 struct StandaloneEditorView: View {
     @EnvironmentObject private var model: AppModel
     @State private var svgViewMode: DocumentPreviewMode = .split
+    @State private var htmlViewMode: DocumentPreviewMode = .split
     @State private var editorViewportStore = EditorViewportStore()
 
     var body: some View {
@@ -60,6 +61,18 @@ struct StandaloneEditorView: View {
                         SVGEditorSplitView(editor: editor(document), document: document)
                     case .preview:
                         SVGPreviewView(document: document)
+                    }
+                } else if ["html", "htm"].contains(document.url.pathExtension.lowercased()) {
+                    switch htmlViewMode {
+                    case .editor:
+                        editor(document)
+                    case .split:
+                        SourcePreviewSplitView(
+                            editor: editor(document),
+                            preview: HTMLPreviewView(document: document)
+                        )
+                    case .preview:
+                        HTMLPreviewView(document: document)
                     }
                 } else {
                     editor(document)
@@ -136,6 +149,18 @@ struct StandaloneEditorView: View {
                 Spacer()
                 if document.url.pathExtension.lowercased() == "svg" {
                     Picker("SVG view mode", selection: $svgViewMode) {
+                        ForEach(DocumentPreviewMode.allCases) { mode in
+                            Image(systemName: mode.symbolName)
+                                .help(mode.title)
+                                .accessibilityLabel(mode.title)
+                                .tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 104)
+                } else if ["html", "htm"].contains(document.url.pathExtension.lowercased()) {
+                    Picker("HTML view mode", selection: $htmlViewMode) {
                         ForEach(DocumentPreviewMode.allCases) { mode in
                             Image(systemName: mode.symbolName)
                                 .help(mode.title)

@@ -593,6 +593,7 @@ private final class MenuTestPlatformUI: PlatformUI {
     func chooseFile(title: String, prompt: String) -> URL? { chooserCalls += 1; return nil }
     func revealInFileBrowser(_ url: URL) {}
     func open(_ url: URL) {}
+    func openInBrowser(_ url: URL) { Issue.record("Unexpected browser-open request") }
     func copyToClipboard(_ value: String) {}
     func markdownImageFromClipboard() -> MarkdownImageSource? { nil }
     func presentCommandFailure(_ message: String) { failures.append(message) }

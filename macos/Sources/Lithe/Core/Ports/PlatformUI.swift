@@ -9,6 +9,8 @@ protocol PlatformUI: AnyObject {
     func chooseFile(title: String, prompt: String) -> URL?
     func revealInFileBrowser(_ url: URL)
     func open(_ url: URL)
+    /// Opens a URL in the system default web browser, regardless of its file association.
+    func openInBrowser(_ url: URL)
     func copyToClipboard(_ value: String)
     func markdownImageFromClipboard() -> MarkdownImageSource?
     func presentCommandFailure(_ message: String)

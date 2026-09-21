@@ -6,20 +6,7 @@ struct SVGEditorSplitView<Editor: View>: View {
     let document: EditorDocument
 
     var body: some View {
-        GeometryReader { geometry in
-            let available = max(0, geometry.size.width - SplitHandleView.thickness)
-            let minimum = min(200, available / 2)
-            LitheSplitPaneView(
-                axis: .horizontal,
-                placement: .leading,
-                defaultSize: available / 2,
-                minimum: minimum,
-                maximum: max(minimum, available - minimum),
-                flexibleMinimum: minimum,
-                sized: { editor },
-                flexible: { SVGPreviewView(document: document) }
-            )
-        }
+        SourcePreviewSplitView(editor: editor, preview: SVGPreviewView(document: document))
     }
 }
 

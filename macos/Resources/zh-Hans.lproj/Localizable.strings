@@ -2720,3 +2720,10 @@
 "Do not push by default" = "默认不 Push";
 
 "Detected shells" = "检测到的 Shell";
+
+"HTML view mode" = "HTML 视图模式";
+
+"Open Saved HTML in Browser" = "在浏览器中打开已保存的 HTML";
+
+"No default web browser is available." = "没有可用的默认网页浏览器。";
+"Could not open the file in the browser." = "无法在浏览器中打开文件。";

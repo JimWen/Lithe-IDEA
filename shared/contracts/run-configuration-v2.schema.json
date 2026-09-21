@@ -90,6 +90,7 @@
             "group"
           ]
         },
+        "category": { "enum": ["project", "infrastructure"] },
         "command": {
           "type": "string",
           "minLength": 1

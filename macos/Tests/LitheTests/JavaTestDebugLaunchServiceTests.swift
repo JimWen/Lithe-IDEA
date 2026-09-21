@@ -209,6 +209,7 @@ private final class DebugActivationPlatformUI: PlatformUI {
     func chooseFile(title: String, prompt: String) -> URL? { nil }
     func revealInFileBrowser(_ url: URL) {}
     func open(_ url: URL) {}
+    func openInBrowser(_ url: URL) { Issue.record("Unexpected browser-open request") }
     func copyToClipboard(_ value: String) {}
     func markdownImageFromClipboard() -> MarkdownImageSource? { nil }
 }

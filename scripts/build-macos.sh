@@ -63,7 +63,17 @@ if [[ -n "$RUST_TARGET" ]]; then
 fi
 RUST_LIBRARY="$(scripts/build-rust-core.sh "${RUST_BUILD_ARGS[@]}")"
 
-SWIFT_ARGS=(build --disable-sandbox "${SWIFT_CONFIGURATION_ARGS[@]}")
+SWIFT_ARGS=(build --disable-sandbox)
+if [[ -n "$TRIPLE" ]]; then
+    # Newer SwiftPM layouts place triple products below a shared .build/out.
+    # Give that layout one scratch root per architecture; preserve older layouts.
+    SWIFT_LAYOUT_ARGS=(--configuration "$CONFIGURATION" --triple "$TRIPLE")
+    SWIFT_BIN_PATH="$(swift build --show-bin-path "${SWIFT_LAYOUT_ARGS[@]}")"
+    if [[ "$SWIFT_BIN_PATH" == */out/Products/* ]]; then
+        SWIFT_ARGS+=(--scratch-path "$ROOT_DIR/.build/$TRIPLE")
+    fi
+fi
+SWIFT_ARGS+=("${SWIFT_CONFIGURATION_ARGS[@]}")
 SWIFT_ARGS+=(
     -Xcc -include
     -Xcc "$ROOT_DIR/scripts/MacOS13SDKCompatibility.h"

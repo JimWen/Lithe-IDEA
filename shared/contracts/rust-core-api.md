@@ -1216,7 +1216,13 @@ include `stateChanged`, `featuresChanged`, `diagnostics`,
 most once with either `result` or a structured runtime error containing
 provider/session, stage, optional method/document/request, stable code, and
 optional process-exit detail. Late responses after cancellation or deadline
-are ignored. Diagnostics are accepted only for documents open in the current
+are ignored. Deadline expiry queues advisory cancellation to a session-owned
+outbound worker; the monitor never waits for that write. A blocked maintenance
+write has its own request-duration deadline and fails the transport with
+`transportFailed` at `outboundMaintenance`, then terminates the child so the
+blocked writer can exit. Terminal cleanup clears queued cancellations. This
+applies to all language providers and does not add Java build coordination.
+Diagnostics are accepted only for documents open in the current
 session, and versioned diagnostics must match the current document version.
 
 The client reducer, raw JSON-RPC message, frame, and parser functions are
@@ -1265,6 +1271,19 @@ states, the effective global `toolchain`, and the machine-local
 `localToolchains` document. Toolchain diagnostics carry the affected run
 configuration ID when a requirement is consumed by one or more configurations;
 requirements with no configuration consumer do not emit a blocking diagnostic.
+Run configurations may carry `category: "project" | "infrastructure"`.
+Omitting it means `project`, and Core omits that default when serializing.
+Compose services and whole-stack detections are `infrastructure`; ordinary Go,
+Rust, Python and other project detections remain `project`. Generator revision
+5 invalidates older generated fingerprints so these metadata and names refresh.
+
+Repeated display names are qualified by the first working-directory or source-
+manifest candidate that separates every entry. Unique names and stable IDs stay
+unchanged. No Maven module graph is required for this generic disambiguation.
+The macOS Services scope still groups by execution type: category-based grouping,
+run-all filtering, and default-service filtering are pending and are not implied
+by the wire field. Existing runnable infrastructure remains accessible.
+
 A process detector declares a runtime binding only when that command genuinely
 consumes the runtime. npm, pnpm, and Yarn scripts consume `project-node`; Bun
 scripts keep their independent `bun` command and do not acquire a Node

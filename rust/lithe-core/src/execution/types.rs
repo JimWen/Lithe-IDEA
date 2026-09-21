@@ -39,3 +39,31 @@ impl Default for Confidence {
         Self::Declared
     }
 }
+
+/// Whether a configuration runs the project itself or the external services it
+/// depends on.
+///
+/// Docker Compose manifests usually declare databases and caches used by an
+/// application. Hosts can group these dependencies separately while keeping
+/// both project and infrastructure configurations runnable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunCategory {
+    /// Code in this repository: a service, application, or build task.
+    Project,
+    /// External dependencies the project runs against, such as Compose services.
+    Infrastructure,
+}
+
+impl Default for RunCategory {
+    fn default() -> Self {
+        Self::Project
+    }
+}
+
+impl RunCategory {
+    /// Lets serialization omit the common case so generated documents stay small.
+    pub fn is_project(&self) -> bool {
+        matches!(self, Self::Project)
+    }
+}

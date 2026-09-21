@@ -1430,3 +1430,130 @@ fn go_detector_accepts_an_explicit_semicolon_after_the_clause() {
         "missing go.main:terse/terse in {ids:?}"
     );
 }
+
+/// Compose files in an application repository declare the databases the
+/// project runs against. They stay runnable, but they are reported as
+/// infrastructure so hosts can keep them out of the project's service list.
+#[test]
+fn compose_detections_are_reported_as_infrastructure() {
+    let root = temporary_root("detect-compose-category");
+    let _cleanup = super::support::TemporaryRootGuard::keep(&root);
+    fs::create_dir_all(root.join("script/docker")).unwrap();
+    fs::create_dir_all(root.join("sql/tools")).unwrap();
+    fs::write(
+        root.join("script/docker/docker-compose.yml"),
+        "services:\n  mysql:\n    image: mysql\n  server:\n    image: app\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("sql/tools/docker-compose.yaml"),
+        "services:\n  mysql:\n    image: mysql\n",
+    )
+    .unwrap();
+    fs::write(root.join("Makefile"), "run:\n\techo run\n").unwrap();
+
+    let configurations = generated_configurations(&root);
+    let category = |id: &str| {
+        configurations
+            .iter()
+            .find(|item| item["id"] == id)
+            .unwrap_or_else(|| panic!("{id} should be generated: {configurations:?}"))["category"]
+            .clone()
+    };
+    assert_eq!(
+        category("compose.service:script/docker/mysql"),
+        "infrastructure"
+    );
+    assert_eq!(
+        category("compose.stack:sql/tools/compose up"),
+        "infrastructure"
+    );
+    // Project entries keep the default category, which Core omits entirely so
+    // existing generated documents do not churn.
+    assert_eq!(category("make.target:run"), Value::Null);
+}
+
+/// Three Compose files each contribute `compose up`, and two of them declare
+/// `mysql`. Ids differ, but the Run list shows only names, so Core qualifies
+/// the repeated ones with the directory they run in.
+#[test]
+fn repeated_detection_names_are_qualified_by_directory() {
+    let root = temporary_root("detect-duplicate-names");
+    let _cleanup = super::support::TemporaryRootGuard::keep(&root);
+    fs::create_dir_all(root.join("script/docker")).unwrap();
+    fs::create_dir_all(root.join("sql/tools")).unwrap();
+    for directory in ["script/docker", "sql/tools"] {
+        fs::write(
+            root.join(directory).join("docker-compose.yml"),
+            "services:\n  mysql:\n    image: mysql\n",
+        )
+        .unwrap();
+    }
+    fs::write(
+        root.join("script/docker/docker-compose.yml"),
+        "services:\n  mysql:\n    image: mysql\n  redis:\n    image: redis\n",
+    )
+    .unwrap();
+
+    let configurations = generated_configurations(&root);
+    let name = |id: &str| {
+        configurations
+            .iter()
+            .find(|item| item["id"] == id)
+            .unwrap_or_else(|| panic!("{id} should be generated: {configurations:?}"))["name"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        name("compose.service:script/docker/mysql"),
+        "mysql (script/docker)"
+    );
+    assert_eq!(name("compose.service:sql/tools/mysql"), "mysql (sql/tools)");
+    assert_eq!(
+        name("compose.stack:script/docker/compose up"),
+        "compose up (script/docker)"
+    );
+    assert_eq!(
+        name("compose.stack:sql/tools/compose up"),
+        "compose up (sql/tools)"
+    );
+    // A name that appears once is never decorated.
+    assert_eq!(name("compose.service:script/docker/redis"), "redis");
+}
+
+/// Adding infrastructure metadata must leave the fork's project-language
+/// detections present, command-owned, and serialized with the default category.
+#[test]
+fn project_language_detections_keep_the_default_category() {
+    let root = temporary_root("detect-project-categories");
+    let _cleanup = super::support::TemporaryRootGuard::keep(&root);
+    fs::create_dir_all(&root).unwrap();
+    multi_language_project(&root);
+    fs::create_dir_all(root.join("worker/src")).unwrap();
+    fs::write(
+        root.join("worker/Cargo.toml"),
+        "[package]\nname = \"fixture-worker\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("worker/src/main.rs"), "fn main() {}\n").unwrap();
+    let configurations = generated_configurations(&root);
+    for prefix in ["go.", "cargo.", "python."] {
+        let entries = configurations
+            .iter()
+            .filter(|item| {
+                item["provider"]
+                    .as_str()
+                    .is_some_and(|provider| provider.starts_with(prefix))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !entries.is_empty(),
+            "Missing project provider {prefix}: {configurations:?}"
+        );
+        assert!(
+            entries.iter().all(|item| item["category"].is_null()),
+            "Project metadata changed for {prefix}"
+        );
+    }
+}

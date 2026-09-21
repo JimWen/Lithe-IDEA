@@ -478,6 +478,10 @@ struct SessionState {
     request_timeout: Duration,
     shutdown_timeout: Duration,
     terminal_event_emitted: bool,
+    /// Deadline cancellations awaiting the outbound worker, never written by the monitor.
+    deadline_cancellations: Vec<String>,
+    /// Bounds an outbound maintenance write independently of caller deadlines.
+    maintenance_write_deadline: Option<Instant>,
 }
 
 struct RuntimeSession {
@@ -857,6 +861,8 @@ impl LspEngine {
                 request_timeout,
                 shutdown_timeout,
                 terminal_event_emitted: false,
+                deadline_cancellations: Vec::new(),
+                maintenance_write_deadline: None,
             }),
             event_signal: Condvar::new(),
             process: process.handle,
@@ -877,6 +883,7 @@ impl LspEngine {
             .insert(session_id.clone(), session.clone());
         session.spawn_readers(process.output, process.errors);
         session.spawn_monitor();
+        session.spawn_outbound_maintenance();
         let outbound_order = session.lock_outbound_order()?;
         if let Err(error) = session.send_messages(&outbound_order, initialize.messages) {
             session.fail(
@@ -2226,13 +2233,64 @@ impl RuntimeSession {
         flush_queued_documents_locked(&mut state)
     }
 
+    /// One session-owned writer sends deadline cancellations.
+    /// The monitor remains free to terminate a stalled write and expire other callers.
+    fn spawn_outbound_maintenance(self: &Arc<Self>) {
+        let session = self.clone();
+        thread::spawn(move || {
+            while session.active.load(Ordering::Acquire) {
+                session.pump_outbound_maintenance();
+                thread::sleep(Duration::from_millis(MONITOR_INTERVAL_MS));
+            }
+        });
+    }
+
+    fn pump_outbound_maintenance(&self) {
+        if !self
+            .lock_state()
+            .is_ok_and(|state| !state.deadline_cancellations.is_empty())
+        {
+            return;
+        }
+        let Ok(outbound_order) = self.outbound_order.try_lock() else {
+            return;
+        };
+        let Ok(mut state) = self.lock_state() else {
+            return;
+        };
+        let messages: Vec<String> = std::mem::take(&mut state.deadline_cancellations)
+            .into_iter()
+            .map(|id| {
+                json!({ "jsonrpc": "2.0", "method": "$/cancelRequest", "params": { "id": id } })
+                    .to_string()
+            })
+            .collect();
+        if messages.is_empty() {
+            return;
+        }
+        state.maintenance_write_deadline = Some(Instant::now() + state.request_timeout);
+        drop(state);
+        // Process termination by the monitor releases a blocked native stdin write.
+        let _ = self.send_messages_or_fail(&outbound_order, messages, "outboundMaintenance");
+        if let Ok(mut state) = self.lock_state() {
+            state.maintenance_write_deadline = None;
+        }
+    }
+
     fn expire_deadlines(&self) {
         let now = Instant::now();
         let mut cancellations = Vec::new();
         let mut initialize_timeout = false;
         let mut service_ready_timeout = None;
         let mut shutdown_timeout = false;
+        let mut maintenance_write_timeout = false;
         if let Ok(mut state) = self.lock_state() {
+            maintenance_write_timeout = state
+                .maintenance_write_deadline
+                .is_some_and(|deadline| now >= deadline);
+            if maintenance_write_timeout {
+                state.maintenance_write_deadline = None;
+            }
             if state.lifecycle == LspLifecycleState::Initializing
                 && state
                     .initialize_deadline
@@ -2309,7 +2367,16 @@ impl RuntimeSession {
                 );
             }
         }
-        if initialize_timeout {
+        if maintenance_write_timeout {
+            self.fail(
+                "transportFailed",
+                "outboundMaintenance",
+                "Language-server stdin write timed out.",
+                None,
+                None,
+            );
+            self.kill_process();
+        } else if initialize_timeout {
             // Timeout termination must not wait behind a blocked stdin write;
             // killing the process is what releases that write.
             self.fail(
@@ -2332,30 +2399,9 @@ impl RuntimeSession {
         } else if shutdown_timeout {
             self.kill_process();
         } else if !cancellations.is_empty() {
-            let messages = cancellations
-                .into_iter()
-                .map(|id| {
-                    json!({
-                        "jsonrpc": "2.0",
-                        "method": "$/cancelRequest",
-                        "params": { "id": id }
-                    })
-                    .to_string()
-                })
-                .collect();
-            match self.lock_outbound_order() {
-                Ok(outbound_order) => {
-                    let _ = self.send_messages(&outbound_order, messages);
-                }
-                Err(error) => {
-                    self.fail(
-                        "transportFailed",
-                        "outboundOrder",
-                        "Language-server outbound ordering failed.",
-                        Some(core_error_detail(&error)),
-                        None,
-                    );
-                    self.kill_process();
+            if let Ok(mut state) = self.lock_state() {
+                if !state.terminal_event_emitted {
+                    state.deadline_cancellations.extend(cancellations);
                 }
             }
         }
@@ -3252,6 +3298,8 @@ fn clear_runtime_state(session: &RuntimeSession, state: &mut SessionState) {
     state.pending_workspace_file_changes.clear();
     state.initialize_deadline = None;
     state.shutdown_deadline = None;
+    state.deadline_cancellations.clear();
+    state.maintenance_write_deadline = None;
     push_features_event(session, state, Vec::new());
 }
 
@@ -4254,6 +4302,116 @@ mod tests {
             .collect();
         assert!(completed.contains(&hover) && completed.contains(&definition));
         assert!(harness.snapshot().pending_operation_ids.is_empty());
+    }
+
+    /// A blocked advisory cancellation must not occupy the deadline monitor.
+    /// Three ordinary Go hover requests protect the language-neutral boundary:
+    /// one expires, the next expires during the blocked write, and the final
+    /// request receives transport failure when that write's deadline expires.
+    #[test]
+    fn blocked_deadline_cancellation_preserves_other_deadlines_and_terminates() {
+        struct Cleanup<'a> {
+            session: Arc<RuntimeSession>,
+            server: &'a ScriptedServer,
+        }
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                // Native termination releases stdin; the scripted adapter must
+                // model that boundary even when an assertion unwinds this test.
+                self.session.kill_process();
+                let _ = self.server.await_input_resumed();
+            }
+        }
+
+        fn receive_until(
+            session: &RuntimeSession,
+            matches: impl Fn(&LspRuntimeEvent) -> bool,
+        ) -> LspRuntimeEvent {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                assert!(
+                    !remaining.is_zero(),
+                    "Expected runtime event before local deadline"
+                );
+                let events = session
+                    .wait_events(remaining)
+                    .expect("session event wait should complete");
+                if let Some(event) = events.into_iter().find(&matches) {
+                    return event;
+                }
+            }
+        }
+
+        let harness = Harness::start(|request| {
+            request.request_timeout_milliseconds = 60_000;
+        });
+        let session = harness.session();
+        let _cleanup = Cleanup {
+            session: session.clone(),
+            server: &harness.server,
+        };
+        harness.server.complete_initialize(ready_capabilities());
+        receive_until(&session, |event| {
+            event.state == Some(LspLifecycleState::Ready)
+        });
+        let uri = "file:///workspace/main.go";
+        harness.sync(uri, "package main");
+        let operations: Vec<_> = (0..3)
+            .map(|_| harness.request(LspSemanticOperation::Hover, uri))
+            .collect();
+        let request_ids: Vec<_> = {
+            let state = session.lock_state().unwrap();
+            operations
+                .iter()
+                .map(|id| state.request_by_operation[id].clone())
+                .collect()
+        };
+        harness.server.pause_input();
+        session
+            .lock_state()
+            .unwrap()
+            .pending
+            .get_mut(&request_ids[0])
+            .unwrap()
+            .deadline = Instant::now();
+        let first = receive_until(&session, |event| {
+            event.operation_id.as_ref() == Some(&operations[0])
+        });
+        assert_eq!(first.error.as_ref().unwrap().code, "requestTimeout");
+        assert!(
+            harness.server.await_input_pause(),
+            "Cancellation should reach its owned write barrier"
+        );
+
+        session
+            .lock_state()
+            .unwrap()
+            .pending
+            .get_mut(&request_ids[1])
+            .unwrap()
+            .deadline = Instant::now();
+        let second = receive_until(&session, |event| {
+            event.operation_id.as_ref() == Some(&operations[1])
+        });
+        assert_eq!(second.error.as_ref().unwrap().code, "requestTimeout");
+        assert_eq!(
+            session.snapshot().unwrap().pending_operation_ids,
+            vec![operations[2].clone()]
+        );
+
+        session.lock_state().unwrap().maintenance_write_deadline = Some(Instant::now());
+        let last = receive_until(&session, |event| {
+            event.operation_id.as_ref() == Some(&operations[2])
+        });
+        assert_eq!(last.error.as_ref().unwrap().code, "transportFailed");
+        assert!(
+            harness.server.await_input_resumed(),
+            "Termination must release the writer"
+        );
+        assert!(session.process.exit_status().is_some());
+        assert_eq!(session.snapshot().unwrap().state, LspLifecycleState::Failed);
+        assert!(session.snapshot().unwrap().pending_operation_ids.is_empty());
     }
 
     /// Criterion 5: a request deadline removes the pending request.

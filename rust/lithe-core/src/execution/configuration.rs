@@ -1,6 +1,6 @@
 //! Run-configuration schemas, layered overrides, and deterministic generation.
 
-use super::types::{Confidence, Execution};
+use super::types::{Confidence, Execution, RunCategory};
 use crate::languages::JavaRunConfigurationsRequest;
 use crate::protocol::{invalid_relative_path, CoreError, ErrorCode};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 const VERSION: u32 = 2;
 const LEGACY_VERSION: u32 = 1;
-const GENERATOR_REVISION: &str = "4";
+// Regenerate persisted detections when category or display-name semantics change.
+const GENERATOR_REVISION: &str = "5";
 const CURRENT_FILE_ID: &str = "current-file";
 const EDITOR_CURRENT_FILE_PROVIDER: &str = "editor.current-file";
 /// Toolchain requirements and `project.json` are separate documents that happen
@@ -232,6 +233,10 @@ pub struct RunConfiguration {
     pub provider: String,
     #[serde(default)]
     pub execution: Execution,
+    /// Whether the entry runs this project or the infrastructure it depends on.
+    /// Omitted for project entries to preserve existing document shape.
+    #[serde(default, skip_serializing_if = "RunCategory::is_project")]
+    pub category: RunCategory,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(default)]
@@ -417,6 +422,7 @@ pub fn generate(request: GenerateRequest) -> Result<Value, CoreError> {
                 name: value.name,
                 provider: "java.main".to_string(),
                 execution: Execution::Application,
+                category: RunCategory::Project,
                 command: None,
                 args: Vec::new(),
                 cwd: ".".to_string(),
@@ -449,6 +455,7 @@ pub fn generate(request: GenerateRequest) -> Result<Value, CoreError> {
             name: "Current File".to_string(),
             provider: "java.current-file".to_string(),
             execution: Execution::Application,
+            category: RunCategory::Project,
             command: None,
             args: Vec::new(),
             cwd: ".".to_string(),
@@ -471,6 +478,7 @@ pub fn generate(request: GenerateRequest) -> Result<Value, CoreError> {
     let detected = detected_configurations(&root, &claimed)?;
     let entry_count = java_entry_count + detected.len();
     configurations.extend(detected);
+    disambiguate_configuration_names(&mut configurations);
     let requirements = detect_requirements(
         &root,
         has_java_sources || has_gradle_project,
@@ -487,6 +495,42 @@ pub fn generate(request: GenerateRequest) -> Result<Value, CoreError> {
     Ok(
         json!({ "generated": generated, "toolchainRequirements": requirements, "entryCount": entry_count }),
     )
+}
+
+/// Qualifies display names that repeat across working directories or manifests.
+///
+/// Ids already carry the directory, but the Run list shows only the name: three
+/// Compose files each contributing `compose up` are otherwise indistinguishable. The qualifier is the first
+/// candidate that separates every entry in the group, so the shortest useful
+/// label wins and unique names are never decorated.
+fn disambiguate_configuration_names(configurations: &mut [RunConfiguration]) {
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, configuration) in configurations.iter().enumerate() {
+        groups
+            .entry(configuration.name.to_lowercase())
+            .or_default()
+            .push(index);
+    }
+    for indexes in groups.into_values().filter(|indexes| indexes.len() > 1) {
+        let candidates: [fn(&RunConfiguration) -> Option<String>; 2] = [
+            |configuration| Some(configuration.cwd.clone()).filter(|cwd| cwd != "."),
+            |configuration| configuration.source.clone(),
+        ];
+        let Some(qualifier) = candidates.into_iter().find(|candidate| {
+            let values = indexes
+                .iter()
+                .map(|index| candidate(&configurations[*index]))
+                .collect::<Option<BTreeSet<_>>>();
+            values.is_some_and(|values| values.len() == indexes.len())
+        }) else {
+            continue;
+        };
+        for index in indexes {
+            if let Some(value) = qualifier(&configurations[index]) {
+                configurations[index].name = format!("{} ({value})", configurations[index].name);
+            }
+        }
+    }
 }
 
 /// Keeps stable ids for the usual one-module case while preserving same-named
@@ -549,6 +593,7 @@ fn detected_configurations(
             name: item.name,
             provider: item.provider,
             execution: item.execution,
+            category: item.category,
             command: item.command,
             args: item.args,
             cwd: item.cwd,

@@ -37,6 +37,37 @@ final class MacPlatformUI: PlatformUI {
         NSWorkspace.shared.open(url)
     }
 
+    func openInBrowser(_ url: URL) {
+        guard let browserURL = Self.browserApplicationURL(resolving: {
+            NSWorkspace.shared.urlForApplication(toOpen: $0)
+        }) else {
+            presentCommandFailure(String(localized: "No default web browser is available."))
+            return
+        }
+        NSWorkspace.shared.open(
+            [url], withApplicationAt: browserURL, configuration: NSWorkspace.OpenConfiguration()
+        ) { [weak self] application, error in
+            guard application == nil || error != nil else { return }
+            let detail = error?.localizedDescription
+            Task { @MainActor [weak self] in
+                var message = String(localized: "Could not open the file in the browser.")
+                if let detail { message += "\n" + detail }
+                self?.presentCommandFailure(message)
+            }
+        }
+    }
+
+    /// Scheme lookup selects a browser without consulting the HTML file association
+    /// or opening a network connection. HTTP is a fallback for an absent HTTPS handler.
+    static func browserApplicationURL(resolving resolve: (URL) -> URL?) -> URL? {
+        for scheme in ["https:", "http:"] {
+            if let url = URL(string: scheme), let application = resolve(url) {
+                return application
+            }
+        }
+        return nil
+    }
+
     func copyToClipboard(_ value: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
