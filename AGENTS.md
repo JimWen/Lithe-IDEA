@@ -21,6 +21,55 @@ Follow the "Maintain architecture documents by feature" section of
 when creating, updating, renaming, or completing architecture documents. It owns
 the feature naming, `-done` status, acceptance summary, and reference-update rules.
 
+## Upstream Integration Principles
+
+The following fork policy was confirmed on 2026-09-21. Apply it to subsequent
+integrations from `https://github.com/1lck/Lithe-IDEA` unless the user explicitly
+changes the scope.
+
+- Use the current fork branch as the base and integrate the requested upstream
+  releases in order. Preserve original upstream commit identities, authors,
+  messages and ancestry with real merge commits; do not squash or rewrite the
+  upstream history. Resolve excluded changes out of the resulting tree and
+  record the retained, adapted and excluded scope.
+- Ship macOS only. Exclude Windows implementation, plugins, resources, build
+  dependencies and CI increments. Retain platform-neutral Rust/contracts and
+  generic fixes actually used by macOS, even when their upstream commit also
+  contains excluded platform changes.
+- Exclude Java ecosystem and framework support increments, including Maven,
+  Spring, MyBatis, JDT/JDTLS, bundled JDKs and their UI, dependencies, resources,
+  tests and packaging. Inspect mixed commits by behavior and hunk; retain
+  independent generic improvements. Preserve existing compatibility types and
+  ordinary text handling when needed; this policy is not a blanket identifier
+  deletion. Keep the fork's existing Linux.do exclusion.
+- Retain the native AppKit/NSTextView editor. Monaco migration is deferred:
+  exclude its editor replacement, JS bridge/model/undo path, frontend toolchain
+  and bundles, and features implemented only by Monaco (including its minimap
+  and theme integration). Do not add nonfunctional settings for excluded
+  features. Independently useful fixes such as guarded saving, external-file
+  observation, search, Git, or HTML preview may be adapted to the native editor.
+  Reconsidering the editor engine requires a separate explicit user decision.
+- Preserve the fork's Go/Rust/Python capabilities, official plugins, native
+  project windows, module ownership and terminal behavior. Preserve mutation
+  leases, document freshness, actual project-replacement Apply, selected-file
+  and occurrence exclusions, shared Undo/Redo and disk compensation. Adapt to
+  existing owners instead of restoring deleted upstream coordinators.
+- Keep fork version metadata, release policy, architecture documents and agent
+  rules unless the requested task explicitly changes them. Merging an upstream
+  release does not authorize publishing, pushing, creating tags or replacing
+  the fork's release identity.
+- Check scope, conflicts, contracts, boundaries and whitespace for each merge.
+  For a requested multi-release batch, finish the integrations and then run the
+  consolidated affected test suites with timing reports, build the final app,
+  replace the installed system app, and perform corresponding real UI actions.
+  Fix and reverify failures; compilation or static parsing alone is not feature
+  acceptance. Verify the installed app matches the committed source, preserve
+  rollback during replacement, record actual results and limitations, and
+  clean up app/helper processes. Follow any explicit per-release verification
+  sequence requested by the user instead of this batch default.
+
+`CLAUDE.md` summarizes the same policy and points here for the full rules.
+
 ## Test Process Lifecycle and Cleanup
 
 Unless the user gives a specific instruction to keep a process running, any
@@ -67,6 +116,5 @@ properties on every event, or duplicating splitter logic.
   explicitly confirm that dragging does not cause high-frequency full-page
   redraws.
 
-These requirements apply to both macOS and Windows. Each platform may use its
-own native implementation, but interaction semantics, performance goals, size
-constraints, and accessibility requirements must remain consistent.
+These requirements apply to the shipped macOS product and retained shared
+contracts. They do not authorize restoring the excluded Windows product.
