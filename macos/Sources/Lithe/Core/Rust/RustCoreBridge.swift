@@ -317,6 +317,8 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
             let name: String
             let provider: String
             let execution: String?
+            // Preserve Core metadata when generated configurations are written back to disk.
+            let category: String?
             let command: String?
             let args: [String]?
             let cwd: String?
