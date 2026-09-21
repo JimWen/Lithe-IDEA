@@ -4,6 +4,29 @@ import Testing
 
 @MainActor
 struct HTMLPreviewNavigationTests {
+    @Test
+    func resourceOriginKeepsPayloadAnchorsAndRejectsMainFrameReplacement() throws {
+        let base = try #require(HTMLPreviewAssetResolver.baseURL(for: URL(fileURLWithPath: "/fixture/site/index.html")))
+        let fragment = try #require(URL(string: "#section", relativeTo: base)?.absoluteURL)
+        let other = try #require(URL(string: "other.html", relativeTo: base)?.absoluteURL)
+        #expect(HTMLPreviewNavigationPolicy.decision(
+            destination: base, isActivatedLink: false, currentPageURL: nil,
+            htmlBaseURL: base, allowsPayloadLoad: true
+        ) == .allow)
+        #expect(HTMLPreviewNavigationPolicy.decision(
+            destination: fragment, isActivatedLink: true, currentPageURL: base,
+            htmlBaseURL: base
+        ) == .allow)
+        #expect(HTMLPreviewNavigationPolicy.decision(
+            destination: other, isActivatedLink: false, currentPageURL: base,
+            htmlBaseURL: base
+        ) == .cancel)
+        #expect(HTMLPreviewNavigationPolicy.decision(
+            destination: other, isActivatedLink: false, currentPageURL: base,
+            htmlBaseURL: base, isMainFrameNavigation: false
+        ) == .allow)
+    }
+
     @Test(arguments: ["file:///fixture/site/", "file:///fixture/site/#previous",
                       "about:blank", "about:blank#previous", nil] as [String?])
     func sameDocumentFragmentStaysInsideLivePreview(currentPage: String?) throws {

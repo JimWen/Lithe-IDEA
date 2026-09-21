@@ -16,6 +16,7 @@ struct HTMLPreviewWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(context.coordinator.assetHandler, forURLScheme: HTMLPreviewAssetResolver.scheme)
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         let pagePreferences = WKWebpagePreferences()
         pagePreferences.allowsContentJavaScript = true
@@ -40,15 +41,18 @@ struct HTMLPreviewWebView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
+        let assetHandler = HTMLPreviewAssetSchemeHandler()
+        private var payloadBaseURL: URL?
         private var lastPayload: Payload?
         private var payloadNavigation: WKNavigation?
 
         func update(_ payload: Payload, in webView: WKWebView) {
             guard payload != lastPayload else { return }
             lastPayload = payload
+            payloadBaseURL = assetHandler.update(documentURL: payload.documentURL)
             payloadNavigation = webView.loadHTMLString(
                 payload.html,
-                baseURL: payload.documentURL.deletingLastPathComponent()
+                baseURL: payloadBaseURL
             )
         }
 
@@ -63,7 +67,7 @@ struct HTMLPreviewWebView: NSViewRepresentable {
                 destination: url,
                 isActivatedLink: navigationAction.navigationType == .linkActivated,
                 currentPageURL: isMainFrame ? webView.url : navigationAction.sourceFrame.request.url,
-                htmlBaseURL: lastPayload?.documentURL.deletingLastPathComponent(),
+                htmlBaseURL: payloadBaseURL,
                 isMainFrameNavigation: isMainFrame,
                 allowsPayloadLoad: payloadNavigation != nil && navigationAction.navigationType == .other
             )
@@ -79,6 +83,7 @@ struct HTMLPreviewWebView: NSViewRepresentable {
         }
 
         func invalidatePayloadNavigation() {
+            assetHandler.cancelPendingRequests()
             payloadNavigation = nil
         }
 
@@ -135,7 +140,8 @@ enum HTMLPreviewNavigationPolicy {
         if !isMainFrameNavigation {
             // Preserve embedded local frames. CSS and image requests are resource
             // loads, not main-frame navigations governed by this policy.
-            return destination.isFileURL || destination.absoluteString == "about:blank" ? .allow : .cancel
+            return destination.isFileURL || destination.scheme == HTMLPreviewAssetResolver.scheme
+                || destination.absoluteString == "about:blank" ? .allow : .cancel
         }
         // Only the native loadHTMLString request can replace the main document.
         // Forms, script redirects, refreshes and reloads must not detach the
