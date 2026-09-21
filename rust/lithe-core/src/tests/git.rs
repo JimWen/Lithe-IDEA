@@ -795,6 +795,193 @@ fn git_write_appends_shared_and_local_ignore_patterns_without_duplicates() {
     fs::remove_dir_all(root).expect("temporary workspace should be removable");
 }
 
+/// Owns every checkout and non-repository fixture, including failure cleanup.
+/// Git subprocesses use Core's local deadline instead of unbounded Command::output.
+struct LiteralExcludeFixture(std::path::PathBuf);
+
+impl LiteralExcludeFixture {
+    fn new(label: &str) -> Self {
+        let fixture = Self(temporary_root(label));
+        let root = fixture.root();
+        fs::create_dir_all(&root).expect("temporary repository should be creatable");
+        fixture.git(&root, &["init", "-q", "-b", "main"]);
+        fixture.git(&root, &["config", "user.email", "fixture@example.invalid"]);
+        fixture.git(&root, &["config", "user.name", "Lithe Fixture"]);
+        fixture.git(&root, &["config", "core.autocrlf", "false"]);
+        fixture.git(&root, &["config", "commit.gpgSign", "false"]);
+        fixture.git(
+            &root,
+            &["config", "core.hooksPath", "disabled-fixture-hooks"],
+        );
+        fixture.git(&root, &["config", "gc.auto", "0"]);
+        fixture
+    }
+
+    fn root(&self) -> std::path::PathBuf {
+        self.0.join("checkout")
+    }
+
+    fn request(&self, root: &Path, command: &str, mut payload: Value) -> Value {
+        payload["root"] = serde_json::json!(root);
+        let request = serde_json::json!({
+            "id": format!("{}-{command}", self.0.file_name().unwrap().to_string_lossy()),
+            "timeoutMilliseconds": 5000,
+            "command": command,
+            "payload": payload,
+        });
+        serde_json::from_str(&execute_json(&request.to_string()))
+            .expect("local exclude response should be JSON")
+    }
+
+    fn git(&self, root: &Path, arguments: &[&str]) {
+        let result = self.request(
+            root,
+            "git.command",
+            serde_json::json!({"arguments": arguments}),
+        );
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(result["data"]["exitCode"], 0, "{result}");
+        assert!(result["data"]["operationError"].is_null(), "{result}");
+    }
+
+    fn mutate(&self, root: &Path, operation: &str, paths: Value) {
+        let result = self.request(
+            root,
+            "git.write",
+            serde_json::json!({"operation": operation, "paths": paths}),
+        );
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(result["data"]["exitCode"], 0, "{result}");
+        assert!(result["data"]["operationError"].is_null(), "{result}");
+    }
+}
+
+impl Drop for LiteralExcludeFixture {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir_all(&self.0) {
+            eprintln!("Could not clean local exclude fixture: {error}");
+        }
+    }
+}
+
+#[test]
+fn git_write_mutates_literal_local_exclude_patterns_including_linked_worktrees() {
+    let fixture = LiteralExcludeFixture::new("lithe-exclude-patterns");
+    let root = fixture.root();
+    fs::write(root.join("README.md"), "ok\n").expect("readme should be writable");
+    fs::write(root.join(".gitignore"), "# shared rules\n").expect("gitignore should be writable");
+    fixture.git(&root, &["add", "README.md", ".gitignore"]);
+    fixture.git(&root, &["commit", "-qm", "initial"]);
+    fixture.mutate(
+        &root,
+        "excludePatterns",
+        serde_json::json!([".local-artifact", " .local-artifact "]),
+    );
+    let exclude_path = root.join(".git/info/exclude");
+    let exclude = fs::read_to_string(&exclude_path).expect("local exclude should be readable");
+    assert_eq!(
+        exclude
+            .lines()
+            .filter(|line| *line == ".local-artifact")
+            .count(),
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(root.join(".gitignore")).unwrap(),
+        "# shared rules\n"
+    );
+
+    let worktree = fixture.0.join("linked");
+    fixture.git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    fixture.mutate(
+        &worktree,
+        "unexcludePatterns",
+        serde_json::json!([".local-artifact"]),
+    );
+    let excluded =
+        fs::read_to_string(&exclude_path).expect("shared exclude should remain readable");
+    assert!(!excluded.lines().any(|line| line == ".local-artifact"));
+    assert!(!worktree.join(".git/info/exclude").is_file());
+    fixture.mutate(
+        &worktree,
+        "unexcludePatterns",
+        serde_json::json!([".local-artifact"]),
+    );
+    assert_eq!(fs::read_to_string(&exclude_path).unwrap(), excluded);
+
+    let non_git = fixture.0.join("non-git");
+    fs::create_dir_all(&non_git).expect("temporary non-git directory should be creatable");
+    let rejected = fixture.request(
+        &non_git,
+        "git.write",
+        serde_json::json!({
+            "operation": "excludePatterns", "paths": [".local-artifact"]
+        }),
+    );
+    assert_eq!(rejected["ok"], false, "{rejected}");
+    assert_eq!(rejected["error"]["code"], "invalid_request");
+    assert_eq!(rejected["error"]["message"], "Not a Git repository");
+}
+
+#[test]
+fn git_write_literal_exclude_patterns_preserve_leading_whitespace_lines() {
+    // Stored whitespace belongs to the rule; normalization applies only to the request.
+    let fixture = LiteralExcludeFixture::new("lithe-exclude-patterns-whitespace");
+    let root = fixture.root();
+    let exclude_path = root.join(".git/info/exclude");
+    let unrelated = "user rules\r\n .local-artifact\r\n.local-artifact \r\n";
+    fs::write(&exclude_path, unrelated).expect("local exclude should be writable");
+    fixture.mutate(
+        &root,
+        "excludePatterns",
+        serde_json::json!([".local-artifact"]),
+    );
+    assert_eq!(
+        fs::read_to_string(&exclude_path).unwrap(),
+        format!("{unrelated}.local-artifact\r\n")
+    );
+    fixture.mutate(
+        &root,
+        "unexcludePatterns",
+        serde_json::json!([".local-artifact"]),
+    );
+    assert_eq!(fs::read_to_string(&exclude_path).unwrap(), unrelated);
+}
+
+#[test]
+fn git_write_literal_exclude_patterns_preserve_non_utf8_bytes() {
+    // A UTF-8 String round-trip would corrupt the unrelated 0xff byte.
+    let fixture = LiteralExcludeFixture::new("lithe-exclude-patterns-raw-bytes");
+    let root = fixture.root();
+    let exclude_path = root.join(".git/info/exclude");
+    let unrelated = b"legacy-\xff\r\n";
+    fs::write(&exclude_path, unrelated).expect("local exclude should be writable");
+    fixture.mutate(
+        &root,
+        "excludePatterns",
+        serde_json::json!([".local-artifact"]),
+    );
+    assert_eq!(
+        fs::read(&exclude_path).unwrap(),
+        b"legacy-\xff\r\n.local-artifact\r\n"
+    );
+    fixture.mutate(
+        &root,
+        "unexcludePatterns",
+        serde_json::json!([".local-artifact"]),
+    );
+    assert_eq!(fs::read(&exclude_path).unwrap(), unrelated);
+}
+
 #[test]
 fn git_write_edits_a_local_commit_message_and_rebuilds_descendants() {
     let root = history_rewrite_repository("git-edit-commit-message");
