@@ -6,6 +6,37 @@ import Testing
 @MainActor
 @Suite("Native editor fork compatibility")
 struct Editor048ForkCompatibilityTests {
+    @Test(arguments: ["😀", "🧑🏽‍💻"])
+    func nativeInsertionBesideSurrogatesPreservesTextSelectionAndUndo(emoji: String) throws {
+        let source = "<h1>HTML BLUE</h1>"
+        try withEditor(source: source) { model, document, coordinator, view, _ in
+            let undo = model.services.workspaceTextEditUndoController.sharedUndoManager
+            view.externalUndoManager = undo
+            view.allowsUndo = true
+            view.isLanguageNavigationEnabled = true
+            view.delegate = coordinator
+            defer { view.delegate = nil; undo.removeAllActions() }
+            let selection = (source as NSString).range(of: "HTML BLUE")
+            view.setSelectedRange(selection)
+            let replacement = "HTML LIVE 中文 " + emoji
+
+            // Selection notifications run caret decoration while the preceding
+            // UTF-16 code unit is a low surrogate, reproducing native typing.
+            undo.beginUndoGrouping()
+            view.insertText(replacement, replacementRange: selection)
+            undo.endUndoGrouping()
+            #expect(document.text == "<h1>" + replacement + "</h1>")
+            #expect(view.string == document.text)
+            #expect(view.selectedRange() == NSRange(location: 4 + replacement.utf16.count, length: 0))
+            view.updateCaretDecorations()
+            view.updateEditorDecorations()
+            #expect(undo.canUndo)
+            undo.undo()
+            #expect(view.string == source)
+            #expect(document.text == source)
+        }
+    }
+
     @Test(arguments: ["\n", "\r", "\r\n"])
     func emptyLogicalLineKeepsCaretGeometryOnItsOwnFragment(separator: String) throws {
         let source = "first" + separator + separator + "last"

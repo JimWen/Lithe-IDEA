@@ -3902,10 +3902,13 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         guard source.length > 0 else { return nil }
         let characterSet = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_$"))
         var location = min(caret, source.length - 1)
-        if !characterSet.contains(UnicodeScalar(source.character(at: location))!), location > 0 {
+        // NSString offsets address UTF-16 code units. A surrogate beside the
+        // caret is not an independent scalar and must not be force-unwrapped.
+        if UnicodeScalar(source.character(at: location)).map(characterSet.contains) != true, location > 0 {
             location -= 1
         }
-        guard characterSet.contains(UnicodeScalar(source.character(at: location))!) else { return nil }
+        guard let scalar = UnicodeScalar(source.character(at: location)),
+              characterSet.contains(scalar) else { return nil }
         var start = location
         var end = location + 1
         while start > 0,
