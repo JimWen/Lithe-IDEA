@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import LitheCoreContracts
 
 @MainActor
 public final class TerminalSession: ObservableObject, Identifiable {
@@ -27,11 +28,13 @@ public final class TerminalSession: ObservableObject, Identifiable {
     private var shellRequest: (configuration: TerminalShellConfiguration, context: TerminalLaunchContext)?
     private var shellLaunch: TerminalShellLaunch?
     private var launchGeneration = UUID()
+    private var outputDecoder = StreamingUTF8Decoder()
 
     public init(transport: any TerminalTransport) {
         self.transport = transport
         transport.onTermination = { [weak self] exitCode in
             guard let self else { return }
+            finishDecodedOutput()
             isRunning = false; isReady = false; lastExitCode = exitCode; endedAt = Date()
             if !isManagedProcess, exitCode != 0 {
                 // exec failure and a shell that exits itself can both return
@@ -42,7 +45,10 @@ public final class TerminalSession: ObservableObject, Identifiable {
         }
         transport.onOutput = { [weak self] data in
             guard let self, !data.isEmpty else { return }
-            self.onOutput?(String(decoding: data, as: UTF8.self))
+            let output = outputDecoder.decode(data)
+            if !output.isEmpty {
+                onOutput?(output)
+            }
         }
         transport.onTitle = { [weak self] title in
             let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -192,9 +198,18 @@ public final class TerminalSession: ObservableObject, Identifiable {
     public func focus() { transport.focus() }
     public func stop() {
         launchGeneration = UUID()
-        transport.stop(); isRunning = false; isReady = false
+        transport.stop()
+        finishDecodedOutput()
+        isRunning = false; isReady = false
         virtualEnvironmentState = .inactive
         if startedAt != nil { endedAt = Date() }
+    }
+
+    private func finishDecodedOutput() {
+        let output = outputDecoder.finish()
+        if !output.isEmpty {
+            onOutput?(output)
+        }
     }
 
     private func updateCurrentDirectory(_ rawValue: String?) {
