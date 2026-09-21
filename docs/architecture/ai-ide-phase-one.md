@@ -1,6 +1,6 @@
 # 一期限定裁剪范围与上游合并策略
 
-日期：2026-09-05。状态：限定裁剪、完整构建与安装包验收已完成；arm64 版本已替换本机安装。
+日期：2026-09-05（初始裁剪验收）；2026-09-21（上游集成）。初始裁剪结果见第 7–9 节；本次已合入至 v0.5.0，自动验证与系统安装完成，最终输入界面复验因锁屏待完成，详见第 10 节。
 
 ## 1. 本轮范围
 
@@ -157,3 +157,76 @@ Swift 最终运行覆盖 96 个 suite、930 个用例，测试阶段耗时 35.43
 | `unchangedLocalOptionsDoNotRewriteTheConfigurationFile` | 123 ms |
 
 没有因本机平台限制而未运行的保留产品测试套件。Windows 已退出产品范围；不再执行 Windows 构建和测试。本任务启动的测试运行器、验证器和数据库助手均已退出。安装完成后检测到 `/Applications/Lithe.app` 被外部启动；本任务未发起该启动，保留正在使用的安装版实例。
+
+## 10. v0.4.5–v0.5.0 上游集成与验收
+
+2026-09-21：以本分支既有实现为 base，按版本顺序完成上游集成。第 7–9 节保留的是 2026-09-05 的历史验收；本节记录新的合并和验证，不将两次结果混用。后续合并原则已写入 [AGENTS.md](../../AGENTS.md#upstream-integration-principles) 和 [CLAUDE.md](../../CLAUDE.md)，提交 `9a30b884`。
+
+### 合并历史与取舍
+
+| 上游版本 | 原始上游提交 | 本地合并提交 |
+| --- | --- | --- |
+| 0.4.5 | `03e40473` | `72b71b8c` |
+| 0.4.6 | `588daa33` | `5d1a26ad` |
+| 0.4.7 | `931b0e1a` | `8fc0148e` |
+| 0.4.8 | `5fa0db9c` | `73906227` |
+| 0.4.9 | `78da9bad` | `3c1d7119` |
+| 0.4.10 | `78622012` | `75ad8ded` |
+| 0.5.0 | `a7eec237` | `e1a0e392` |
+
+以上上游提交均作为原始历史保留，并是最终分支的祖先；没有将它们压成一个重新署名的提交。原始作者、提交消息和 SHA 保留，适配与验收修复另行提交。逐路径取舍和父提交证据保存在 `.artifacts/upstream-045-050/`，最终祖先记录为 `final/ancestry.json`。
+
+持续排除 Windows 产品、Java 框架和工具链增量，以及 Linux.do 恢复。按用户决定继续使用 AppKit/NSTextView，暂缓 Monaco 及其前端、minimap、主题和专属协议迁移。保留 Go/Rust/Python、官方 Go 插件、原生窗口归属，以及项目替换的真实 Apply、文档修改租约、过期结果检查、共享撤销与补偿事务。
+
+本轮保留 Git 图与执行日志、精确本地排除、Run 勾选/固定/批量启动、工作区 LSP 开关持久化、原生编辑与输入法修正、搜索替换预览、外部修改保存保护、HTML/SVG 预览和通用构建验证改进。Git 命令仍由真实执行事件和项目 journal 统一拥有，避免重复日志或 Clear 后晚到回填。Run 的 `project`/`infrastructure` 分类保留在共享 JSON 契约和 Compose 检测中；macOS 没有新增 Infrastructure 分组或基于分类的 Run All/default 规则。
+
+### 验收中修复的问题
+
+- `c4bd52af`：修复配置加载期间勾选恢复的时序和批量启动输出归属；`a5b912ed` 进一步移除 Run 视图抢选首个勾选配置及切换 Console 的行为。
+- `33f83f7f`：兼容旧 SDK Foundation 对 `about:blank#fragment` 的解析，保留 HTML 页内锚点。
+- `b4fbabb8`：修复签名安装包中 HTML 相对 CSS/图片不能加载的问题。平台适配器通过文档目录限定的本地 scheme 提供资源，离开该目录的路径和符号链接不能越界；停止的请求不再晚到回调。预览仍直接使用当前缓冲区，不先执行磁盘 HTML 或生成临时 HTML。
+- `3bd13936`：Swift 桥接 DTO 保留 Run category，防止 Rust 生成的 Compose 分类在 Mac store 重写时丢失。
+- `5f9325be`：预览订阅、资源处理器与 WKWebView 按文档身份共同管理，避免切换标签后旧预览滞留；分栏尺寸仍由外层原有容器保留。最终提交与安装结果见下方验收记录。
+
+- `1ae1a9cb`：实际 HTML 输入 emoji 触发 `identifier(at:in:)` 对代理项的强制解包崩溃；改为安全判断单个 UTF-16 code unit，补充真实 NSTextView 插入、光标和共享撤销回归。最终提交与验证结果随安装记录归档。
+
+### 工程验证与实际操作
+
+使用官方 Swift 6.2.4，应用维持 Swift 5 语言模式、测试维持 Swift 6；完整 Swift 测试强制链接真实 Rust Core，并显式启用 Run 配置、Git execution 和 LSP sync 的集成测试开关。最终完整 Swift 1517 项、Rust Core 513 项通过；Git host 6、项目元数据 18、Git C ABI 12、console/LSP bridge 10、Git 性能 debug 20/release 2、Rust 注释扫描器 8 项专项记录通过。合并报告共 2106 条通过记录，部分专项与完整 Swift 覆盖重叠，不作为不重复用例数；没有跳过项或超出硬时间预算的用例。已打开 HTML 汇总检查；45 条记录达到慢测试警戒线，但未超过硬预算。
+
+Rust 格式/注释/文档、服务边界、共享契约、测试稳定性、Core、Git Graph、官方 Go 插件、CI 分类器/actionlint、更新清单和实际包体检查通过。测试等待和清理边界保持有界，没有为通过验证整体放宽预算。最终日志、逐项 JSON/HTML/JUnit 报告在 `.artifacts/upstream-045-050/final/` 和 `.artifacts/test-stability/`；主汇总为 `final/timing/index.html`。
+
+完整 Swift 验证命令如下（PATH 使用第 9 节记录的 Swift 6.2.4）。新增的 emoji/组合 emoji 输入回归共 2 个参数场景，计时 23 ms；HTML 导航/资源和 Run category 回归也在完整报告中，专项探针证据另存于对应 prepared 目录。
+
+```sh
+LITHE_RUN_RUN_CONFIGURATION_INTEGRATION=1 \
+LITHE_RUN_GIT_EXECUTION_INTEGRATION=1 \
+LITHE_RUN_LSP_SYNC_BRIDGE_INTEGRATION=1 \
+.agents/skills/write-stable-tests/scripts/test-stability-macos.sh \
+  --suite-timeout-seconds 900 \
+  --report .artifacts/test-stability/macos-upstream-final-unicode-caret.json \
+  -- -Xlinker -force_load \
+  -Xlinker "$PWD/rust/target/macos/aarch64-apple-darwin/debug/liblithe_core.a"
+```
+
+各轮系统安装版完成以下实际操作，原始截图、AX 状态和断言记录在 `final/ui/results.json`：
+
+- 原生 SVG 编辑即时预览、保存、撤销和分隔条边界；CRLF/中文/emoji 的精确保存；同大小同 mtime 外部修改重载，以及脏缓冲区冲突时保存不覆盖外部写入。
+- Search Everywhere 普通文件与 slash 命令查询；两个原生终端执行独立命令；本地 Git 图、成功与失败 remote 的 Fetch 日志、精确暂存两个文件、中文/emoji 多行提交消息和实际本地提交。
+- 项目替换预览 6 个文件 11 处匹配，只选择 README 的 3 处并保留大小写；Apply、保存后逐字节核对，共享撤销再保存恢复原始内容。
+- Go/Rust 勾选批量运行得到各自预期输出；重开后 Rust 勾选和 Go 固定保留；重新扫描后的四个 Compose 配置 category 保留；运行勾选 Rust 时保留 Go 的详情页，随后手动选择 Rust 可见成功输出。
+
+- HTML 在安装版 `5f9325be` 中按 index → other → anchors → index 来回切换，当前文档与 CSS/SVG 预览一致；原生 emoji 输入随后暴露的崩溃由 `1ae1a9cb` 修复，两个真实 NSTextView 输入/撤销回归通过。
+- 工作区 Go 语言服务在设置中显示 Running，关闭开关后停止；本次结束时已删除仅属于验收项目的临时禁用偏好，恢复默认启用。
+
+**尚未完成的实机复验**：安装最终 `1ae1a9cb` 后，桌面已锁定，前台为 `loginwindow`，无法再执行原生 emoji 输入、未保存 HTML 预览及 Go LSP 重启状态检查。已请求解锁；这些项目不计入 UI 通过项。最终自动化测试包含这次输入崩溃的两个参数回归（23 ms），但不将自动化结果等同于安装版的最后一次手工/界面操作。
+
+### 安装、清理与范围限制
+
+最终 ARM64 Release 构建成功（182.77 秒），已原子替换 `/Applications/Lithe.app`。产品提交 `1ae1a9cb5a44f3324e2c6ed1a59b88104d24f41a`，版本维持 `0.1.0`；主程序 SHA-256 为 `e52746edba0534b89a4008fd81cd40a1326a4ca64f647753fd4d75971497d66f`，UUID 为 `BE24A893-32BF-367F-8657-D70E540A6069`。安装前后签名、架构、必需资源与主程序校验值一致；包内没有 JDK/JDTLS 或 Linux.do 插件。记录为 `final/installed-verified/installation.json`，产物为 `final/package-verified/Lithe-arm64.app`。
+
+构建标记保留真实的 `dirty=true`：构建期间另有四份架构文档正在编辑；已检查未提交差异全部限定在这些文档，产品源码与上述提交一致。本次不覆盖或提交这些并行文档修改。后续仅补充本验收记录，不为文档文字再次重建应用。
+
+本轮测试启动的 Lithe、数据库助手与语言服务已退出，自动保存恢复默认，输入法恢复为任务前的选择；清理记录为 `final/cleanup.json`。未推送、打 tag 或发布远端 release。
+
+本轮验证针对 macOS ARM64 和当前 Swift 6.2.4 工具链，没有新增 x86_64、Windows 或未来 Xcode 版本的实机通过声明。Python/Debug、其他 LSP 语义操作、跨窗口归属和异常时序使用对应自动化覆盖；没有将它们全部表述为本轮逐项手工实测。Compose 只验证检测、命名与持久化，没有启动 Docker 服务。HTML 显式绝对 `file:` 资源仍受 WebKit 自身权限约束；相对文档资源已有签名应用探针与安装版验证。
