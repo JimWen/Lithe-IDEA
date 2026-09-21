@@ -31,7 +31,7 @@ struct GitPatchToolbar: View {
             Button {
                 guard let root = feature.gitRepositoryRoot else { return }
                 feature.patchExchange.beginImport(at: root, surface: surface)
-            } label: { Image(systemName: "doc.badge.arrow.down") }
+            } label: { Image(systemName: "arrow.down.document") }
                 .buttonStyle(.plain).help("Apply Patch…").lithePointer()
                 .accessibilityLabel("Apply Patch")
                 .disabled(feature.gitRepositoryRoot == nil)

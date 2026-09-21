@@ -104,7 +104,6 @@ final class GitWorktreeRowsNSView: NSView {
     private var locale = Locale.current
     private var rowHeight = GitWorktreeRowsView.rowHeight
     private var drawingStyle: DrawingStyle?
-    private var lastLayoutWidth: CGFloat = -.greatestFiniteMagnitude
 
     override var isOpaque: Bool { false }
     override var isFlipped: Bool { true }
@@ -131,8 +130,7 @@ final class GitWorktreeRowsNSView: NSView {
 
     @discardableResult
     func updateLayout(width: CGFloat) -> Bool {
-        guard width.isFinite, width > 0, width != lastLayoutWidth else { return false }
-        lastLayoutWidth = width
+        guard width.isFinite, width > 0 else { return false }
         let documentSize = CGSize(
             width: width,
             height: CGFloat(snapshot.rows.count) * rowHeight

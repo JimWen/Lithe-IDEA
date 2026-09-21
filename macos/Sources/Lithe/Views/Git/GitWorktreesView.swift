@@ -165,6 +165,86 @@ struct GitWorktreesView: View {
             guard let worktree = selectedWorktree, !worktree.isPrunable else { return }
             await model.inspectGitWorktree(worktree)
         }
+        .task(id: worktreeListProjectionIdentity) {
+            let taskIdentity = worktreeListProjectionIdentity
+            let worktrees = feature.gitWorktrees
+            let query = searchText
+            let inspection = feature.gitWorktreeInspection
+            let currentChangeCount = feature.activeRepositoryChanges.count
+            let projection = await Task.detached(priority: .userInitiated) {
+                GitWorktreeListProjection.items(
+                    worktrees: worktrees,
+                    query: query,
+                    inspection: inspection,
+                    currentChangeCount: currentChangeCount
+                )
+            }.value
+            guard !Task.isCancelled, taskIdentity == worktreeListProjectionIdentity else { return }
+            projectedWorktrees = projection
+        }
+        .task(id: worktreeChangesProjectionIdentity) {
+            let taskIdentity = worktreeChangesProjectionIdentity
+            let changes: [GitChange]
+            if let selectedWorktree,
+               let inspection = matchingInspection(for: selectedWorktree) {
+                changes = inspection.changes
+            } else {
+                changes = []
+            }
+            let rows = await Task.detached(priority: .userInitiated) {
+                changes.map { change in
+                    GitWorktreeRowsSnapshot.Row.change(
+                        status: change.displayStatus,
+                        path: change.path,
+                        isStaged: change.isStaged,
+                        color: Self.nativeStatusColor(for: change.kind)
+                    )
+                }
+            }.value
+            guard !Task.isCancelled, taskIdentity == worktreeChangesProjectionIdentity else { return }
+            projectedChangesSnapshot = GitWorktreeRowsSnapshot(
+                identity: .changes(inspectionVersion: taskIdentity.inspectionVersion),
+                rows: rows
+            )
+        }
+        .task(id: worktreeHistoryProjectionIdentity) {
+            let taskIdentity = worktreeHistoryProjectionIdentity
+            guard let selectedWorktree,
+                  let inspection = matchingInspection(for: selectedWorktree) else {
+                projectedHistorySnapshot = GitWorktreeRowsSnapshot(
+                    identity: .history(
+                        inspectionVersion: taskIdentity.inspectionVersion,
+                        query: taskIdentity.query
+                    ),
+                    rows: []
+                )
+                return
+            }
+            let query = historySearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let commits = inspection.commits
+            let rows = await Task.detached(priority: .userInitiated) {
+                let projection = query.isEmpty ? commits : commits.filter {
+                    $0.subject.localizedCaseInsensitiveContains(query)
+                        || $0.authorName.localizedCaseInsensitiveContains(query)
+                        || $0.hash.localizedCaseInsensitiveContains(query)
+                }
+                return projection.map { commit in
+                    GitWorktreeRowsSnapshot.Row.commit(
+                        subject: commit.subject,
+                        author: commit.authorName,
+                        date: commit.date
+                    )
+                }
+            }.value
+            guard !Task.isCancelled, taskIdentity == worktreeHistoryProjectionIdentity else { return }
+            projectedHistorySnapshot = GitWorktreeRowsSnapshot(
+                identity: .history(
+                    inspectionVersion: taskIdentity.inspectionVersion,
+                    query: taskIdentity.query
+                ),
+                rows: rows
+            )
+        }
         .onChange(of: model.gitWorktrees.map(\.id)) { _ in
             selectAvailableWorktree()
         }
@@ -282,7 +362,7 @@ struct GitWorktreesView: View {
             HStack {
                 Text("Worktrees")
                     .font(Visual.section)
-                Text(String(format: gitLocalizedFormat("%lld worktrees", locale: locale), filteredWorktrees.count))
+                Text(String(format: gitLocalizedFormat("%lld worktrees", locale: locale), projectedWorktrees.count))
                     .font(Visual.metadata)
                     .foregroundStyle(LitheTheme.secondaryText)
                 Spacer()
@@ -306,7 +386,7 @@ struct GitWorktreesView: View {
 
             Divider()
 
-            if filteredWorktrees.isEmpty {
+            if projectedWorktrees.isEmpty {
                 listEmptyState
             } else {
                 GitWorktreeListScrollView(
@@ -843,14 +923,28 @@ struct GitWorktreesView: View {
             .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
-    private var filteredWorktrees: [GitWorktree] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return model.gitWorktrees }
-        return model.gitWorktrees.filter {
-            $0.displayName.localizedCaseInsensitiveContains(query)
-                || $0.path.localizedCaseInsensitiveContains(query)
-                || ($0.branchName?.localizedCaseInsensitiveContains(query) ?? false)
-        }
+    private var worktreeListProjectionIdentity: WorktreeListProjectionIdentity {
+        WorktreeListProjectionIdentity(
+            worktreesVersion: feature.gitWorktreesVersion,
+            inspectionVersion: feature.gitWorktreeInspectionVersion,
+            currentChangeCount: feature.activeRepositoryChanges.count,
+            query: searchText
+        )
+    }
+
+    private var worktreeHistoryProjectionIdentity: WorktreeHistoryProjectionIdentity {
+        WorktreeHistoryProjectionIdentity(
+            worktreeID: selectedWorktree?.id,
+            inspectionVersion: feature.gitWorktreeInspectionVersion,
+            query: historySearchText
+        )
+    }
+
+    private var worktreeChangesProjectionIdentity: WorktreeChangesProjectionIdentity {
+        WorktreeChangesProjectionIdentity(
+            worktreeID: selectedWorktree?.id,
+            inspectionVersion: feature.gitWorktreeInspectionVersion
+        )
     }
 
     private var selectedWorktree: GitWorktree? {

@@ -112,7 +112,6 @@ final class GitWorktreeListNSView: NSView {
     private var onContextMenuAction: ((GitWorktreeListAction, GitWorktreeListItem) -> Void)?
     private var drawingStyle: DrawingStyle?
     private var hoveredIndex: Int?
-    private var lastLayoutWidth: CGFloat = -.greatestFiniteMagnitude
 
     override var isFlipped: Bool { true }
 
@@ -151,8 +150,7 @@ final class GitWorktreeListNSView: NSView {
 
     @discardableResult
     func updateLayout(width: CGFloat) -> Bool {
-        guard width.isFinite, width > 0, width != lastLayoutWidth else { return false }
-        lastLayoutWidth = width
+        guard width.isFinite, width > 0 else { return false }
         let rowStride = GitWorktreeListScrollView.rowHeight + GitWorktreeListScrollView.rowSpacing
         let rowsHeight = max(0, CGFloat(items.count) * rowStride - GitWorktreeListScrollView.rowSpacing)
         let size = CGSize(width: width, height: rowsHeight + GitWorktreeListScrollView.verticalInset * 2)
