@@ -510,7 +510,7 @@ struct LitheApp: App {
 
 }
 
-private struct ProjectSettingsWindow: View {
+struct ProjectSettingsWindow: View {
     @Environment(\.openWindow) private var openWindow
     @ObservedObject var windows: ProjectWindowManager
     @ObservedObject var settings: AppSettings
@@ -557,11 +557,12 @@ private struct SettingsWindow: View {
                 themePreference: settings.themePreference
             )
         )
-        .onAppear { windowReference.requestPresentation() }
         .onDisappear {
             model.isSettingsPresented = false
         }
         .onReceive(model.$isSettingsPresented) { isPresented in
+            // Switching projects recreates this view, including in a hidden
+            // Settings scene. Only an explicit request should raise its window.
             if isPresented {
                 // A retained settings window may show a manually selected category
                 // even when the requested category has not changed since last open.

@@ -256,6 +256,71 @@ struct ProjectWindowManagerTests {
     }
 
     @Test
+    func switchingProjectsDoesNotPresentTheRetainedSettingsWindow() async throws {
+        try await withFixture { fixture in
+            let manager = fixture.manager
+            let secondID = UUID()
+            _ = manager.sessions(for: secondID)
+            let window = SettingsPresentationTestWindow()
+            let hosting = NSHostingView(rootView: ProjectSettingsWindow(windows: manager, settings: fixture.settings)
+                .environmentObject(UpdateChecker()))
+            defer { window.contentView = nil; window.close() }
+            window.contentView = hosting
+            hosting.frame = NSRect(x: 0, y: 0, width: 980, height: 720)
+            hosting.layoutSubtreeIfNeeded()
+            try await finishSettingsWindowUpdate()
+            #expect(window.presentationCount == 0)
+
+            manager.activate(secondID)
+            hosting.layoutSubtreeIfNeeded()
+            try await finishSettingsWindowUpdate()
+            #expect(window.presentationCount == 0)
+            #expect(!manager.activeSessions.activeModel.isSettingsPresented)
+
+            manager.activate(manager.initialWindowID)
+            hosting.layoutSubtreeIfNeeded()
+            try await finishSettingsWindowUpdate()
+            #expect(window.presentationCount == 0)
+        }
+    }
+
+    @Test
+    func explicitSettingsRequestsPresentBeforeAttachmentAndWhenReopened() async throws {
+        try await withFixture { fixture in
+            let manager = fixture.manager
+            let model = manager.activeSessions.activeModel
+            model.showSettings(category: .editor)
+            let window = SettingsPresentationTestWindow()
+            let hosting = NSHostingView(rootView: ProjectSettingsWindow(windows: manager, settings: fixture.settings)
+                .environmentObject(UpdateChecker()))
+            defer { window.contentView = nil; window.close() }
+            window.contentView = hosting
+            hosting.frame = NSRect(x: 0, y: 0, width: 980, height: 720)
+            hosting.layoutSubtreeIfNeeded()
+            try await finishSettingsWindowUpdate()
+            #expect(window.presentationCount > 0)
+            #expect(model.requestedSettingsCategory == .editor)
+
+            model.isSettingsPresented = false
+            window.orderOut(nil)
+            let previousCount = window.presentationCount
+            model.showSettings(category: .terminal)
+            hosting.layoutSubtreeIfNeeded()
+            try await finishSettingsWindowUpdate()
+            #expect(window.presentationCount > previousCount)
+            #expect(model.requestedSettingsCategory == .terminal)
+        }
+    }
+
+    private func finishSettingsWindowUpdate() async throws {
+        // The AppKit accessor attaches its window on the main queue. Observe
+        // that queue boundary rather than sleeping for a SwiftUI transaction.
+        let configured = TestGate()
+        DispatchQueue.main.async { configured.open() }
+        try #require(await configured.waitUntilOpen(), "Settings window attachment did not finish")
+    }
+
+    @Test
     func sidebarToggleKeepsSelectionAndSearchState() async throws {
         try await withFixture { fixture in
             let model = fixture.manager.activeSessions.activeModel
@@ -515,6 +580,22 @@ struct ProjectWindowManagerTests {
         }
         await fixture.manager.stopAllSessions()
         try FileManager.default.removeItem(at: fixture.root)
+    }
+}
+
+@MainActor
+private final class SettingsPresentationTestWindow: NSWindow {
+    private(set) var presentationCount = 0
+
+    init() {
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 980, height: 720),
+                   styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        isReleasedWhenClosed = false
+    }
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        // Exercise the real SwiftUI/AppKit bridge without stealing desktop focus.
+        presentationCount += 1
     }
 }
 
