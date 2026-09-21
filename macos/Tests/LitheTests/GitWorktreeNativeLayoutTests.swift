@@ -43,6 +43,35 @@ struct GitWorktreeNativeLayoutTests {
         }
     }
 
+    @Test("Initial window layout reveals preloaded history without another data update")
+    func detailInitialHostLayoutSizesPreloadedRows() throws {
+        let rows = ["First", "Second", "Third"].map {
+            GitWorktreeRowsSnapshot.Row.commit(subject: $0, author: "Fixture", date: "2026-01-01")
+        }
+        // The production factory receives data while its native viewport is
+        // still zero-sized. Only the subsequent host layout supplies a width;
+        // no search or second snapshot should be needed to reveal these rows.
+        let scroll = GitWorktreeRowsScrollView.makeScrollView(snapshot:
+            GitWorktreeRowsSnapshot(identity: .history(inspectionVersion: 1, query: ""), rows: rows))
+        let document = try #require(scroll.documentView as? GitWorktreeRowsNSView)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 280),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+        }
+        window.contentView = scroll
+        window.setContentSize(NSSize(width: 720, height: 320))
+        scroll.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+
+        #expect(scroll.contentView.bounds.width > 0)
+        #expect(document.frame.width == scroll.contentView.bounds.width)
+        #expect(document.frame.height == 105)
+    }
+
     private func item(_ name: String) -> GitWorktreeListItem {
         GitWorktreeListItem(worktree: GitWorktree(
             path: "/fixture/worktrees/\(name)", head: "abcdef", branch: "refs/heads/\(name)",

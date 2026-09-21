@@ -47,7 +47,7 @@ struct GitWorktreeRowsScrollView: NSViewRepresentable {
     }
 
     static func makeScrollView(snapshot: GitWorktreeRowsSnapshot) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = GitWorktreeRowsScrollNSView()
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.hasHorizontalScroller = false
@@ -60,24 +60,17 @@ struct GitWorktreeRowsScrollView: NSViewRepresentable {
         scrollView.scrollsDynamically = true
 
         let documentView = GitWorktreeRowsNSView()
-        documentView.autoresizingMask = [.width]
+        documentView.autoresizingMask = []
         scrollView.documentView = documentView
         documentView.update(snapshot: snapshot, rowHeight: GitWorktreeRowsView.rowHeight)
+        scrollView.updateDocumentLayout()
         return scrollView
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let documentView = nsView.documentView as? GitWorktreeRowsNSView else { return }
-        let previousOrigin = nsView.contentView.bounds.origin
-        let contentChanged = documentView.update(snapshot: snapshot, rowHeight: GitWorktreeRowsView.rowHeight, locale: context.environment.locale)
-        let layoutChanged = documentView.updateLayout(width: nsView.contentView.bounds.width)
-        if contentChanged || layoutChanged {
-            nsView.contentView.setBoundsOrigin(Self.preservedScrollOrigin(
-                previous: previousOrigin,
-                documentHeight: documentView.bounds.height,
-                viewportHeight: nsView.contentView.bounds.height
-            ))
-        }
+        documentView.update(snapshot: snapshot, rowHeight: GitWorktreeRowsView.rowHeight, locale: context.environment.locale)
+        (nsView as? GitWorktreeRowsScrollNSView)?.updateDocumentLayout()
     }
 
     static func preservedScrollOrigin(
@@ -90,6 +83,30 @@ struct GitWorktreeRowsScrollView: NSViewRepresentable {
             x: max(previous.x, 0),
             y: min(max(previous.y, 0), maxY)
         )
+    }
+}
+
+/// The host can assign its viewport after SwiftUI's first data update. Own the
+/// document size at this native layout boundary instead of waiting for new data.
+final class GitWorktreeRowsScrollNSView: NSScrollView {
+    override func layout() {
+        super.layout()
+        updateDocumentLayout()
+    }
+
+    func updateDocumentLayout() {
+        guard let documentView = documentView as? GitWorktreeRowsNSView else { return }
+        let previousOrigin = contentView.bounds.origin
+        guard documentView.updateLayout(width: contentView.bounds.width) else { return }
+        let origin = GitWorktreeRowsScrollView.preservedScrollOrigin(
+            previous: previousOrigin,
+            documentHeight: documentView.bounds.height,
+            viewportHeight: contentView.bounds.height
+        )
+        if contentView.bounds.origin != origin {
+            contentView.setBoundsOrigin(origin)
+        }
+        reflectScrolledClipView(contentView)
     }
 }
 
