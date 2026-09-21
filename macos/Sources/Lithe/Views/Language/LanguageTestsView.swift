@@ -14,9 +14,21 @@ struct LanguageTestsView: View {
     @State private var liveItemListWidth: CGFloat?
     @State private var itemListDragStart: CGFloat = 250
 
+    private var localization: LanguageTestLocalization {
+        LanguageTestLocalization(language: model.settings.language)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             toolWindowHeader
+
+            if let message = service.errorMessage {
+                Text(localization.error(message))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(LitheTheme.error)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
 
             if model.workspaceURL == nil {
                 emptyState("Open a project to discover tests.")
@@ -99,19 +111,19 @@ struct LanguageTestsView: View {
         case .idle:
             EmptyView()
         case .running:
-            Label("Running", systemImage: "circle.fill")
+            Label(localization.text("Running"), systemImage: "circle.fill")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(LitheTheme.success)
         case .passed:
-            Label("Passed", systemImage: "checkmark.circle.fill")
+            Label(localization.text("Passed"), systemImage: "checkmark.circle.fill")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(LitheTheme.success)
         case .failed:
-            Label("Failed", systemImage: "xmark.circle.fill")
+            Label(localization.text("Failed"), systemImage: "xmark.circle.fill")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(LitheTheme.error)
         case .cancelled:
-            Label("Cancelled", systemImage: "stop.circle.fill")
+            Label(localization.text("Cancelled"), systemImage: "stop.circle.fill")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(LitheTheme.warning)
         }

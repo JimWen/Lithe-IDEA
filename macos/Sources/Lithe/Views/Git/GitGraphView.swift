@@ -15,6 +15,7 @@ struct GitGraphRowActions {
     var onSelectWithModifiers: ((GitCommit, NSEvent.ModifierFlags) -> Void)? = nil
     var onContextSelect: ((GitCommit) -> Void)? = nil
     var additionalContextMenuItems: ((GitCommit) -> [LitheContextMenuItem])? = nil
+    var onNavigateHash: ((String) -> Void)? = nil
 
     func select(_ commit: GitCommit, modifiers: NSEvent.ModifierFlags) {
         if let onSelectWithModifiers { onSelectWithModifiers(commit, modifiers) }
@@ -58,13 +59,14 @@ struct GitGraphPresentation: Sendable {
 }
 
 struct GitGraphView: View {
+    @Environment(\.locale) private var locale
     let presentation: GitGraphPresentation
     let selectedHash: String?
     let showCommitDecorations: Bool
     let actions: GitGraphRowActions
     var selectedHashes: Set<String>? = nil
 
-    private let rowHeight: CGFloat = 24
+    private let rowHeight = GitGraphGeometry.rowHeight
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -72,13 +74,34 @@ struct GitGraphView: View {
                 ForEach(presentation.rows) { row in
                     GitGraphRowView(
                         row: row,
-                        graphWidth: maximumGraphWidth,
+                        graphWidth: GitGraphGeometry.rowWidth(row, recommendedLaneCount: presentation.routingSnapshot.recommendedLaneCount),
                         rowHeight: rowHeight,
                         isSelected: selectedHashes?.contains(row.commit.hash) ?? (selectedHash == row.commit.hash),
                         showCommitDecorations: showCommitDecorations,
                         actions: actions
                     )
                     .equatable()
+                    .overlay(alignment: .topLeading) {
+                        ForEach(row.printElements.filter { $0.hasArrow && $0.targetHash != nil }) { element in
+                            let rect = GitGraphGeometry.arrowHitRect(for: element, rowHeight: rowHeight)
+                            let target = element.targetHash ?? ""
+                            let title = gitLocalizedFormat(
+                                element.direction == .down ? "Go to parent commit %@" : "Go to child commit %@",
+                                String(target.prefix(8)), locale: locale
+                            )
+                            Button {
+                                actions.onNavigateHash?(target)
+                            } label: {
+                                Color.clear.frame(width: rect.width, height: rect.height).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(title)
+                            .accessibilityLabel(title)
+                            .accessibilityIdentifier("git-graph-arrow-\(row.commit.hash)-\(element.id)")
+                            .lithePointer()
+                            .offset(x: rect.minX, y: rect.minY)
+                        }
+                    }
                     .id(row.commit.hash)
                 }
 
@@ -91,22 +114,23 @@ struct GitGraphView: View {
                     .foregroundStyle(LitheTheme.tertiaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, maximumGraphWidth + 6)
-                    .frame(height: 30)
+                    .frame(height: rowHeight)
                 }
             }
 
             GitGraphNSViewRepresentable(
                 snapshot: presentation.routingSnapshot,
                 width: maximumGraphWidth,
-                rowHeight: rowHeight
+                rowHeight: rowHeight,
+                onNavigateHash: actions.onNavigateHash
             )
             .frame(width: maximumGraphWidth, height: CGFloat(presentation.rows.count) * rowHeight)
-            .allowsHitTesting(false)
         }
     }
 
     private var maximumGraphWidth: CGFloat {
-        max(30, CGFloat(max(presentation.routingSnapshot.laneCount, 1)) * 13 + 16)
+        GitGraphGeometry.maximumWidth(laneCount: presentation.routingSnapshot.laneCount,
+                                      recommendedLaneCount: presentation.routingSnapshot.recommendedLaneCount)
     }
 }
 
@@ -122,7 +146,7 @@ struct GitGraphScrollView: NSViewRepresentable {
     let onLoadMore: () -> Void
     var selectedHashes: Set<String>? = nil
 
-    private let rowHeight: CGFloat = 24
+    private let rowHeight = GitGraphGeometry.rowHeight
 
     /// Keep the user's viewport stable while the document grows or is
     /// refreshed for reasons unrelated to selection.
@@ -250,14 +274,16 @@ final class GitGraphScrollDocumentView: NSView {
     private var onLoadMore: (() -> Void)?
     private var rowCount = 0
     private var graphWidth: CGFloat = 30
-    private let rowHeight: CGFloat = 24
+    private let rowHeight = GitGraphGeometry.rowHeight
 
     override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        addSubview(graphView)
         addSubview(commitRowsView)
+        addSubview(graphView)
+        graphView.onNavigateHash = { [weak self] hash in self?.navigate(to: hash) }
+        graphView.exposesNavigationAccessibility = true
         loadMoreButton.setButtonType(.momentaryPushIn)
         loadMoreButton.isBordered = false
         loadMoreButton.bezelStyle = .inline
@@ -286,7 +312,8 @@ final class GitGraphScrollDocumentView: NSView {
         self.locale = locale
         let selectionChanged = self.selectedHash != selectedHash
         let selectedHashesChanged = self.selectedHashes != selectedHashes
-        let nextGraphWidth = max(30, CGFloat(max(presentation.routingSnapshot.laneCount, 1)) * 13 + 16)
+        let nextGraphWidth = GitGraphGeometry.maximumWidth(laneCount: presentation.routingSnapshot.laneCount,
+                                                          recommendedLaneCount: presentation.routingSnapshot.recommendedLaneCount)
         let graphChanged = routingSnapshot != presentation.routingSnapshot || graphWidth != nextGraphWidth
         let rowsChanged = rows != presentation.rows
         let missingParentsChanged = hasMissingParents != presentation.hasMissingParents
@@ -318,20 +345,22 @@ final class GitGraphScrollDocumentView: NSView {
         loadMoreTarget = GitGraphLoadMoreButtonTarget(action: onLoadMore)
         loadMoreButton.target = loadMoreTarget
         loadMoreButton.action = #selector(GitGraphLoadMoreButtonTarget.invoke)
-        if graphChanged {
+        if graphChanged || localeChanged {
             graphView.update(
                 snapshot: presentation.routingSnapshot,
                 width: graphWidth,
-                rowHeight: rowHeight
+                rowHeight: rowHeight,
+                locale: locale
             )
         }
-        if rowsChanged || selectionChanged || selectedHashesChanged || showDecorationsChanged {
+        if graphChanged || rowsChanged || selectionChanged || selectedHashesChanged || showDecorationsChanged {
             commitRowsView.update(
                 rows: presentation.rows,
                 selectedHash: selectedHash,
                 showDecorations: showCommitDecorations,
                 graphWidth: graphWidth,
                 rowHeight: rowHeight,
+                recommendedLaneCount: presentation.routingSnapshot.recommendedLaneCount,
                 actions: actions,
                 selectedHashes: selectedHashes
             )
@@ -352,9 +381,9 @@ final class GitGraphScrollDocumentView: NSView {
         let graphFrame = CGRect(x: 0, y: 0, width: graphWidth, height: height)
         if graphView.frame != graphFrame { graphView.frame = graphFrame }
         let rowsFrame = CGRect(
-            x: graphWidth,
+            x: 0,
             y: 0,
-            width: max(0, width - graphWidth),
+            width: max(0, width),
             height: CGFloat(rowCount) * rowHeight
         )
         if commitRowsView.frame != rowsFrame { commitRowsView.frame = rowsFrame }
@@ -386,6 +415,10 @@ final class GitGraphScrollDocumentView: NSView {
         }
         let point = convert(event.locationInWindow, from: nil)
         if point.x < graphWidth {
+            if let hash = graphView.navigationTarget(at: point) {
+                navigate(to: hash)
+                return
+            }
             commitRowsView.select(rowIndex: Int(floor(point.y / rowHeight)), modifiers: event.modifierFlags)
             return
         }
@@ -398,6 +431,14 @@ final class GitGraphScrollDocumentView: NSView {
             return commitRowsView.menu(for: event)
         }
         return super.menu(for: event)
+    }
+
+    /// Pointer and accessibility actions share selection and the native viewport.
+    /// Always reveal the endpoint, even when it is already the focused commit.
+    private func navigate(to hash: String) {
+        guard let index = rows.firstIndex(where: { $0.commit.hash == hash }) else { return }
+        commitRowsView.select(rowIndex: index)
+        scrollToVisible(NSRect(x: 0, y: CGFloat(index) * rowHeight, width: bounds.width, height: rowHeight))
     }
 
     private var presentationRowCount: Int {
@@ -429,7 +470,8 @@ final class GitGraphCommitRowsNSView: NSView {
     private var selectedHashes: Set<String>?
     private var showDecorations = false
     private var graphWidth: CGFloat = 30
-    private var rowHeight: CGFloat = 24
+    private var recommendedLaneCount = 0
+    private var rowHeight = GitGraphGeometry.rowHeight
     private var actions: GitGraphRowActions?
     private var drawingStyle: DrawingStyle?
     private var hoveredIndex: Int?
@@ -443,6 +485,7 @@ final class GitGraphCommitRowsNSView: NSView {
         showDecorations: Bool,
         graphWidth: CGFloat,
         rowHeight: CGFloat,
+        recommendedLaneCount: Int = 0,
         actions: GitGraphRowActions,
         selectedHashes: Set<String>? = nil
     ) {
@@ -451,6 +494,7 @@ final class GitGraphCommitRowsNSView: NSView {
                 || self.selectedHashes != selectedHashes
                 || self.showDecorations != showDecorations
                 || self.graphWidth != graphWidth
+                || self.recommendedLaneCount != recommendedLaneCount
                 || self.rowHeight != rowHeight else { return }
         self.rows = rows
         labelWidthCache.removeAll(keepingCapacity: true)
@@ -458,9 +502,19 @@ final class GitGraphCommitRowsNSView: NSView {
         self.selectedHashes = selectedHashes
         self.showDecorations = showDecorations
         self.graphWidth = graphWidth
+        self.recommendedLaneCount = recommendedLaneCount
         self.rowHeight = rowHeight
         self.actions = actions
         needsDisplay = true
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        let row = Int(floor(local.y / rowHeight))
+        if rows.indices.contains(row), local.x < GitGraphGeometry.rowWidth(rows[row], recommendedLaneCount: recommendedLaneCount) {
+            return nil
+        }
+        return super.hitTest(point)
     }
 
     func updateActions(_ actions: GitGraphRowActions, locale: Locale = .current) {
@@ -515,8 +569,10 @@ final class GitGraphCommitRowsNSView: NSView {
 
         for index in first...last {
             let row = rows[index]
+            let textStart = GitGraphGeometry.rowWidth(row, recommendedLaneCount: recommendedLaneCount)
             let rect = CGRect(x: 0, y: CGFloat(index) * rowHeight, width: bounds.width, height: rowHeight)
-            if selectedHashes?.contains(row.commit.hash) ?? (selectedHash == row.commit.hash) {
+            let isSelected = selectedHashes?.contains(row.commit.hash) ?? (selectedHash == row.commit.hash)
+            if isSelected {
                 style.selection.setFill()
                 NSBezierPath(rect: rect).fill()
             } else if hoveredIndex == index {
@@ -525,9 +581,9 @@ final class GitGraphCommitRowsNSView: NSView {
             }
             drawText(
                 row.commit.subject,
-                in: CGRect(x: 0, y: rect.minY, width: max(0, rect.width - 230), height: rowHeight),
+                in: CGRect(x: textStart, y: rect.minY, width: max(0, rect.width - textStart - 230), height: rowHeight),
                 font: style.body,
-                color: style.primary
+                color: row.commit.parentHashes.count > 1 && !isSelected ? style.merge : style.primary
             )
             drawText(
                 row.commit.authorName,
@@ -626,6 +682,7 @@ final class GitGraphCommitRowsNSView: NSView {
         let meta = NSFont.systemFont(ofSize: 11.5)
         let monoMeta = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
         let primary: NSColor
+        let merge: NSColor
         let secondary: NSColor
         let divider: NSColor
         let selection: NSColor
@@ -634,6 +691,7 @@ final class GitGraphCommitRowsNSView: NSView {
 
         init(isDark: Bool) {
             primary = LitheTheme.nsColor(.primaryText, isDark: isDark)
+            merge = GitGraphColor.mergeForeground(isDark: isDark)
             secondary = LitheTheme.nsColor(.secondaryText, isDark: isDark)
             divider = LitheTheme.nsColor(.divider, isDark: isDark)
             selection = LitheTheme.nsColor(.accent, isDark: isDark).withAlphaComponent(0.16)
@@ -644,6 +702,7 @@ final class GitGraphCommitRowsNSView: NSView {
 }
 
 private struct GitGraphRowView: View, Equatable {
+    @Environment(\.colorScheme) private var colorScheme
     let row: GitGraphRow
     let graphWidth: CGFloat
     let rowHeight: CGFloat
@@ -669,7 +728,9 @@ private struct GitGraphRowView: View, Equatable {
                 HStack(spacing: 0) {
                     Text(row.commit.subject)
                         .font(.system(size: 12.5, weight: .regular))
-                        .foregroundStyle(LitheTheme.primaryText)
+                        .foregroundStyle(row.commit.parentHashes.count > 1 && !isSelected
+                            ? Color(nsColor: GitGraphColor.mergeForeground(isDark: colorScheme == .dark))
+                            : LitheTheme.primaryText)
                         .lineLimit(1)
 
                     if showCommitDecorations, !row.labels.isEmpty {
@@ -777,42 +838,98 @@ private struct GitGraphNSViewRepresentable: NSViewRepresentable {
     let snapshot: GitGraphRoutingSnapshot
     let width: CGFloat
     let rowHeight: CGFloat
+    let onNavigateHash: ((String) -> Void)?
 
     func makeNSView(context: Context) -> GitGraphNSView {
         GitGraphNSView()
     }
 
     func updateNSView(_ nsView: GitGraphNSView, context: Context) {
+        nsView.onNavigateHash = onNavigateHash
         nsView.update(snapshot: snapshot, width: width, rowHeight: rowHeight)
     }
 }
 
-private final class GitGraphNSView: NSView {
-    private static let palette: [NSColor] = [
-        NSColor(calibratedRed: 0.29, green: 0.72, blue: 0.45, alpha: 1),
-        NSColor(calibratedRed: 0.35, green: 0.62, blue: 0.96, alpha: 1),
-        NSColor(calibratedRed: 0.82, green: 0.47, blue: 0.82, alpha: 1),
-        NSColor(calibratedRed: 0.96, green: 0.61, blue: 0.28, alpha: 1),
-        NSColor(calibratedRed: 0.36, green: 0.78, blue: 0.78, alpha: 1),
-        NSColor(calibratedRed: 0.93, green: 0.42, blue: 0.48, alpha: 1),
-        NSColor(calibratedRed: 0.70, green: 0.63, blue: 0.94, alpha: 1)
-    ]
-
+final class GitGraphNSView: NSView {
+    var onNavigateHash: ((String) -> Void)?
+    // SwiftUI's reference surface already supplies arrow buttons. Only the
+    // native document enables these lightweight, non-rendering counterparts.
+    var exposesNavigationAccessibility = false {
+        didSet {
+            if oldValue != exposesNavigationAccessibility { rebuildNavigationAccessibility() }
+        }
+    }
+    private var navigationLocale = Locale.current
+    private var arrowAccessibilityElements: [GitGraphArrowAccessibilityElement] = []
+    private var colorCache: [Int: NSColor] = [:]
     private var snapshot = GitGraphRoutingSnapshot(rows: [], laneCount: 0)
     private var graphWidth: CGFloat = 0
-    private var rowHeight: CGFloat = 24
-    private let laneSpacing: CGFloat = 13
-    private let laneLineWidth: CGFloat = 1.6
-    private let leftPadding: CGFloat = 8
+    private var rowHeight = GitGraphGeometry.rowHeight
+    private let laneLineWidth = GitGraphGeometry.lineWidth
 
     override var isOpaque: Bool { false }
     override var isFlipped: Bool { true }
 
-    func update(snapshot: GitGraphRoutingSnapshot, width: CGFloat, rowHeight: CGFloat) {
-        guard self.snapshot != snapshot || graphWidth != width || self.rowHeight != rowHeight else { return }
+    func navigationTarget(at point: CGPoint) -> String? {
+        let row = Int(floor(point.y / rowHeight))
+        // Expanded arrows end on a shared row boundary. At that exact pixel,
+        // also check the preceding row's down arrow instead of losing its tip
+        // to floor() and CGRect's exclusive upper bound.
+        let candidates = point.y == CGFloat(row) * rowHeight ? [row, row - 1] : [row]
+        for candidate in candidates where snapshot.rows.indices.contains(candidate) {
+            let local = CGPoint(x: point.x, y: min(rowHeight.nextDown, point.y - CGFloat(candidate) * rowHeight))
+            if let target = snapshot.rows[candidate].printElements.first(where: {
+                $0.hasArrow && $0.targetHash != nil && GitGraphGeometry.arrowHitRect(for: $0, rowHeight: rowHeight).contains(local)
+            })?.targetHash { return target }
+        }
+        return nil
+    }
+
+    func update(snapshot: GitGraphRoutingSnapshot, width: CGFloat, rowHeight: CGFloat, locale: Locale = .current) {
+        guard self.snapshot != snapshot || graphWidth != width || self.rowHeight != rowHeight || navigationLocale != locale else { return }
         self.snapshot = snapshot
+        colorCache.removeAll(keepingCapacity: true)
         graphWidth = width
         self.rowHeight = rowHeight
+        navigationLocale = locale
+        rebuildNavigationAccessibility()
+        needsDisplay = true
+    }
+
+    private func rebuildNavigationAccessibility() {
+        removeAllToolTips()
+        arrowAccessibilityElements.removeAll(keepingCapacity: true)
+        setAccessibilityElement(exposesNavigationAccessibility)
+        guard exposesNavigationAccessibility else {
+            setAccessibilityChildren(nil)
+            return
+        }
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(gitLocalizedFormat("Git graph", locale: navigationLocale))
+        for (index, row) in snapshot.rows.enumerated() {
+            for element in row.printElements where element.hasArrow {
+                guard let target = element.targetHash else { continue }
+                let rect = GitGraphGeometry.arrowHitRect(for: element, rowHeight: rowHeight)
+                    .offsetBy(dx: 0, dy: CGFloat(index) * rowHeight)
+                let title = gitLocalizedFormat(
+                    element.direction == .down ? "Go to parent commit %@" : "Go to child commit %@",
+                    String(target.prefix(8)), locale: navigationLocale
+                )
+                let accessible = GitGraphArrowAccessibilityElement(graphView: self, localFrame: rect,
+                    targetHash: target, title: title, identifier: "git-graph-native-arrow-\(row.rowIndex)-\(element.id)")
+                arrowAccessibilityElements.append(accessible)
+                addToolTip(rect, owner: accessible, userData: nil)
+            }
+        }
+        setAccessibilityChildren(arrowAccessibilityElements)
+        if window != nil {
+            NSAccessibility.post(element: self, notification: .layoutChanged)
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        colorCache.removeAll(keepingCapacity: true)
         needsDisplay = true
     }
 
@@ -830,62 +947,63 @@ private final class GitGraphNSView: NSView {
             let centerY = top + rowHeight / 2
             let currentX = x(for: row.nodeLane)
 
-            for segment in row.incoming {
-                stroke(
-                    line(from: CGPoint(x: x(for: segment.lane), y: top), to: CGPoint(x: x(for: segment.lane), y: segment.lane == row.nodeLane ? centerY : top + rowHeight)),
-                    color: color(for: segment.colorIndex),
-                    width: laneLineWidth,
-                    context: context
-                )
-            }
-
-            for route in row.routes {
-                let color = color(for: route.colorIndex)
-                if let targetLane = route.targetLane {
-                    let target = CGPoint(x: x(for: targetLane), y: top + rowHeight)
-                    let start = CGPoint(x: currentX, y: centerY)
-                    let path: CGPath
-                    if targetLane == row.nodeLane {
-                        path = line(from: start, to: target)
-                    } else {
-                        let controlY = centerY + (rowHeight - rowHeight / 2) * 0.62
-                        let bezier = CGMutablePath()
-                        bezier.move(to: start)
-                        bezier.addCurve(to: target, control1: CGPoint(x: start.x, y: controlY), control2: CGPoint(x: target.x, y: controlY))
-                        path = bezier
-                    }
-                    stroke(path, color: color, width: laneLineWidth, context: context)
-                } else {
-                    context.saveGState()
-                    context.setLineDash(phase: 0, lengths: [3, 2])
-                    stroke(line(from: CGPoint(x: currentX, y: centerY), to: CGPoint(x: currentX, y: top + rowHeight - 2)), color: color.withAlphaComponent(0.65), width: 1.5, context: context)
-                    context.restoreGState()
+            for element in row.printElements {
+                let segment = GitGraphGeometry.line(for: element, rowHeight: rowHeight)
+                let start = CGPoint(x: segment.start.x, y: top + segment.start.y)
+                let end = CGPoint(x: segment.end.x, y: top + segment.end.y)
+                context.saveGState()
+                if element.isDotted && !element.hasArrow {
+                    // IDEA fits one dash and one gap into a vertical row.
+                    let space = rowHeight / 2 - 2
+                    let length = hypot(end.x - start.x, end.y - start.y) * 2
+                    let dash = length / max(1, floor(length / rowHeight)) - space
+                    context.setLineDash(phase: dash / 2, lengths: [dash, space])
                 }
+                let edgeColor = color(for: element.colorIndex)
+                stroke(line(from: start, to: end), color: edgeColor, width: laneLineWidth, context: context)
+                if element.hasArrow {
+                    let length = max(1, hypot(end.x - start.x, end.y - start.y))
+                    let vx = (start.x - end.x) / length * rowHeight * 0.3
+                    let vy = (start.y - end.y) / length * rowHeight * 0.3
+                    for sign: CGFloat in [-1, 1] {
+                        let tip = CGPoint(x: end.x + vx * sqrt(0.7) - sign * vy * sqrt(0.3),
+                                          y: end.y + sign * vx * sqrt(0.3) + vy * sqrt(0.7))
+                        stroke(line(from: end, to: tip), color: edgeColor, width: laneLineWidth, context: context)
+                    }
+                }
+                context.restoreGState()
             }
 
-            let nodeSize: CGFloat = row.routes.count > 1 ? 9.5 : 8.5
+            let nodeSize = GitGraphGeometry.nodeDiameter
             let nodeRect = CGRect(x: currentX - nodeSize / 2, y: centerY - nodeSize / 2, width: nodeSize, height: nodeSize)
-            context.setFillColor(color(for: nodeColorIndex(row)).cgColor)
+            context.setFillColor(color(for: row.nodeColorIndex).cgColor)
             context.fillEllipse(in: nodeRect)
-            if row.routes.count > 1 {
-                context.setStrokeColor(NSColor.white.withAlphaComponent(0.72).cgColor)
-                context.setLineWidth(1)
-                context.strokeEllipse(in: nodeRect.insetBy(dx: 1, dy: 1))
-            }
         }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        // Graph strokes are visual only; the document view routes clicks to
-        // the matching commit row so the whole row remains selectable.
-        nil
+        // The single drawing surface spans row boundaries, unlike SwiftUI's
+        // per-row buttons. Intercept only primary arrow clicks; ordinary row
+        // selection, hover and context menus keep their existing row path.
+        if let event = NSApp.currentEvent,
+           (event.type != .leftMouseDown && event.type != .leftMouseUp
+                || event.modifierFlags.contains(.control)) { return nil }
+        let local = convert(point, from: superview)
+        guard onNavigateHash != nil, bounds.contains(local), navigationTarget(at: local) != nil else { return nil }
+        return self
     }
 
-    private func nodeColorIndex(_ row: GitGraphRoutingRow) -> Int {
-        row.incoming.first(where: { $0.lane == row.nodeLane })?.colorIndex ?? row.routes.first?.colorIndex ?? 0
+    override func mouseDown(with event: NSEvent) {
+        guard !event.modifierFlags.contains(.control),
+              let hash = navigationTarget(at: convert(event.locationInWindow, from: nil)),
+              let onNavigateHash else {
+            super.mouseDown(with: event)
+            return
+        }
+        onNavigateHash(hash)
     }
 
-    private func x(for lane: Int) -> CGFloat { leftPadding + CGFloat(lane) * laneSpacing }
+    private func x(for lane: Int) -> CGFloat { GitGraphGeometry.leftPadding + CGFloat(lane) * GitGraphGeometry.laneSpacing }
 
     private func line(from start: CGPoint, to end: CGPoint) -> CGPath {
         let path = CGMutablePath()
@@ -903,7 +1021,49 @@ private final class GitGraphNSView: NSView {
     }
 
     private func color(for index: Int) -> NSColor {
-        Self.palette[index % Self.palette.count]
+        if let color = colorCache[index] { return color }
+        let color = GitGraphColor.color(for: index,
+            isDark: effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+        colorCache[index] = color
+        return color
+    }
+}
+
+/// Cached accessibility objects do not add views or drawing work. The frame is
+/// converted when requested so native clip scrolling never leaves stale bounds.
+@MainActor
+private final class GitGraphArrowAccessibilityElement: NSAccessibilityElement, NSViewToolTipOwner {
+    private weak var graphView: GitGraphNSView?
+    private let localFrame: NSRect
+    private let targetHash: String
+    private let title: String
+
+    init(graphView: GitGraphNSView, localFrame: NSRect, targetHash: String, title: String, identifier: String) {
+        self.graphView = graphView
+        self.localFrame = localFrame
+        self.targetHash = targetHash
+        self.title = title
+        super.init()
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
+        setAccessibilityHelp(title)
+        setAccessibilityIdentifier(identifier)
+        setAccessibilityParent(graphView)
+    }
+
+    override func accessibilityFrame() -> NSRect {
+        guard let graphView, let window = graphView.window else { return .zero }
+        return window.convertToScreen(graphView.convert(localFrame, to: nil))
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let action = graphView?.onNavigateHash else { return false }
+        action(targetHash)
+        return true
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        title
     }
 }
 

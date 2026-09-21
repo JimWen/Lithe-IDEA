@@ -226,3 +226,13 @@ toolchains, Windows product code, and Linux.do remain outside this fork. The
 verification record above describes the earlier integration; the current
 0.4.5 build, package, and installed-app UI checks are pending. Raw integration
 records are kept in `.artifacts/upstream-045-050/`.
+
+## Git graph projection and native interaction
+
+The [macOS Git graph](macos-git-graph.md) keeps graph projection in
+`LitheGitModule` and view-local snapshots in `GitLogView`. The fork retains
+`AppModel` for editor/project actions and observes its per-window
+`GitFeatureModel` for Git state. `GitHistorySelectionGraphView` wraps the existing
+`GitGraphScrollView`; its AppKit document owns scrolling, row selection and
+long-edge navigation. Cached accessibility elements expose the same native
+arrow actions without adding a second row-rendering hierarchy.

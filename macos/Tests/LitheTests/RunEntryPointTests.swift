@@ -267,12 +267,17 @@ struct RunEntryPointTests {
             runConfigurationOperations: runConfigurations
         )
 
+        defer { model.closeProject() }
         model.openProjectDirectly(workspace.root)
         model.runSelectedConfiguration()
 
         let deferred = await awaitLoadDrivenChange(on: model) { model.pendingRunAction?.kind == .run }
         #expect(deferred, "Run must be deferred while the file inventory is provisional")
-        let runFeature = try #require(model.runFeatureIfActive)
+        guard let runFeature = model.runFeatureIfActive else {
+            Issue.record("The execution module did not activate")
+            await model.shutdownProjectSession()
+            return
+        }
         #expect(
             runFeature.configurationStatus == .ready,
             "the seeded configuration should already report ready"
@@ -290,12 +295,23 @@ struct RunEntryPointTests {
         let relaunched = await runConfigurations.launchPlanRequested(1)
         #expect(relaunched, "the deferred Run was never actually re-issued")
         #expect(model.pendingRunAction == nil)
+        // Toolbar Run must publish the application's output to the same session
+        // selected by the sidebar, without starting a separate primary process.
+        let configurationID = ReadyRunConfigurationOperations.entryPoint.id
+        #expect(runFeature.selectedProjectSessionID == configurationID)
+        #expect(runFeature.moduleSessions.count == 1)
+        #expect(runFeature.moduleSessions.first?.configurationID == configurationID)
+        #expect(runFeature.moduleSessions.first?.output.contains("Launching is out of scope") == true)
+        #expect(runFeature.output.isEmpty)
+        #expect(!runFeature.isRunning)
+        #expect(runConfigurations.launchPlanCallCount == 1)
         #expect(
             runFeature.isProjectReady(
                 for: workspace.root,
                 snapshotID: model.workspaceSnapshotID
             )
         )
+        await model.shutdownProjectSession()
     }
 
     /// When Run's own provisional load is still in flight, the snapshot can land
@@ -474,6 +490,77 @@ struct RunEntryPointTests {
         #expect(model.pendingRunAction == nil)
     }
 
+    /// A selected-service batch must remain one deferred action so a snapshot
+    /// arriving later cannot overwrite one launch with another.
+    @Test
+    func selectedServicesDeferAndResumeAsOneBatch() async throws {
+        let workspace = try GenericServiceWorkspaceFixture()
+        defer { workspace.remove() }
+        let services = [ReadyRunConfigurationOperations.selectedServiceA,
+                        ReadyRunConfigurationOperations.serviceEntryPointB]
+        let runConfigurations = ReadyRunConfigurationOperations(configurations: services)
+        let watchContext = GatedGitWatchContextProvider()
+        watchContext.releaseAll()
+        let model = makeAppModel(
+            workspaceOperations: SequencedWorkspaceOperations.unavailableThenReady(workspace.snapshot),
+            runConfigurationOperations: runConfigurations,
+            gitWatchContextProvider: watchContext
+        )
+        defer { model.closeProject() }
+        model.openProjectDirectly(workspace.root)
+        model.isTerminalVisible = true
+        model.isProblemsVisible = true
+        model.startSelectedServiceConfigurations(services)
+        #expect(await awaitLoadDrivenChange(on: model) {
+            model.pendingRunAction?.kind == .startSelectedServices(services)
+        }, "The whole selected batch must defer as one snapshot-owned intent")
+        #expect(runConfigurations.launchPlanCallCount == 0)
+
+        await model.workspaceFeature.refreshCurrent()
+        #expect(await runConfigurations.launchPlanRequested(2), "Both selected services must resume")
+        #expect(model.pendingRunAction == nil)
+        #expect(runConfigurations.launchPlanCallCount == 2)
+        #expect(model.runFeatureIfActive?.moduleSessions.map(\.configurationID) == services.map(\.id))
+        #expect(model.runFeatureIfActive?.selectedSessionID == services.first?.id)
+        #expect(model.runFeatureIfActive?.selectedConfigurationID == services.first?.id)
+        #expect(model.isRunVisible && !model.isTerminalVisible && !model.isProblemsVisible)
+        await model.shutdownProjectSession()
+    }
+
+    /// A batch whose activation/load spans reopening the same path must not
+    /// launch into the new generation, even after the old inspection returns.
+    @Test
+    func selectedServiceBatchFromAnEarlierOpeningIsDiscarded() async throws {
+        let workspace = try GenericServiceWorkspaceFixture()
+        defer { workspace.remove() }
+        let operations = InspectionGatedRunConfigurationOperations()
+        defer { operations.releaseAll() }
+        let watchContext = GatedGitWatchContextProvider()
+        watchContext.releaseAll()
+        let model = makeAppModel(
+            workspaceOperations: SequencedWorkspaceOperations.neverScans(),
+            runConfigurationOperations: operations,
+            gitWatchContextProvider: watchContext
+        )
+        defer { model.closeProject() }
+        model.openProjectDirectly(workspace.root)
+        let earlier = Task {
+            await model.performStartSelectedServiceConfigurations([
+                ReadyRunConfigurationOperations.selectedServiceA,
+                ReadyRunConfigurationOperations.serviceEntryPointB,
+            ])
+        }
+        defer { earlier.cancel() }
+        #expect(await operations.inspectionEntered(1))
+        model.openProjectDirectly(workspace.root)
+        operations.releaseAll()
+        #expect(await waitForRunEntryCompletion(earlier), "The stale batch must finish after its gate is released")
+        #expect(model.pendingRunAction == nil)
+        #expect(operations.launchPlanCallCount == 0)
+        #expect(model.runFeatureIfActive?.moduleSessions.isEmpty != false)
+        await model.shutdownProjectSession()
+    }
+
     /// Restart must use the same readiness funnel as direct start. A published
     /// but not-yet-consumed refresh still leaves the run service on the old
     /// inventory; restarting then would rebuild a launch plan from that stale
@@ -507,7 +594,7 @@ struct RunEntryPointTests {
             gitWatchContextProvider: watchContext
         )
 
-        // Establish lastConfiguration through the same deferred-run path the
+        // Establish an application session through the same deferred-run path the
         // existing entry tests already cover, then refresh to a newer snapshot
         // without letting the run service consume it.
         model.openProjectDirectly(workspace.root)
@@ -519,15 +606,17 @@ struct RunEntryPointTests {
         // task the test releases; a refresh must also finish before the next one
         // starts, or the workspace feature would drop it as already refreshing.
         let firstRefresh = Task { await model.workspaceFeature.refreshCurrent() }
+        defer { firstRefresh.cancel() }
         #expect(await watchContext.entered(1))
         watchContext.release(1)
         let launched = await runConfigurations.launchPlanRequested(1)
         #expect(launched, "the initial run never requested a launch plan")
-        #expect(model.runFeatureIfActive?.lastConfiguration != nil)
+        #expect(model.runFeatureIfActive?.moduleSessions.first?.configurationID == ReadyRunConfigurationOperations.entryPoint.id)
         #expect(model.pendingRunAction == nil)
-        _ = await firstRefresh.value
+        #expect(await waitForRunEntryCompletion(firstRefresh), "The first refresh must finish after release")
 
         let refreshTask = Task { await model.workspaceFeature.refreshCurrent() }
+        defer { refreshTask.cancel() }
         #expect(await watchContext.entered(2))
         let advanced = await awaitLoadDrivenChange(on: model) {
             model.workspaceSnapshotID == second.id
@@ -540,7 +629,7 @@ struct RunEntryPointTests {
 
         model.restartSelectedRun()
         let deferredRestart = await awaitLoadDrivenChange(on: model) {
-            model.pendingRunAction?.kind == .restart
+            model.pendingRunAction?.kind == .startConfiguration(ReadyRunConfigurationOperations.entryPoint)
         }
         #expect(deferredRestart, "Restart must defer while the newer snapshot is unpublished to the run service")
         #expect(
@@ -552,7 +641,9 @@ struct RunEntryPointTests {
         let relaunched = await runConfigurations.launchPlanRequested(2)
         #expect(relaunched, "the deferred Restart was never actually re-issued")
         #expect(model.pendingRunAction == nil)
-        _ = await refreshTask.value
+        #expect(await waitForRunEntryCompletion(refreshTask), "The second refresh must finish after release")
+        watchContext.releaseAll()
+        await model.shutdownProjectSession()
     }
 
     /// An entry task that started for workspace A must not re-record its action
@@ -827,6 +918,26 @@ private struct JavaWorkspaceFixture {
     }
 }
 
+@MainActor
+private struct GenericServiceWorkspaceFixture {
+    let root: URL
+    let sourceURL: URL
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("lithe-service-entry-\(UUID().uuidString)")
+        sourceURL = root.appendingPathComponent("service.txt")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        do { try "fixture".write(to: sourceURL, atomically: true, encoding: .utf8) }
+        catch { try? FileManager.default.removeItem(at: root); throw error }
+    }
+
+    var snapshot: WorkspaceSnapshot {
+        WorkspaceSnapshot(root: FileNode(url: root, isDirectory: true, children: []), files: [sourceURL])
+    }
+
+    func remove() { try? FileManager.default.removeItem(at: root) }
+}
+
 /// Answers toolchain questions without inspecting the machine.
 ///
 /// Launching is out of scope for this suite, so resolution never has to succeed;
@@ -903,8 +1014,11 @@ private final class ReadyRunConfigurationOperations: RunConfigurationOperations,
     private var configurationReady: Bool
     private var generationCalls = 0
     private let failsGeneration: Bool
+    private let suppliedConfigurations: [RunConfiguration]?
 
-    init(capacity: Int = 8, initiallyReady: Bool = true, failsGeneration: Bool = false) {
+    init(capacity: Int = 8, initiallyReady: Bool = true, failsGeneration: Bool = false,
+         configurations: [RunConfiguration]? = nil) {
+        suppliedConfigurations = configurations
         launchPlanRequests = (0..<capacity).map { _ in TestGate() }
         configurationReady = initiallyReady
         self.failsGeneration = failsGeneration
@@ -973,20 +1087,20 @@ private final class ReadyRunConfigurationOperations: RunConfigurationOperations,
         mainClass: "demo.App"
     )
 
+    static let selectedServiceA = RunConfiguration(
+        id: "fixture:service-a", name: "Service A", kind: .process(provider: "fixture.service"),
+        execution: .service, modulePath: nil, mainClass: nil
+    )
+    static let serviceEntryPointB = RunConfiguration(
+        id: "fixture:service-b", name: "Service B", kind: .process(provider: "fixture.service"),
+        execution: .service, modulePath: nil, mainClass: nil
+    )
+
     func resolve(at projectURL: URL, toolchainCandidates: [ProjectToolchainCandidate]) throws -> RunConfigurationResolution {
-        RunConfigurationResolution(
-            configurations: [
-                EffectiveRunConfiguration(
-                    configuration: Self.entryPoint,
-                    options: RunOptions()
-                ),
-                EffectiveRunConfiguration(
-                    configuration: Self.serviceEntryPoint,
-                    options: RunOptions()
-                ),
-            ],
-            diagnostics: [],
-            defaultConfigurationID: Self.entryPoint.id
+        let entries = suppliedConfigurations ?? [Self.entryPoint, Self.serviceEntryPoint]
+        return RunConfigurationResolution(
+            configurations: entries.map { EffectiveRunConfiguration(configuration: $0, options: RunOptions()) },
+            diagnostics: [], defaultConfigurationID: entries.first?.id
         )
     }
 

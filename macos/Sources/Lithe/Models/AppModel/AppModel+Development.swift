@@ -26,6 +26,7 @@ struct PendingRunAction: Equatable {
         case run
         case debug
         case startConfiguration(RunConfiguration)
+        case startSelectedServices([RunConfiguration])
         case runAllServices
         case restart
         case editConfiguration
@@ -545,6 +546,7 @@ extension AppModel {
         case .run: runSelectedConfiguration()
         case .debug: startDebugging()
         case .startConfiguration(let configuration): startRunConfiguration(configuration)
+        case .startSelectedServices(let configurations): startSelectedServiceConfigurations(configurations)
         case .runAllServices: runAllServiceConfigurations()
         case .restart: restartSelectedRun()
         case .editConfiguration: showRunConfigurationEditor()
@@ -632,16 +634,21 @@ extension AppModel {
             }
         }
         guard isCurrentWorkspace(identity) else { return }
-        runFeature.runSelected(currentFileURL: activeDocument?.url)
-        isRunVisible = true
-        isGitLogVisible = false
-        isTerminalVisible = false
-        isReferencesVisible = false
-        isDebugVisible = false
+        if configuration.kind != .currentFile {
+            runFeature.startConfiguration(configuration)
+        } else {
+            runFeature.runSelected(currentFileURL: activeDocument?.url)
+        }
+        revealRunToolWindow()
     }
 
     func restartSelectedRun() {
-        isRunVisible = true
+        if let configuration = runFeatureIfActive?.selectedConfiguration,
+           configuration.kind != .currentFile {
+            startRunConfiguration(configuration)
+            return
+        }
+        revealRunToolWindow()
         Task { [weak self] in
             guard let self else { return }
             guard let identity = currentWorkspaceIdentity else { return }
@@ -676,6 +683,43 @@ extension AppModel {
         }
     }
 
+    func startSelectedServiceConfigurations(_ configurations: [RunConfiguration]) {
+        Task { [weak self] in
+            await self?.performStartSelectedServiceConfigurations(configurations)
+        }
+    }
+
+    /// A batch is one snapshot-bound intent. Activate every provider before
+    /// starting any process so a stale workspace or unavailable provider cannot
+    /// leave a partially launched batch owned by an earlier opening.
+    func performStartSelectedServiceConfigurations(_ configurations: [RunConfiguration]) async {
+        guard !configurations.isEmpty,
+              configurations.allSatisfy({ $0.execution == .service }),
+              let identity = currentWorkspaceIdentity else { return }
+        guard let runFeature = await activateExecutionModule()?.runFeature else { return }
+        guard isCurrentWorkspace(identity) else { return }
+        switch await ensureRunProjectReady(runFeature, for: identity) {
+        case .ready:
+            clearPendingRunAction(for: identity)
+        case .waitingForSnapshot(let waitingIdentity):
+            deferRunAction(.startSelectedServices(configurations), for: waitingIdentity)
+            return
+        case .stale:
+            return
+        }
+        for configuration in configurations {
+            guard await activateLanguageRunExtensionIfNeeded(
+                for: configuration, currentFileURL: nil, runFeature: runFeature
+            ), isCurrentWorkspace(identity) else { return }
+        }
+        for configuration in configurations {
+            guard isCurrentWorkspace(identity) else { return }
+            runFeature.startConfiguration(configuration)
+        }
+        if let first = configurations.first { runFeature.select(first) }
+        revealRunToolWindow()
+    }
+
     /// Completes the entry workflow, including rejecting actions from an earlier workspace opening.
     func performStartRunConfiguration(_ configuration: RunConfiguration) async {
         guard let identity = currentWorkspaceIdentity else { return }
@@ -702,6 +746,7 @@ extension AppModel {
         ) else { return }
         guard isCurrentWorkspace(identity) else { return }
         runFeature.startConfiguration(configuration)
+        revealRunToolWindow()
     }
 
     func runAllServiceConfigurations() {
@@ -728,10 +773,19 @@ extension AppModel {
                 guard isCurrentWorkspace(identity) else { return }
             }
             runFeature.runAllServices()
+            revealRunToolWindow()
         }
     }
 
     func stopSelectedRun() {
+        if let feature = runFeatureIfActive,
+           let configuration = feature.selectedConfiguration,
+           configuration.kind != .currentFile {
+            if let session = feature.moduleSessions.first(where: { $0.configurationID == configuration.id }) {
+                feature.stopModule(session)
+            }
+            return
+        }
         runFeatureIfActive?.stop()
     }
 

@@ -1768,6 +1768,7 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         let reference: String?
         let cursor: String?
         let limit: Int
+        let order: String?
     }
 
     private struct GitHistoryCursorCloseRequest: Encodable {
@@ -2576,6 +2577,7 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         reference: String?,
         cursor: String?,
         limit: Int,
+        order: String? = nil,
         operationID: String
     ) -> GitHistoryPagePayload? {
         execute(
@@ -2584,7 +2586,8 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
                 root: rootURL.standardizedFileURL.path,
                 reference: reference,
                 cursor: cursor,
-                limit: limit
+                limit: limit,
+                order: order
             ),
             operationID: operationID
         )

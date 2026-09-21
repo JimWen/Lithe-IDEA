@@ -1307,10 +1307,15 @@ struct CodeEditorView: NSViewRepresentable {
             guard document?.isReadOnly != true, document?.hasMutationLease != true else { return }
             let codeTextView = textView as? CodeTextView
             let previousSource = document?.text
-            if let replacedRange = pendingReplacedRange, let replacement = pendingReplacement {
-                codeTextView?.applyLineIndexEdit(replacedRange: replacedRange, replacement: replacement)
-            } else {
+            let replacesWholeText = pendingReplacedRange == nil || pendingReplacement == nil
+                || (pendingReplacedRange?.location == 0 && pendingReplacedRange?.length == previousSource?.utf16.count)
+            if replacesWholeText {
                 codeTextView?.rebuildLineIndex()
+                // Programmatic and whole-buffer edits cannot reuse lexical ranges
+                // painted for the previous text, even when its length is unchanged.
+                resetHighlightCache()
+            } else if let replacedRange = pendingReplacedRange, let replacement = pendingReplacement {
+                codeTextView?.applyLineIndexEdit(replacedRange: replacedRange, replacement: replacement)
             }
             gutter?.refreshLineNumberLayout()
             isApplyingEditorChange = true
@@ -1521,8 +1526,13 @@ struct CodeEditorView: NSViewRepresentable {
         }
 
         func scheduleFoldRefresh(useDefaultImportFold: Bool = false) {
-            scheduleJavaNavigationMarkerRefresh()
             foldRefreshTask?.cancel()
+            guard fileExtension.lowercased() == "java" else {
+                javaMarkerRefreshTask?.cancel()
+                clearJavaStructure()
+                return
+            }
+            scheduleJavaNavigationMarkerRefresh()
             foldRefreshTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(80))
                 guard !Task.isCancelled,
@@ -2800,6 +2810,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         collapsedIDs: Set<String>,
         onToggle: @escaping (JavaFoldRegion) -> Void
     ) {
+        let hadFoldState = !foldRegions.isEmpty || !collapsedFoldIDs.isEmpty
         foldRegions = regions
         collapsedFoldIDs = collapsedIDs
         onToggleFold = onToggle
@@ -2807,6 +2818,9 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
            !collapsedIDs.contains(hoveredFoldID) {
             self.hoveredFoldID = nil
         }
+        // Runnable-gutter updates also use this entry for languages without
+        // folds. Preserve their decorations and avoid laying out the whole file.
+        guard hadFoldState || !regions.isEmpty || !collapsedIDs.isEmpty else { return }
         applyFoldAttributes()
         applyUnusedCodeFade()
         applyCollapsedFoldForeground()

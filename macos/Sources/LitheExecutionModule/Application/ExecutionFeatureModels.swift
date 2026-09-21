@@ -18,8 +18,8 @@ package final class RunFeatureModel: ObservableObject {
     private let service: RunService
     private var observations: Set<AnyCancellable> = []
     @Published package var isGenerationConfirmationPresented = false
-    /// The output shown in Run, independent of the toolbar's configuration.
-    /// Explicit launches focus their session even if the view is hidden;
+    /// The output shown in Run, also supporting tool tasks outside run configs.
+    /// Explicit selections and launches synchronize configuration and session;
     /// output updates must preserve a later manual selection.
     @Published package var selectedSessionID: String?
     @Published package var selectedToolTaskID: UUID?
@@ -46,6 +46,19 @@ package final class RunFeatureModel: ObservableObject {
     package var selectedConfiguration: RunConfiguration? { service.selectedConfiguration }
     package var lastRunFileURL: URL? { service.lastRunFileURL }
     package var lastConfiguration: RunConfiguration? { service.lastConfiguration }
+    /// Project configurations share session identity across toolbar and log selection.
+    /// Current File alone uses the primary output stream.
+    package var selectedProjectSessionID: String? {
+        guard let configuration = selectedConfiguration, configuration.kind != .currentFile else { return nil }
+        return configuration.id
+    }
+    package var isSelectedConfigurationRunning: Bool {
+        guard let configuration = selectedConfiguration else { return false }
+        if configuration.kind != .currentFile {
+            return moduleSessions.contains { $0.configurationID == configuration.id && $0.isRunning }
+        }
+        return isRunning && lastConfiguration?.id == configuration.id
+    }
     package var isLoadingProject: Bool { service.isLoadingProject }
     package var isRunning: Bool { service.isRunning }
     package var runningTitle: String? { service.runningTitle }
@@ -84,7 +97,9 @@ package final class RunFeatureModel: ObservableObject {
     /// Applies the same selected configuration side effects used by Run,
     /// including project-scoped Java runtime selection, before Debug starts.
     package func select(_ configuration: RunConfiguration) {
+        selectedToolTaskID = nil
         service.select(configuration)
+        selectedSessionID = configuration.kind == .currentFile ? nil : configuration.id
     }
 
     package func serviceURL(for configuration: RunConfiguration) -> URL? {
@@ -114,7 +129,9 @@ package final class RunFeatureModel: ObservableObject {
     package func runAllServices() {
         selectedToolTaskID = nil
         service.runAllServices()
-        selectedSessionID = service.moduleSessions.first?.id
+        if let first = service.configurations.first(where: { $0.execution == .service }) {
+            select(first)
+        }
     }
 
     package func stopAllServices() {
@@ -123,8 +140,7 @@ package final class RunFeatureModel: ObservableObject {
 
     package func startConfiguration(_ configuration: RunConfiguration) {
         guard configuration.kind != .currentFile else { return }
-        selectedToolTaskID = nil
-        selectedSessionID = configuration.id
+        select(configuration)
         service.startConfiguration(configuration)
     }
 
@@ -133,8 +149,12 @@ package final class RunFeatureModel: ObservableObject {
     }
 
     package func restartModule(_ session: RunSession) {
-        selectedToolTaskID = nil
-        selectedSessionID = session.id
+        if let configuration = configurations.first(where: { $0.id == session.configurationID }) {
+            select(configuration)
+        } else {
+            selectedToolTaskID = nil
+            selectedSessionID = session.id
+        }
         service.restartModule(session)
     }
 
