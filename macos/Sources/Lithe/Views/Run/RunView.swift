@@ -70,6 +70,9 @@ struct RunView: View {
         .onAppear { synchronizeCheckedConfigurations() }
         .onChange(of: feature.configurations) { _ in synchronizeCheckedConfigurations() }
         .onChange(of: feature.projectLoadState) { _ in synchronizeCheckedConfigurations() }
+        .onChange(of: feature.isLoadingProject) { isLoading in
+            if !isLoading { synchronizeCheckedConfigurations() }
+        }
         .onChange(of: browser.checkedIDs) { _ in persistCheckedConfigurations() }
         .onChange(of: feature.selectedConfigurationID) { _ in contentTab = .console }
         .onChange(of: selectedModuleSession?.isRunning) { isRunning in
@@ -670,7 +673,10 @@ struct RunView: View {
     }
 
     private func synchronizeCheckedConfigurations() {
-        guard let workspace = model.workspaceURL?.standardizedFileURL,
+        // A ready snapshot is published before asynchronous toolchain refresh
+        // finishes; restore/prune only against the fully applied configuration list.
+        guard !feature.isLoadingProject,
+              let workspace = model.workspaceURL?.standardizedFileURL,
               feature.hasReadyInventory(for: workspace) else { return }
         if selectionWorkspacePath != workspace.path {
             browser.restoreSelection(

@@ -139,9 +139,10 @@ package final class RunFeatureModel: ObservableObject {
         service.stopAllServices()
     }
 
-    package func startConfiguration(_ configuration: RunConfiguration) {
+    /// Batch launches preserve the output the user chose while providers activate.
+    package func startConfiguration(_ configuration: RunConfiguration, selectingOutput: Bool = true) {
         guard configuration.kind != .currentFile else { return }
-        select(configuration)
+        if selectingOutput { select(configuration) }
         service.startConfiguration(configuration)
     }
 

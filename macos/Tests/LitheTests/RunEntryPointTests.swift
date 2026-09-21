@@ -548,10 +548,11 @@ struct RunEntryPointTests {
         await model.performStartRunConfigurations(ids + [ids[0]])
         #expect(model.pendingRunAction?.kind == .startConfigurations(ids.sorted()))
         #expect(operations.launchPlanCallCount == 0)
+        let feature = try #require(model.runFeatureIfActive)
+        feature.select(configurations[0])
 
         await model.workspaceFeature.refreshCurrent()
         #expect(await operations.launchPlanRequested(2), "Every unique checked configuration must resume")
-        let feature = try #require(model.runFeatureIfActive)
         #expect(await awaitChange(on: feature, timeout: .seconds(5)) {
             feature.moduleSessions.count == ids.count && feature.moduleSessions.allSatisfy {
                 $0.exitCode == 1 && !$0.output.isEmpty
@@ -560,6 +561,57 @@ struct RunEntryPointTests {
         #expect(model.pendingRunAction == nil)
         #expect(operations.launchPlanCallCount == 2)
         #expect(Set(feature.moduleSessions.map(\.configurationID)) == Set(ids))
+        #expect(feature.selectedSessionID == configurations[0].id,
+                "Later batch launches must not select another output")
+        #expect(feature.selectedConfigurationID == configurations[0].id)
+        await model.shutdownProjectSession()
+    }
+
+    /// A canceled caller must not launch through an already-ready cached module.
+    @Test
+    func canceledCheckedBatchDoesNotLaunchOrDefer() async throws {
+        let workspace = try GenericServiceWorkspaceFixture()
+        defer { workspace.remove() }
+        let configurations = [ReadyRunConfigurationOperations.selectedServiceA,
+                              ReadyRunConfigurationOperations.serviceEntryPointB]
+        let operations = ReadyRunConfigurationOperations(configurations: configurations)
+        let watchContext = GatedGitWatchContextProvider()
+        watchContext.releaseAll()
+        let model = makeAppModel(
+            workspaceOperations: SequencedWorkspaceOperations(snapshots: [workspace.snapshot]),
+            runConfigurationOperations: operations,
+            gitWatchContextProvider: watchContext
+        )
+        defer { model.closeProject() }
+        model.openProjectDirectly(workspace.root)
+        do {
+            let feature = try #require(await model.activateExecutionModule()?.runFeature)
+            try #require(await awaitLoadDrivenChange(on: model) {
+                feature.isProjectReady(for: workspace.root.standardizedFileURL,
+                    snapshotID: model.workspaceFeature.appliedSnapshot?.id) && !feature.isLoadingProject
+            }, "Fixture must be ready before cancellation so it exercises the cached launch path")
+            let entered = TestGate()
+            let release = TestGate()
+            let completed = TestGate()
+            let task = Task { @MainActor in
+                defer { completed.open() }
+                entered.open()
+                _ = await release.waitUntilOpen(timeout: .seconds(5))
+                await model.performStartRunConfigurations(configurations.map(\.id))
+            }
+            defer { task.cancel(); release.open() }
+            try #require(await entered.waitUntilOpen(timeout: .seconds(5)), "Canceled caller did not reach its gate")
+            task.cancel()
+            release.open()
+            try #require(await completed.waitUntilOpen(timeout: .seconds(5)), "Canceled checked batch did not terminate")
+            await task.value
+            #expect(operations.launchPlanCallCount == 0)
+            #expect(model.pendingRunAction == nil)
+            #expect(feature.moduleSessions.isEmpty)
+        } catch {
+            await model.shutdownProjectSession()
+            throw error
+        }
         await model.shutdownProjectSession()
     }
 

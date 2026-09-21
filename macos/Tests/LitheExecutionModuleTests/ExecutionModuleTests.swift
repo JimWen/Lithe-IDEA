@@ -25,6 +25,30 @@ struct ExecutionModuleTests {
         #expect(service.defaultConfigurationID == nil)
     }
 
+    @Test(arguments: [false, true])
+    func batchLaunchPreservesSelectedConsoleOrToolTask(toolTaskSelected: Bool) async {
+        let configuration = RunConfiguration(
+            id: "fixture:batch", name: "Batch", kind: .process(provider: "fixture.service"),
+            execution: .service, modulePath: nil, mainClass: nil
+        )
+        let service = makeRunService(
+            configuration: configuration, options: RunOptions(), fileAccess: TestRunFileAccess()
+        )
+        defer { service.reset() }
+        await service.loadProject(at: URL(fileURLWithPath: "/workspace/batch-output"), files: [])
+        let feature = RunFeatureModel(service: service)
+        feature.select(.currentFile)
+        let toolTaskID = toolTaskSelected ? UUID() : nil
+        feature.selectedToolTaskID = toolTaskID
+
+        feature.startConfiguration(configuration, selectingOutput: false)
+
+        #expect(feature.moduleSessions.contains { $0.configurationID == configuration.id })
+        #expect(feature.selectedConfigurationID == RunConfiguration.currentFileID)
+        #expect(feature.selectedSessionID == nil)
+        #expect(feature.selectedToolTaskID == toolTaskID)
+    }
+
     @Test
     func configuredServerPortUsesExplicitArgumentsAndEnvironmentOnly() async throws {
         let root = URL(fileURLWithPath: "/workspace/service-port", isDirectory: true)
