@@ -52,6 +52,36 @@ final class DocumentFeatureModel: ObservableObject {
     @Published private(set) var isPendingProjectClose = false
     @Published private(set) var projectTreeRevealRequest: ProjectTreeRevealRequest?
 
+    /// Clean previews stay outside the tab collection until opened or edited.
+    func previewDocument(at url: URL) async -> EditorDocument? {
+        let generation = previewGeneration
+        await openFileAsync(url, isReadOnly: false, displayPath: nil, activateWhenReady: false, asPreview: true)
+        guard !Task.isCancelled, generation == previewGeneration else { return nil }
+        return openDocuments.first { $0.url.standardizedFileURL == url.standardizedFileURL }
+            ?? previewDocuments[url.standardizedFileURL.path]
+    }
+
+    func promotePreviewDocument(_ document: EditorDocument) {
+        let path = document.url.standardizedFileURL.path
+        guard previewDocuments[path] === document else { return }
+        // A watcher event may still be queued when the user starts editing.
+        if document.hasPossibleExternalChange() {
+            processExternalChanges([document.url])
+        }
+        previewDocuments[path] = nil
+        openDocuments.append(document)
+        onDocumentCollectionChanged?()
+        onDocumentOpened?(document)
+    }
+
+    func discardPreviewDocuments() {
+        // A closed dialog must not retain clean buffers or accept its late reads.
+        previewGeneration &+= 1
+        previewDocuments.removeAll()
+        let paths = pendingFileOpenRequests.filter { $0.value.isPreview }.map(\.key)
+        for path in paths { pendingFileOpenRequests.removeValue(forKey: path)?.task.cancel() }
+    }
+
     private let operations: any WorkspaceOperations
     private let documentLifecycleDecider: any DocumentLifecycleDeciding
     private let fileOperations: any WorkspaceFileOperations
@@ -72,7 +102,9 @@ final class DocumentFeatureModel: ObservableObject {
     private var onProjectCloseReady: (@MainActor () -> Void)?
     private var deferredExternalChanges: Set<URL> = []
     private var autoSaveTasks: [UUID: Task<Void, Never>] = [:]
-    private var pendingFileOpenRequests: [String: UUID] = [:]
+    private var pendingFileOpenRequests: [String: (id: UUID, task: Task<Void, Never>, isPreview: Bool)] = [:]
+    private var previewDocuments: [String: EditorDocument] = [:]
+    private var previewGeneration: UInt64 = 0
     private var latestFileOpenRequestID: UUID?
     private var pendingCloseQueue: [EditorDocument] = []
     private var pendingClosePreferredDocumentID: UUID?
@@ -139,7 +171,10 @@ final class DocumentFeatureModel: ObservableObject {
         autoSaveTasks.values.forEach { $0.cancel() }
         autoSaveTasks.removeAll()
         deferredExternalChanges.removeAll()
+        pendingFileOpenRequests.values.forEach { $0.task.cancel() }
         pendingFileOpenRequests.removeAll()
+        previewGeneration &+= 1
+        previewDocuments.removeAll()
         latestFileOpenRequestID = nil
         pendingCloseDocument = nil
         projectTreeRevealRequest = nil
@@ -163,10 +198,12 @@ final class DocumentFeatureModel: ObservableObject {
         // Apply that state change synchronously so repeated tree clicks feel immediate.
         if let existing = openDocuments.first(where: {
             $0.url.standardizedFileURL.path == filePath
-        }) {
+        }) ?? previewDocuments[filePath] {
+            let wasPreview = previewDocuments[filePath] === existing
+            promotePreviewDocument(existing)
             latestFileOpenRequestID = UUID()
             activeDocumentID = existing.id
-            if !isReadOnly {
+            if !isReadOnly && !wasPreview {
                 onDocumentOpened?(existing)
             }
             return
@@ -259,38 +296,59 @@ final class DocumentFeatureModel: ObservableObject {
         _ url: URL,
         isReadOnly: Bool,
         displayPath: String?,
-        activateWhenReady: Bool
+        activateWhenReady: Bool,
+        asPreview: Bool = false
     ) async {
         let normalizedURL = url.standardizedFileURL
         let filePath = normalizedURL.path
 
         if let existing = openDocuments.first(where: {
             $0.url.standardizedFileURL.path == filePath
-        }) {
+        }) ?? previewDocuments[filePath] {
+            let wasPreview = previewDocuments[filePath] === existing
+            if wasPreview && asPreview && existing.hasPossibleExternalChange() {
+                processExternalChanges([existing.url])
+            }
+            if !asPreview { promotePreviewDocument(existing) }
             if activateWhenReady {
                 let requestID = UUID()
                 latestFileOpenRequestID = requestID
                 activeDocumentID = existing.id
             }
-            if !isReadOnly {
+            if !isReadOnly && !asPreview && !wasPreview {
                 onDocumentOpened?(existing)
             }
             return
         }
 
-        let requestID = UUID()
-        if let pendingRequestID = pendingFileOpenRequests[filePath] {
+        if let pending = pendingFileOpenRequests[filePath] {
+            if !asPreview { pendingFileOpenRequests[filePath]?.isPreview = false }
             if activateWhenReady {
-                latestFileOpenRequestID = pendingRequestID
+                latestFileOpenRequestID = pending.id
             }
+            await pending.task.value
             return
         }
-        pendingFileOpenRequests[filePath] = requestID
+        let requestID = UUID()
         if activateWhenReady {
             latestFileOpenRequestID = requestID
         }
+        // One owned load serves every caller; cancelling a preview must not cancel another caller's load.
+        let task = Task { @MainActor in
+            await loadFile(normalizedURL, isReadOnly: isReadOnly, displayPath: displayPath,
+                           activateWhenReady: activateWhenReady, requestID: requestID)
+        }
+        pendingFileOpenRequests[filePath] = (requestID, task, asPreview)
+        await task.value
+    }
+
+    private func loadFile(
+        _ normalizedURL: URL, isReadOnly: Bool, displayPath: String?,
+        activateWhenReady: Bool, requestID: UUID
+    ) async {
+        let filePath = normalizedURL.path
         defer {
-            if pendingFileOpenRequests[filePath] == requestID {
+            if pendingFileOpenRequests[filePath]?.id == requestID {
                 pendingFileOpenRequests[filePath] = nil
             }
         }
@@ -313,7 +371,10 @@ final class DocumentFeatureModel: ObservableObject {
                 )
             }
         }
+        guard !Task.isCancelled, workspaceURLProvider() == openingWorkspaceURL,
+              pendingFileOpenRequests[filePath]?.id == requestID else { return }
         guard let text else {
+            if pendingFileOpenRequests[filePath]?.isPreview == true { return }
             // `file.read` accepts plain text regardless of suffix and rejects
             // binary content. Only after that path fails do we probe a small
             // header for an explicitly registered binary viewer. With the
@@ -326,7 +387,7 @@ final class DocumentFeatureModel: ObservableObject {
                 )
             }.value
             guard workspaceURLProvider() == openingWorkspaceURL,
-                  pendingFileOpenRequests[filePath] == requestID else { return }
+                  pendingFileOpenRequests[filePath]?.id == requestID else { return }
             let shouldActivate = activateWhenReady && latestFileOpenRequestID == requestID
             if let header,
                await binaryFileViewerRegistry.openIfSupported(
@@ -339,7 +400,8 @@ final class DocumentFeatureModel: ObservableObject {
             notify?("This file cannot be displayed as text")
             return
         }
-        guard workspaceURLProvider() == openingWorkspaceURL else { return }
+        guard workspaceURLProvider() == openingWorkspaceURL,
+              pendingFileOpenRequests[filePath]?.id == requestID else { return }
 
         let document = EditorDocument(
             url: normalizedURL,
@@ -351,6 +413,10 @@ final class DocumentFeatureModel: ObservableObject {
         guard !openDocuments.contains(where: {
             $0.url.standardizedFileURL.path == filePath
         }) else { return }
+        if pendingFileOpenRequests[filePath]?.isPreview == true {
+            previewDocuments[filePath] = document
+            return
+        }
         openDocuments.append(document)
         if latestFileOpenRequestID == requestID {
             activeDocumentID = document.id
@@ -641,12 +707,14 @@ final class DocumentFeatureModel: ObservableObject {
 
     @discardableResult
     func processExternalChanges(_ urls: [URL]) -> Bool {
-        let leasedURLs = Set(openDocuments.filter(\.hasMutationLease).map { $0.url.standardizedFileURL })
+        let ownedDocuments = openDocuments + previewDocuments.values.sorted { $0.url.path < $1.url.path }
+        let leasedURLs = Set(ownedDocuments.filter(\.hasMutationLease).map { $0.url.standardizedFileURL })
         deferredExternalChanges.formUnion(urls.map(\.standardizedFileURL).filter { leasedURLs.contains($0) })
         let readyURLs = urls.filter { !leasedURLs.contains($0.standardizedFileURL) }
         let changedPathSet = Set(readyURLs.map { $0.standardizedFileURL.path })
         var conflictDetected = false
-        for document in openDocuments where changedPathSet.contains(document.url.standardizedFileURL.path) {
+        // Transient buffers need the same disk freshness and conflict policy as tabs.
+        for document in ownedDocuments where changedPathSet.contains(document.url.standardizedFileURL.path) {
             guard document.hasPossibleExternalChange() else { continue }
             let operationID = UUID().uuidString
             do {
@@ -664,7 +732,9 @@ final class DocumentFeatureModel: ObservableObject {
                 case .none, .writeToDisk, .reportSaveFailure, .ignoreStaleResult:
                     break
                 }
-                onDocumentChanged?(document)
+                if openDocuments.contains(where: { $0 === document }) {
+                    onDocumentChanged?(document)
+                }
             } catch {
                 notify?("Could not process an external change to \(document.url.lastPathComponent)")
             }
@@ -674,6 +744,8 @@ final class DocumentFeatureModel: ObservableObject {
     }
 
     func closeDocuments(containedIn url: URL) {
+        // Closing/deleting a subtree invalidates its clean previews and late opens.
+        discardTransientDocuments(containedIn: url)
         let documents = openDocuments.filter { urlContains(url, child: $0.url) }
         for document in documents {
             closeDocument(document)
@@ -681,6 +753,7 @@ final class DocumentFeatureModel: ObservableObject {
     }
 
     func relocateOpenDocuments(from sourceURL: URL, to destinationURL: URL) {
+        discardTransientDocuments(containedIn: sourceURL)
         let sourcePath = sourceURL.standardizedFileURL.path
         for document in openDocuments where urlContains(sourceURL, child: document.url) {
             let documentPath = document.url.standardizedFileURL.path
@@ -692,6 +765,12 @@ final class DocumentFeatureModel: ObservableObject {
             document.relocate(to: relocatedURL)
         }
         onDocumentCollectionChanged?()
+    }
+
+    private func discardTransientDocuments(containedIn url: URL) {
+        previewDocuments = previewDocuments.filter { !urlContains(url, child: $0.value.url) }
+        let paths = pendingFileOpenRequests.keys.filter { urlContains(url, child: URL(fileURLWithPath: $0)) }
+        for path in paths { pendingFileOpenRequests.removeValue(forKey: path)?.task.cancel() }
     }
 
     private func closeDocument(_ document: EditorDocument) {
@@ -723,6 +802,13 @@ final class DocumentFeatureModel: ObservableObject {
     private func saveDocument(_ document: EditorDocument) throws -> Bool {
         guard !document.isReadOnly else { throw EditorDocument.DocumentError.readOnly }
         guard !document.hasMutationLease else { throw EditorDocument.DocumentError.mutationInProgress }
+        // Do not overwrite an external version just because its watcher event has not arrived.
+        if document.hasPossibleExternalChange() {
+            processExternalChanges([document.url])
+            if document.hasExternalConflict { throw EditorDocument.DocumentError.externalConflict }
+            if !document.isDirty && !document.hasPossibleExternalChange() { return false }
+            throw CocoaError(.userCancelled)
+        }
         let operationID = UUID().uuidString
         let saving = try documentLifecycleDecider.decide(
             state: document.lifecycleState,

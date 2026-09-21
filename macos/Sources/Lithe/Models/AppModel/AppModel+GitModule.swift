@@ -35,6 +35,7 @@ extension AppModel {
                     await self?.workspaceFeature.endGitOperationFreeze()
                 }
             )
+            feature.fetchOptionsProvider = { [weak self] in self?.settings.gitFetchOptions ?? GitFetchOptions() }
             feature.historyEditing.onCommitUndone = { [weak self] message in
                 self?.prepareForUndoneGitCommit(message: message)
             }

@@ -23,6 +23,7 @@ struct SettingsView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var updateChecker: UpdateChecker
+    @State private var showsGitPreferences = false
     @ObservedObject var settings: AppSettings
     @ObservedObject var viewState: SettingsViewState
     let initialCategory: SettingsCategory
@@ -175,7 +176,7 @@ struct SettingsView: View {
         case .ai:
             ["AI & Commit", "AI provider", "Model", "API key", "Commit message"]
         case .git:
-            ["Git", "Commit identity", "Committer name", "Committer email", "Configuration scope", "user.name", "user.email"]
+            ["Git", "Fetch", "Tags", "Submodules", "Prune", "Commit identity", "Committer name", "Committer email", "Configuration scope", "user.name", "user.email"]
         case .updates:
             ["Updates", "Application version", "Update status", "Check for Updates"]
         case .diagnostics:
@@ -241,7 +242,19 @@ struct SettingsView: View {
                                              retryDisplay: model.retryTerminalDisplayConfiguration)
                     case .lsp, .go, .rust, .python: EmptyView()
                     case .ai: aiSettings
-                    case .git: GitIdentitySettingsView()
+                    case .git:
+                        VStack(alignment: .leading, spacing: 24) {
+                            GitExecutionSettingsView(settings: settings)
+                            DisclosureGroup("Fetch and commit preferences", isExpanded: $showsGitPreferences) {
+                                if showsGitPreferences {
+                                    VStack(alignment: .leading, spacing: 24) {
+                                        GitFetchSettingsView(options: $settings.gitFetchOptions)
+                                        Divider()
+                                        GitIdentitySettingsView()
+                                    }.padding(.top, 12)
+                                }
+                            }
+                        }
                     case .updates: updatesSettings
                     case .diagnostics: diagnosticsSettings
                     }

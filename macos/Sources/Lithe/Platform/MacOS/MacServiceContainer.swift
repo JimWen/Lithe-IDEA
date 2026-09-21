@@ -86,7 +86,9 @@ final class MacServiceContainer {
         platformUI providedPlatformUI: (any PlatformUI)? = nil,
         gitPerformanceLogger: (any GitPerformanceLogger)? = nil
     ) {
-        let rustCore = RustCoreBridge()
+        let gitExecutionJournal = GitExecutionJournal()
+        let rustCore = RustCoreBridge(gitPreferences: settings.gitExecutionPreferences,
+                                      gitExecutionJournal: gitExecutionJournal)
         let javaOperations = RustJavaOperations(core: rustCore)
         let fileStorage = MacFileStorage()
         let workspaceLanguageServerPreferences = MacWorkspaceLanguageServerPreferencesStore(store: store)
@@ -467,7 +469,8 @@ final class MacServiceContainer {
                     operations: gitOperations,
                     shelfStorage: MacGitShelfStorage(storage: fileStorage),
                     performanceLogger: gitPerformanceLogger ?? NullGitPerformanceLogger(),
-                    patchFileAccess: MacGitPatchFileAccess(storage: fileStorage)
+                    patchFileAccess: MacGitPatchFileAccess(storage: fileStorage),
+                    executionJournal: gitExecutionJournal
                 )
             })
             try moduleRegistry.register(ModuleFactory(manifest: SearchModule.moduleManifest, contributions: SearchModule.moduleContributions) {

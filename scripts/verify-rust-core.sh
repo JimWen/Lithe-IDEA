@@ -6,7 +6,11 @@ cd "$ROOT_DIR"
 
 scripts/verify-rust-core-comments.sh
 scripts/verify-rust-core-layout.sh
-cargo fmt --manifest-path rust/Cargo.toml -p lithe-core -- --check
+cargo fmt --manifest-path rust/Cargo.toml -p lithe-core -p lithe-git-host -- --check
+node .agents/skills/write-stable-tests/scripts/run-rust-tests-with-timing.mjs \
+    --manifest rust/Cargo.toml --package lithe-git-host \
+    --suite-timeout-ms 120000 \
+    --report .artifacts/test-stability/git-host-rust.json
 cargo test --manifest-path rust/Cargo.toml -p lithe-core
 node scripts/test-rust-core-link.mjs
 
@@ -60,4 +64,26 @@ fi
     --filter ProjectMetadataOperationsTests \
     -Xlinker -force_load -Xlinker "$RUST_LIBRARY"
 
-print "Rust Core verification passed: comments, Rust tests, Swift bridge build, linked symbols, and project metadata tests"
+# The C bridge has weak fallbacks for Swift-only tests. This lane must contain
+# strong implementations of both new functions before running helper fixtures.
+GIT_SYMBOL_TABLE="$(nm -m "$BINARY")"
+for git_symbol in _lithe_core_execute_json_with_events _lithe_core_git_askpass; do
+    if ! print -r -- "$GIT_SYMBOL_TABLE" | awk -v symbol="$git_symbol" '$NF == symbol && /external/ && !/weak/ && !/undefined/ { found = 1 } END { exit !found }'; then
+        print -u2 -- "Strong Git execution symbol is missing from the macOS binary: $git_symbol"
+        exit 1
+    fi
+done
+
+# This explicitly identified integration lane uses isolated repositories and a
+# loopback HTTP server. The built app is exercised only in its early helper mode.
+cargo build --manifest-path rust/Cargo.toml -p lithe-core
+python3 scripts/test-git-execution.py --application "$BINARY"
+node --input-type=module -e 'import { writeTestReportArtifacts } from "./.agents/skills/write-stable-tests/scripts/generate-test-report.mjs"; writeTestReportArtifacts(".artifacts/test-stability/git-execution-integration.json");'
+
+LITHE_RUN_GIT_EXECUTION_INTEGRATION=1 \
+    ./.agents/skills/write-stable-tests/scripts/test-stability-macos.sh \
+    --suite-timeout-seconds 900 \
+    --report .artifacts/test-stability/git-console-bridge.json \
+    -- --filter 'MacGitHubGitOperationsTests|GitConsolePresentationBridgeTests|GitConsoleLifecycleBridgeTests' -Xlinker -force_load -Xlinker "$RUST_LIBRARY"
+
+print "Rust Core verification passed: comments, Rust tests, Swift bridge, linked symbols, project metadata, and Git execution integration"

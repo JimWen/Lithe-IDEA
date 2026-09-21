@@ -23,6 +23,7 @@ Lithe-IDEA/
 │   ├── mac/Official/       # macOS plugin manifests, source, tests, and Bundle metadata
 ├── macos/Tests/LitheTests/       # Swift Testing unit tests
 ├── rust/lithe-core/        # shared Rust commands, models, and C ABI
+├── rust/lithe-git-host/    # native Git process, executable, and AskPass adapter
 ├── shared/                 # contracts and cross-platform fixtures
 ├── shared/fixtures/projects/ # reusable Java and Git data
 ├── scripts/                # build, packaging, fixture, and verification tools
@@ -169,3 +170,12 @@ payloads stay with their owning platform resource or plugin package.
 is not an implementation detail of macOS or the shared Rust Core.
 Container definitions used to validate database helpers belong under
 `infra/docker/`; product Docker features remain in their owning platform code.
+
+
+## Git native execution boundary
+
+The [Git execution and project console](git-execution-and-project-console.md)
+feature keeps deterministic policy, event redaction, Fetch planning, and JSON
+contracts in Core. `rust/lithe-git-host/` owns native Unix execution and AskPass
+transport. `MacServiceContainer` wires one execution journal per project window.
+Integration validation remains pending in the owning feature document.

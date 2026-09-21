@@ -86,6 +86,9 @@ struct WorkbenchView: View {
                 .environment(\.colorScheme, colorScheme))
         }
         .background {
+            if let feature = model.gitFeatureIfActive { GitAuthenticationHost(feature: feature) }
+        }
+        .background {
             WorkbenchBackgroundImageView(
                 image: workbenchBackgroundImage,
                 opacity: settings.workbenchBackgroundOpacity
@@ -301,9 +304,8 @@ struct WorkbenchView: View {
         .sheet(isPresented: $model.isProjectSearchPresented) {
             ProjectSearchView().environmentObject(model)
         }
-        .sheet(isPresented: $model.isProjectReplaceVisible) {
-            ProjectReplaceView()
-                .environmentObject(model)
+        .overlay {
+            ProjectReplaceOverlay(model: model)
         }
         .onAppear {
             restoreLayout()

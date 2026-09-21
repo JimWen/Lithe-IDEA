@@ -1529,6 +1529,7 @@ dependencies = [
  "base64 0.22.1",
  "comrak",
  "libc",
+ "lithe-git-host",
  "rand 0.8.7",
  "regex",
  "serde",
@@ -1572,6 +1573,16 @@ dependencies = [
  "tokio-util",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "lithe-git-host"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
