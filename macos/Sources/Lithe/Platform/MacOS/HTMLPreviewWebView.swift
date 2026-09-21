@@ -120,7 +120,7 @@ enum HTMLPreviewNavigationPolicy {
         // loadHTMLString may expose about:blank before its base URL becomes
         // the current page. In that state relative anchors use the HTML base.
         let page = currentPageURL ?? htmlBaseURL
-        let isBlankPage = page.map { sameDocument($0, URL(string: "about:blank")) } == true
+        let isBlankPage = page.map(isAboutBlankPage) == true
         let fragmentBase = isBlankPage ? htmlBaseURL : page
         if destination.fragment != nil,
            sameDocument(destination, page) || sameDocument(destination, fragmentBase) {
@@ -145,6 +145,15 @@ enum HTMLPreviewNavigationPolicy {
             return .cancel
         }
         return .allow
+    }
+
+    private static func isAboutBlankPage(_ url: URL) -> Bool {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: true),
+              components.scheme?.lowercased() == "about", components.query == nil else { return false }
+        // Older Foundation URL parsing encodes an opaque about: URL's fragment
+        // into its path (blank%23section). Limit this compatibility rule to the
+        // blank page; file paths must retain their ordinary URL semantics.
+        return components.path.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first == "blank"
     }
 
     private static func sameDocument(_ destination: URL, _ current: URL?) -> Bool {

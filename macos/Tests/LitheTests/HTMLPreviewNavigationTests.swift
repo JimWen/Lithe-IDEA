@@ -21,6 +21,15 @@ struct HTMLPreviewNavigationTests {
         }
     }
 
+    @Test(arguments: ["about:srcdoc", "about:blank-other#previous", "about:blank?other"])
+    func otherOpaquePagesDoNotBorrowTheHTMLBaseForAnchors(currentPage: String) throws {
+        #expect(HTMLPreviewNavigationPolicy.decision(
+            destination: URL(string: "file:///fixture/site/#section"), isActivatedLink: true,
+            currentPageURL: try #require(URL(string: currentPage)),
+            htmlBaseURL: URL(string: "file:///fixture/site/")
+        ) == .cancel)
+    }
+
     @Test(arguments: ["file:///fixture/other.html#section", "file:///fixture/index.html?other#section",
                       "file:///fixture/index.html", "javascript:alert(1)", "data:text/html,other"])
     func differentLocalPageOrUnsafeSchemeDoesNotReplaceLiveBuffer(destination: String) throws {
