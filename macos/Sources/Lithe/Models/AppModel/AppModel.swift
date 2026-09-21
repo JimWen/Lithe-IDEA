@@ -376,6 +376,7 @@ final class AppModel: ObservableObject, Identifiable {
         languageToolingFeature = LanguageToolingFeatureModel(
             catalogSource: services.languageProviderCatalogSource,
             catalogSnapshot: services.languageProviderCatalogSnapshot,
+            preferences: services.workspaceLanguageServerPreferences,
             sessionsProvider: { nil }
         )
         debugLaunchConfigurationResolver = services.debugLaunchConfigurationResolver
@@ -390,6 +391,9 @@ final class AppModel: ObservableObject, Identifiable {
         navigationHistoryFeature = NavigationHistoryFeatureModel()
         javaFeature = JavaFeatureModel(operations: services.javaOperations)
         recentProjects = services.recentProjectsStore.load()
+        languageToolingObservation = languageToolingFeature.objectWillChange.sink { [weak self] in
+            self?.scheduleObjectWillChangeRelay()
+        }
         languageToolingFeature.configureSessions { [weak self] in
             self?.languageToolingSessionsIfActive
         }
@@ -558,7 +562,6 @@ final class AppModel: ObservableObject, Identifiable {
         )
         languageToolingFeature.configure(
             documentsProvider: { [weak self] in self?.openDocuments ?? [] },
-            workspaceProvider: { [weak self] in self?.workspaceURL },
             activateDocument: { [weak self] document in
                 self?.activateLanguageServerIfAvailable(for: document) ?? false
             },
@@ -1382,6 +1385,15 @@ final class AppModel: ObservableObject, Identifiable {
     func activateLanguageServerIfAvailable(for document: EditorDocument) -> Bool {
         guard let workspaceURL,
               let descriptor = languageProviderCatalog.provider(for: document.url) else { return false }
+        guard !languageToolingFeature.isDisabled(descriptor.id) else {
+            languageToolingSessionsIfActive?.recordLanguageServerLog(
+                providerID: descriptor.id,
+                level: .info,
+                message: "Language server activation skipped",
+                detail: "Disabled in this workspace"
+            )
+            return false
+        }
         if descriptor.id == "java" {
             switch prepareJavaLanguageServerRuntimeIfNeeded(for: document) {
             case .ready: break
@@ -1446,15 +1458,6 @@ final class AppModel: ObservableObject, Identifiable {
                     )
                 }
             }
-            return false
-        }
-        guard !languageToolingFeature.isDisabled(descriptor.id) else {
-            languageToolingSessionsIfActive?.recordLanguageServerLog(
-                providerID: descriptor.id,
-                level: .info,
-                message: "Language server activation skipped",
-                detail: "Disabled in this workspace"
-            )
             return false
         }
         do {

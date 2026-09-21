@@ -790,6 +790,50 @@ struct GitModuleTests {
         #expect(feature.gitChanges.isEmpty)
     }
 
+    @Test(arguments: [false, true])
+    func batchDiscardRecordsEachResultAndStopsAtFirstFailure(failsSecond: Bool) async throws {
+        let root = URL(fileURLWithPath: "/workspace")
+        let changes = ["first.txt", "second.txt", "third.txt"].map {
+            GitChange(repositoryRoot: root, path: $0, originalPath: nil,
+                      indexStatus: " ", workTreeStatus: "M")
+        }
+        let service = GitService(operations: TestGitOperations(
+            snapshotValue: GitSnapshot(repositoryRoot: root, branch: "main", changes: []),
+            discardHandler: { target in
+                let failed = failsSecond && target.path == "second.txt"
+                let error = failed ? "Discard rejected" : ""
+                return GitProcessResult(arguments: ["discard", target.path], output: error,
+                                        standardOutput: "", standardError: error,
+                                        exitCode: failed ? 1 : 0)
+            }
+        ))
+        let feature = GitFeatureModel(service: service)
+        defer { feature.reset() }
+        var notifications: [String] = []
+        var began = 0
+        var ended = 0
+        feature.configure(workspaceURLProvider: { root }, isGitLogVisibleProvider: { false },
+                          notify: { notifications.append($0) }, onStateRefreshed: {},
+                          onGitOperationBegan: { began += 1 },
+                          onGitOperationEnded: { ended += 1 })
+        // One confirmed batch owns the observation pause. A failed middle file
+        // must stop subsequent writes while retaining every attempted result.
+        let operation = Task {
+            await feature.refreshGit()
+            feature.clearGitConsole()
+            await feature.discardChanges(changes)
+        }
+        defer { operation.cancel() }
+        try #require(await waitForGitTaskCompletion(operation))
+        let expectedPaths = failsSecond ? ["first.txt", "second.txt"] : changes.map(\.path)
+        #expect(feature.gitConsoleEntries.map(\.arguments) == expectedPaths.map { ["discard", $0] })
+        #expect(notifications == (failsSecond
+            ? ["Discarded first.txt", "Discard rejected"]
+            : changes.map { "Discarded \($0.path)" }))
+        #expect(began == 1)
+        #expect(ended == 1)
+    }
+
     @Test
     func confirmedDiscardHunkSurvivesDialogDismissalAndReportsFailure() async throws {
         let root = URL(fileURLWithPath: "/workspace")

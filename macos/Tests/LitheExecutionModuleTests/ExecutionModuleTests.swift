@@ -8,6 +8,24 @@ import Testing
 @MainActor
 struct ExecutionModuleTests {
     @Test
+    func resolvedDefaultTracksTheCurrentProjectAndClearsOnReset() async {
+        let configuration = RunConfiguration(
+            id: "python:service", name: "Service", kind: .process(provider: "python.script"),
+            modulePath: nil, mainClass: nil, debugAdapter: "python", disabled: false
+        )
+        let service = makeRunService(
+            configuration: configuration, options: RunOptions(), fileAccess: TestRunFileAccess()
+        )
+        defer { service.reset() }
+        #expect(service.defaultConfigurationID == nil)
+        await service.loadProject(at: URL(fileURLWithPath: "/workspace/default-run"), files: [])
+        #expect(service.defaultConfigurationID == configuration.id)
+        #expect(service.selectedConfiguration?.id == configuration.id)
+        service.reset()
+        #expect(service.defaultConfigurationID == nil)
+    }
+
+    @Test
     func configuredServerPortUsesExplicitArgumentsAndEnvironmentOnly() async throws {
         let root = URL(fileURLWithPath: "/workspace/service-port", isDirectory: true)
         let properties = root.appendingPathComponent("src/main/resources/application.properties")

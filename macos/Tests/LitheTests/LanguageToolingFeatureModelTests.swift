@@ -10,11 +10,13 @@ struct LanguageToolingFeatureModelTests {
         let source = FixedLanguageCatalogSource()
         let model = LanguageToolingFeatureModel(
             catalogSource: source, catalogSnapshot: source.load(workspaceURL: nil),
+            preferences: FeatureLanguagePreferences(),
             sessionsProvider: { nil }
         )
+        model.reloadCatalog(for: URL(fileURLWithPath: "/fixture/go-workspace"))
         var messages: [String] = []
         model.configure(
-            documentsProvider: { [] }, workspaceProvider: { nil },
+            documentsProvider: { [] },
             activateDocument: { _ in false }, notify: { messages.append($0) }
         )
 
@@ -38,7 +40,8 @@ struct LanguageToolingFeatureModelTests {
         let source = FixedLanguageCatalogSource()
         let snapshot = source.load(workspaceURL: nil)
         let model = LanguageToolingFeatureModel(
-            catalogSource: source, catalogSnapshot: snapshot, sessionsProvider: { nil }
+            catalogSource: source, catalogSnapshot: snapshot,
+            preferences: FeatureLanguagePreferences(), sessionsProvider: { nil }
         )
         let descriptor = LanguageProviderDescriptor(
             id: "go", displayName: "Go", fileExtensions: ["go"],
@@ -62,5 +65,15 @@ private struct FixedLanguageCatalogSource: LanguageProviderCatalogSource {
             origin: .builtin,
             issues: [.init(path: "fixture", message: "Rejected fixture override")]
         )
+    }
+}
+
+private final class FeatureLanguagePreferences: WorkspaceLanguageServerPreferencesStoring {
+    private var values: [URL: Set<String>] = [:]
+    func disabledProviderIDs(for workspaceURL: URL) -> Set<String> {
+        values[workspaceURL.standardizedFileURL] ?? []
+    }
+    func saveDisabledProviderIDs(_ providerIDs: Set<String>, for workspaceURL: URL) {
+        values[workspaceURL.standardizedFileURL] = providerIDs
     }
 }

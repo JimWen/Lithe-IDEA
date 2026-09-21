@@ -4,6 +4,7 @@ use std::path::Path;
 
 mod debug;
 mod diagnostics;
+mod editor;
 mod execution;
 mod git;
 mod github;

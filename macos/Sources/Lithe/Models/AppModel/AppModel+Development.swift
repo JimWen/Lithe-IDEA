@@ -27,6 +27,7 @@ struct PendingRunAction: Equatable {
         case debug
         case startConfiguration(RunConfiguration)
         case startSelectedServices([RunConfiguration])
+        case startConfigurations([String])
         case runAllServices
         case restart
         case editConfiguration
@@ -547,6 +548,7 @@ extension AppModel {
         case .debug: startDebugging()
         case .startConfiguration(let configuration): startRunConfiguration(configuration)
         case .startSelectedServices(let configurations): startSelectedServiceConfigurations(configurations)
+        case .startConfigurations(let ids): startRunConfigurations(ids)
         case .runAllServices: runAllServiceConfigurations()
         case .restart: restartSelectedRun()
         case .editConfiguration: showRunConfigurationEditor()
@@ -746,6 +748,50 @@ extension AppModel {
         ) else { return }
         guard isCurrentWorkspace(identity) else { return }
         runFeature.startConfiguration(configuration)
+        revealRunToolWindow()
+    }
+
+    func startRunConfigurations(_ configurationIDs: [String]) {
+        Task { [weak self] in
+            await self?.performStartRunConfigurations(configurationIDs)
+        }
+    }
+
+    /// A batch is one deferred intent. Launches use the current inventory and
+    /// retain existing sessions, including output from already running services.
+    func performStartRunConfigurations(_ configurationIDs: [String]) async {
+        let ids = Set(configurationIDs).sorted()
+        guard !ids.isEmpty, let identity = currentWorkspaceIdentity else { return }
+        guard let runFeature = await activateExecutionModule()?.runFeature else { return }
+        guard isCurrentWorkspace(identity) else { return }
+        switch await ensureRunProjectReady(runFeature, for: identity) {
+        case .ready:
+            clearPendingRunAction(for: identity)
+        case .waitingForSnapshot(let waitingIdentity):
+            deferRunAction(.startConfigurations(ids), for: waitingIdentity)
+            return
+        case .stale:
+            return
+        }
+        for id in ids {
+            guard isCurrentWorkspace(identity) else { return }
+            guard let configuration = runFeature.configurations.first(where: { $0.id == id }),
+                  !configuration.usesCurrentEditorFile, !configuration.disabled,
+                  !runFeature.moduleSessions.contains(where: { $0.configurationID == id && $0.isRunning })
+            else { continue }
+            let activated = await activateLanguageRunExtensionIfNeeded(
+                for: configuration,
+                currentFileURL: nil,
+                runFeature: runFeature
+            )
+            guard isCurrentWorkspace(identity) else { return }
+            guard activated,
+                  let current = runFeature.configurations.first(where: { $0.id == id }),
+                  !current.usesCurrentEditorFile, !current.disabled,
+                  !runFeature.moduleSessions.contains(where: { $0.configurationID == id && $0.isRunning })
+            else { continue }
+            runFeature.startConfiguration(current)
+        }
         revealRunToolWindow()
     }
 
@@ -955,6 +1001,7 @@ extension AppModel {
         guard isCurrentWorkspace(identity) else { return }
         guard await activateDebugModule() != nil,
               isCurrentWorkspace(identity) else { return }
+        guard !Task.isCancelled else { return }
         if runFeature.configurationStatus != .ready {
             showNotification(
                 String(localized: "No Run configuration exists yet. Lithe is identifying this project automatically."),
@@ -1509,13 +1556,18 @@ extension AppModel {
         fileURL: URL,
         document: EditorDocument?
     ) async {
-        guard let workspaceURL,
+        guard let identity = currentWorkspaceIdentity,
+              let workspaceURL,
               let provider = languageProviderCatalog.provider(for: fileURL),
               let runFeature = await activateExecutionModule()?.runFeature,
               let genericDebugFeature = await activateDebugModule()?.genericFeature else {
             showNotification("No language provider is available for this file")
             return
         }
+        guard isCurrentWorkspace(identity), !Task.isCancelled else { return }
+        let selectedConfiguration = runFeature.selectedConfiguration
+        let configurations = runFeature.configurations
+        let selectedOptions = selectedConfiguration.map { runFeature.options(for: $0) }
         // Debug is the second execution mode for the Run selection. Re-apply
         // the selection here so its project-scoped Java runtime override is
         // active even when the Run panel was never opened in this session.
@@ -1557,19 +1609,25 @@ extension AppModel {
             } else {
                 javaTarget = nil
             }
+            try Task.checkCancellation()
             configuration = try debugLaunchConfigurationResolver.resolve(
                 provider: provider,
                 documentURL: fileURL,
                 workspaceURL: workspaceURL,
-                configurations: runFeature.configurations,
-                selectedConfiguration: runFeature.selectedConfiguration,
+                configurations: configurations,
+                selectedConfiguration: selectedConfiguration,
                 javaTarget: javaTarget,
-                options: { [runFeature] in runFeature.options(for: $0) }
+                options: { [runFeature] in
+                    $0 == selectedConfiguration ? (selectedOptions ?? RunOptions()) : runFeature.options(for: $0)
+                }
             )
         } catch {
+            guard isCurrentWorkspace(identity), !Task.isCancelled else { return }
             showNotification(error.localizedDescription)
             return
         }
+        guard isCurrentWorkspace(identity), !Task.isCancelled,
+              runFeature.selectedConfiguration == selectedConfiguration else { return }
         guard genericDebugFeature.start(
             fileURL: fileURL,
             rootURL: workspaceURL,

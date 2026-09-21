@@ -91,7 +91,9 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
                     kind: kind,
                     execution: value.execution.flatMap(RunConfigurationExecution.init(rawValue:)),
                     modulePath: java?.module == "." ? nil : java?.module,
-                    mainClass: java?.mainClass
+                    mainClass: java?.mainClass,
+                    debugAdapter: value.debug?.adapter,
+                    disabled: value.disabled
                 ),
                 options: RunOptions(
                     javaHomePath: java?.homePath ?? "",

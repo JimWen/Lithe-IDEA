@@ -89,6 +89,7 @@ final class MacServiceContainer {
         let rustCore = RustCoreBridge()
         let javaOperations = RustJavaOperations(core: rustCore)
         let fileStorage = MacFileStorage()
+        let workspaceLanguageServerPreferences = MacWorkspaceLanguageServerPreferencesStore(store: store)
         let directoryMarkStore = WorkspaceDirectoryMarkStore(store: store)
         let runConfigurationStore = MacRunConfigurationStore(
             core: rustCore,
@@ -286,6 +287,10 @@ final class MacServiceContainer {
                         runtimeFactory: runtimeFactory,
                         builtinCore: rustCore,
                         extensionRequiredProviderIDs: pluginLanguageIDs,
+                        isLanguageServerEnabled: { providerID, workspaceURL in
+                            !workspaceLanguageServerPreferences.disabledProviderIDs(for: workspaceURL)
+                                .contains(providerID)
+                        },
                         workspaceFingerprintProvider: { descriptor, workspaceRootURL in
                             guard descriptor.id == "java" else { return nil }
                             return try jdtWorkspaceState.fingerprint(
@@ -535,6 +540,7 @@ final class MacServiceContainer {
             pluginManager: pluginManager,
             pluginCatalog: pluginCatalog,
             languageProviderCatalogSource: languageProviderCatalogSource,
+            workspaceLanguageServerPreferences: workspaceLanguageServerPreferences,
             languageProviderCatalogSnapshot: languageProviderCatalogSnapshot,
             debugLaunchConfigurationResolver: DebugLaunchConfigurationResolver(
                 fileStorage: fileStorage,
@@ -545,6 +551,7 @@ final class MacServiceContainer {
             debugBreakpointPersistence: debugBreakpointStore,
             workspaceOperations: workspaceOperations,
             documentLifecycleDecider: RustDocumentLifecycleDecider(core: rustCore),
+            lineEditing: RustLineEditing(core: rustCore),
             javaOperations: javaOperations,
             markdownRenderer: markdownRenderer,
             markdownImageImporter: markdownImageImporter,

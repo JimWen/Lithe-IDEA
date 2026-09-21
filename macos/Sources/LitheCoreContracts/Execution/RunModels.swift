@@ -166,6 +166,8 @@ package struct RunConfiguration: Identifiable, Hashable, Sendable {
     package let execution: RunConfigurationExecution
     package let modulePath: String?
     package let mainClass: String?
+    package let debugAdapter: String?
+    package let disabled: Bool
 
     package var usesCurrentEditorFile: Bool { kind == .currentFile }
 
@@ -175,7 +177,9 @@ package struct RunConfiguration: Identifiable, Hashable, Sendable {
         kind: RunConfigurationKind,
         execution: RunConfigurationExecution? = nil,
         modulePath: String?,
-        mainClass: String?
+        mainClass: String?,
+        debugAdapter: String? = nil,
+        disabled: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -183,6 +187,8 @@ package struct RunConfiguration: Identifiable, Hashable, Sendable {
         self.execution = execution ?? Self.defaultExecution(for: kind)
         self.modulePath = modulePath
         self.mainClass = mainClass
+        self.debugAdapter = debugAdapter
+        self.disabled = disabled
     }
 
     package var systemImage: String { kind.systemImage }

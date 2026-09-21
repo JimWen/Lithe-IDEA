@@ -527,6 +527,42 @@ struct RunEntryPointTests {
         await model.shutdownProjectSession()
     }
 
+    /// Checked configurations defer together and duplicate IDs launch only once.
+    @Test
+    func checkedBatchDefersTogetherAndAttemptsEveryUniqueConfiguration() async throws {
+        let workspace = try GenericServiceWorkspaceFixture()
+        defer { workspace.remove() }
+        let configurations = [ReadyRunConfigurationOperations.selectedServiceA,
+                              ReadyRunConfigurationOperations.serviceEntryPointB]
+        let operations = ReadyRunConfigurationOperations(configurations: configurations)
+        let watchContext = GatedGitWatchContextProvider()
+        watchContext.releaseAll()
+        let model = makeAppModel(
+            workspaceOperations: SequencedWorkspaceOperations.unavailableThenReady(workspace.snapshot),
+            runConfigurationOperations: operations,
+            gitWatchContextProvider: watchContext
+        )
+        defer { model.closeProject() }
+        let ids = configurations.map(\.id)
+        model.openProjectDirectly(workspace.root)
+        await model.performStartRunConfigurations(ids + [ids[0]])
+        #expect(model.pendingRunAction?.kind == .startConfigurations(ids.sorted()))
+        #expect(operations.launchPlanCallCount == 0)
+
+        await model.workspaceFeature.refreshCurrent()
+        #expect(await operations.launchPlanRequested(2), "Every unique checked configuration must resume")
+        let feature = try #require(model.runFeatureIfActive)
+        #expect(await awaitChange(on: feature, timeout: .seconds(5)) {
+            feature.moduleSessions.count == ids.count && feature.moduleSessions.allSatisfy {
+                $0.exitCode == 1 && !$0.output.isEmpty
+            }
+        }, "Both failed launch plans must publish their terminal output")
+        #expect(model.pendingRunAction == nil)
+        #expect(operations.launchPlanCallCount == 2)
+        #expect(Set(feature.moduleSessions.map(\.configurationID)) == Set(ids))
+        await model.shutdownProjectSession()
+    }
+
     /// A batch whose activation/load spans reopening the same path must not
     /// launch into the new generation, even after the old inspection returns.
     @Test

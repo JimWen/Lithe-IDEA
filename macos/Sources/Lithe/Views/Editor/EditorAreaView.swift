@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import LitheGitModule
 import LitheTerminalModule
@@ -45,7 +46,7 @@ struct EditorAreaView: View {
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
-    @State private var hoveredTabID: UUID?
+    @State private var hoveredTabItem: EditorTabItem?
     @State private var tabDragState = EditorTabDragState.idle
     @State private var tabFrameStore = EditorTabFrameStore()
     @State private var tabDragStartFrames: [EditorTabItem: CGRect] = [:]
@@ -105,6 +106,7 @@ struct EditorAreaView: View {
             editorViewportStore.retain(documentIDs: Set(ids))
         }
         .onChange(of: model.editorTabItems) { items in
+            if let hoveredTabItem, !items.contains(hoveredTabItem) { self.hoveredTabItem = nil }
             isTerminalTabBarDropTargeted = false
             if let draggedItem = tabDragState.draggedItem,
                !items.contains(draggedItem) {
@@ -112,6 +114,7 @@ struct EditorAreaView: View {
             }
         }
         .onDisappear {
+            hoveredTabItem = nil
             isTerminalTabBarDropTargeted = false
             finishTabDrag()
         }
@@ -176,6 +179,11 @@ struct EditorAreaView: View {
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
         }
         .contentShape(Rectangle())
+        .background {
+            EditorTabMiddleClickMonitor(hoveredItem: hoveredTabItem) { item in
+                closeEditorTab(item)
+            }
+        }
         .background(
             isTerminalTabBarDropTargeted
                 ? LitheTheme.accent.opacity(0.08)
@@ -318,7 +326,7 @@ struct EditorAreaView: View {
             editorTabContextMenu(for: document, at: index)
         }
         .onHover { isHovering in
-            hoveredTabID = isHovering ? document.id : nil
+            updateHoveredTab(.document(document.id), isHovering: isHovering)
         }
         .background {
             GeometryReader { geometry in
@@ -449,12 +457,12 @@ struct EditorAreaView: View {
             .buttonStyle(LitheTreeRowButtonStyle())
             .lithePointer()
             .foregroundStyle(LitheTheme.secondaryText)
-            .opacity(isActive || hoveredTabID == media.id ? 1 : 0)
-            .allowsHitTesting(isActive || hoveredTabID == media.id)
+            .opacity(isActive || hoveredTabItem == tabItem ? 1 : 0)
+            .allowsHitTesting(isActive || hoveredTabItem == tabItem)
             .padding(.trailing, 8)
         }
         .onHover { isHovering in
-            hoveredTabID = isHovering ? media.id : nil
+            updateHoveredTab(tabItem, isHovering: isHovering)
         }
         .background(
             isActive
@@ -541,8 +549,8 @@ struct EditorAreaView: View {
             .buttonStyle(LitheTreeRowButtonStyle())
             .lithePointer()
             .foregroundStyle(LitheTheme.secondaryText)
-            .opacity(isActive || hoveredTabID == session.id ? 1 : 0)
-            .allowsHitTesting(isActive || hoveredTabID == session.id)
+            .opacity(isActive || hoveredTabItem == tabItem ? 1 : 0)
+            .allowsHitTesting(isActive || hoveredTabItem == tabItem)
             .padding(.trailing, 8)
         }
         .background(
@@ -612,7 +620,7 @@ struct EditorAreaView: View {
             editorTabFrameReader(for: tabItem)
         }
         .onHover { isHovering in
-            hoveredTabID = isHovering ? session.id : nil
+            updateHoveredTab(tabItem, isHovering: isHovering)
         }
         .litheContextMenu {
             [
@@ -654,8 +662,8 @@ struct EditorAreaView: View {
             .buttonStyle(LitheTreeRowButtonStyle())
             .lithePointer()
             .foregroundStyle(LitheTheme.secondaryText)
-            .opacity(isActive || hoveredTabID == document.id ? 1 : 0)
-            .allowsHitTesting(isActive || hoveredTabID == document.id)
+            .opacity(isActive || hoveredTabItem == .document(document.id) ? 1 : 0)
+            .allowsHitTesting(isActive || hoveredTabItem == .document(document.id))
             .padding(.trailing, 8)
         }
         .background(
@@ -787,6 +795,28 @@ struct EditorAreaView: View {
         accessibilityReduceMotion
             ? nil
             : .interactiveSpring(response: 0.22, dampingFraction: 0.86, blendDuration: 0.10)
+    }
+
+    private func updateHoveredTab(_ item: EditorTabItem, isHovering: Bool) {
+        if isHovering {
+            hoveredTabItem = item
+        } else if hoveredTabItem == item {
+            hoveredTabItem = nil
+        }
+    }
+
+    private func closeEditorTab(_ item: EditorTabItem) {
+        switch item {
+        case .document(let documentID):
+            guard let document = model.openDocuments.first(where: { $0.id == documentID }) else { return }
+            model.requestCloseDocument(document)
+        case .terminal(let sessionID):
+            guard let session = model.terminalSessions.first(where: { $0.id == sessionID }) else { return }
+            model.requestCloseTerminalSession(session)
+        case .media(let mediaID):
+            guard let media = model.openMediaDocuments.first(where: { $0.id == mediaID }) else { return }
+            model.closeMediaDocument(media)
+        }
     }
 
     private func editorTabFrameReader(for item: EditorTabItem) -> some View {
@@ -1259,6 +1289,11 @@ struct EditorAreaView: View {
             .overlay(alignment: .top) {
                 FindBarOverlay()
             }
+            .overlay(alignment: .topTrailing) {
+                EditorSoftWrapToggle()
+                    .padding(.top, 8)
+                    .padding(.trailing, 10)
+            }
     }
 
     private func codeEditor(
@@ -1608,6 +1643,93 @@ private struct EditorTabDirtyIndicator: View {
                 .fill(LitheTheme.primaryText)
                 .frame(width: 6, height: 6)
         }
+    }
+}
+
+enum EditorTabMiddleClick {
+    static func shouldCloseTab(eventType: NSEvent.EventType, buttonNumber: Int) -> Bool {
+        eventType == .otherMouseUp && buttonNumber == 2
+    }
+}
+
+private struct EditorTabMiddleClickMonitor: NSViewRepresentable {
+    var hoveredItem: EditorTabItem?
+    var onMiddleClick: (EditorTabItem) -> Void
+
+    func makeNSView(context: Context) -> EditorTabMiddleClickMonitorView {
+        let view = EditorTabMiddleClickMonitorView()
+        view.hoveredItem = hoveredItem
+        view.onMiddleClick = onMiddleClick
+        return view
+    }
+
+    func updateNSView(_ nsView: EditorTabMiddleClickMonitorView, context: Context) {
+        nsView.hoveredItem = hoveredItem
+        nsView.onMiddleClick = onMiddleClick
+    }
+
+    static func dismantleNSView(
+        _ nsView: EditorTabMiddleClickMonitorView,
+        coordinator: ()
+    ) {
+        nsView.stopMonitoring()
+    }
+}
+
+private final class EditorTabMiddleClickMonitorView: NSView {
+    var hoveredItem: EditorTabItem?
+    var onMiddleClick: ((EditorTabItem) -> Void)?
+    private var monitor: Any?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        startMonitoring()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        startMonitoring()
+    }
+
+    deinit {
+        stopMonitoring()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    func stopMonitoring() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+    }
+
+    private func startMonitoring() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .otherMouseUp) { [weak self] event in
+            guard let self else { return event }
+            return self.handle(event)
+        }
+    }
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        guard EditorTabMiddleClick.shouldCloseTab(
+            eventType: event.type,
+            buttonNumber: event.buttonNumber
+        ),
+        let hoveredItem,
+        let window,
+        event.window === window else {
+            return event
+        }
+
+        let location = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(location) else { return event }
+
+        onMiddleClick?(hoveredItem)
+        return nil
     }
 }
 

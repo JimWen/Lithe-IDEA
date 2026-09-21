@@ -7,6 +7,46 @@ import Testing
 
 @MainActor
 struct LanguageIntelligenceModuleTests {
+    @Test(arguments: ["main.py", "main.go", "main.rs"])
+    func sessionStartupChecksCurrentPreferenceForEachWorkspace(fileName: String) throws {
+        let root = URL(fileURLWithPath: "/workspace/disabled-lsp", isDirectory: true)
+        let otherRoot = URL(fileURLWithPath: "/workspace/enabled-lsp", isDirectory: true)
+        let file = root.appendingPathComponent(fileName)
+        let descriptor = try #require(LanguageProviderCatalog.compatibilityFallback.provider(for: file))
+        let session = WorkspaceStateLanguageServerSession()
+        var disabled = false
+        let manager = LanguageToolingSessionManager(
+            runtimes: [WorkspaceStateLanguageProviderRuntime(descriptor: descriptor, session: session)],
+            isLanguageServerEnabled: { providerID, workspaceURL in
+                !(disabled && providerID == descriptor.id && workspaceURL == root)
+            }
+        )
+        defer { manager.stopAllLanguageServers() }
+
+        try manager.startLanguageServer(providerID: descriptor.id, rootURL: root)
+        #expect(session.startCallCount == 1)
+        disabled = true
+        let error = LanguageToolingSessionError.providerDisabled(descriptor.displayName)
+        // Check before reusing an existing session as well as before creating one.
+        #expect(throws: error) {
+            try manager.synchronizeLanguageServer(for: file, text: "", rootURL: root)
+        }
+        manager.stopLanguageServer(providerID: descriptor.id)
+        #expect(throws: error) {
+            try manager.startLanguageServer(
+                providerID: descriptor.id,
+                rootURL: root.appendingPathComponent("child/..", isDirectory: true)
+            )
+        }
+        #expect(session.startCallCount == 1)
+
+        try manager.startLanguageServer(providerID: descriptor.id, rootURL: otherRoot)
+        #expect(session.startCallCount == 2)
+        disabled = false
+        try manager.startLanguageServer(providerID: descriptor.id, rootURL: root)
+        #expect(session.startCallCount == 3)
+    }
+
     @Test
     func disabledModuleDoesNotConstructFactoryOrServiceGraph() async throws {
         let recorder = Recorder()
@@ -946,6 +986,7 @@ private final class WorkspaceStateLanguageServerSession: LanguageServerSession {
     var onServerInfoChange: ((LanguageServerInfo?) -> Void)?
     private(set) var startedFingerprint: String?
     private(set) var stopCallCount = 0
+    private(set) var startCallCount = 0
     var startError: Error?
     private(set) var executedCommands: [LanguageServerCommand] = []
     private var startWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
@@ -962,6 +1003,7 @@ private final class WorkspaceStateLanguageServerSession: LanguageServerSession {
         rootURL _: URL,
         workspaceFingerprint: String?
     ) throws {
+        startCallCount += 1
         if let startError { throw startError }
         startedFingerprint = workspaceFingerprint
         isRunning = true

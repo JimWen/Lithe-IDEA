@@ -19,12 +19,15 @@ final class AppServices {
     let languageProviderCatalogSnapshot: LanguageProviderCatalogSnapshot
     /// Metadata-only provider catalog; providers are activated on demand.
     let languageProviderCatalog: LanguageProviderCatalog
+    let workspaceLanguageServerPreferences: any WorkspaceLanguageServerPreferencesStoring
     let debugLaunchConfigurationResolver: DebugLaunchConfigurationResolver
     let debugPortAvailabilityChecker: any DebugPortAvailabilityChecking
     let javaTestDebugLaunchService: JavaTestDebugLaunchService
     let debugBreakpointPersistence: (any DebugBreakpointPersisting)?
     let workspaceOperations: any WorkspaceOperations
     let documentLifecycleDecider: any DocumentLifecycleDeciding
+    /// Deterministic text transforms applied through the native editing pipeline.
+    let lineEditing: any EditorLineEditing
     let javaOperations: any JavaOperations
     let markdownRenderer: any MarkdownRendering
     let markdownImageImporter: any MarkdownImageImporting
@@ -59,6 +62,7 @@ final class AppServices {
         pluginManager: any PluginManaging,
         pluginCatalog: ValidatedPluginCatalog,
         languageProviderCatalogSource: any LanguageProviderCatalogSource,
+        workspaceLanguageServerPreferences: any WorkspaceLanguageServerPreferencesStoring,
         languageProviderCatalogSnapshot: LanguageProviderCatalogSnapshot? = nil,
         debugLaunchConfigurationResolver: DebugLaunchConfigurationResolver? = nil,
         debugPortAvailabilityChecker: (any DebugPortAvailabilityChecking)? = nil,
@@ -66,6 +70,7 @@ final class AppServices {
         debugBreakpointPersistence: (any DebugBreakpointPersisting)? = nil,
         workspaceOperations: any WorkspaceOperations,
         documentLifecycleDecider: any DocumentLifecycleDeciding,
+        lineEditing: any EditorLineEditing,
         javaOperations: any JavaOperations,
         markdownRenderer: any MarkdownRendering,
         markdownImageImporter: any MarkdownImageImporting,
@@ -97,6 +102,7 @@ final class AppServices {
         self.pluginManager = pluginManager
         self.pluginCatalog = pluginCatalog
         self.languageProviderCatalogSource = languageProviderCatalogSource
+        self.workspaceLanguageServerPreferences = workspaceLanguageServerPreferences
         let resolvedCatalogSnapshot = languageProviderCatalogSnapshot
             ?? languageProviderCatalogSource.load(workspaceURL: nil)
         self.languageProviderCatalogSnapshot = resolvedCatalogSnapshot
@@ -113,6 +119,7 @@ final class AppServices {
         self.debugBreakpointPersistence = debugBreakpointPersistence
         self.workspaceOperations = workspaceOperations
         self.documentLifecycleDecider = documentLifecycleDecider
+        self.lineEditing = lineEditing
         self.javaOperations = javaOperations
         self.markdownRenderer = markdownRenderer
         self.markdownImageImporter = markdownImageImporter

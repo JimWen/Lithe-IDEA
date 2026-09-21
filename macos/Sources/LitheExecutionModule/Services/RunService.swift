@@ -6,6 +6,7 @@ import LitheModuleAPI
 @MainActor
 package final class RunService: ObservableObject {
     @Published package private(set) var configurations: [RunConfiguration] = [.currentFile]
+    package private(set) var defaultConfigurationID: String?
     @Published package var selectedConfigurationID = RunConfiguration.currentFileID {
         didSet {
             guard let projectURL else { return }
@@ -163,6 +164,7 @@ package final class RunService: ObservableObject {
         let loadID = UUID()
         projectLoadID = loadID
         let workspace = projectURL.standardizedFileURL
+        defaultConfigurationID = nil
         isLoadingProject = true
         projectLoadState = .loading(workspace: workspace)
         defer {
@@ -206,6 +208,7 @@ package final class RunService: ObservableObject {
                     preferredConfigurationID: preferredID
                 )
                 configurationDiagnostics += resolution.diagnostics
+                defaultConfigurationID = resolution.defaultConfigurationID
                 apply(
                     resolution.configurations,
                     projectToolchain: resolution.projectToolchain,
@@ -279,6 +282,7 @@ package final class RunService: ObservableObject {
                         ?? resolution.defaultConfigurationID
                 )
                 configurationStatus = .ready
+                defaultConfigurationID = resolution.defaultConfigurationID
                 recoveryAction = .none
                 recoveryPath = nil
                 configurationDiagnostics = operations.inspect(at: projectURL).diagnostics + resolution.diagnostics
@@ -595,6 +599,7 @@ package final class RunService: ObservableObject {
         selectedConfigurationIDsByProject = [:]
         projectFiles = []
         configurations = [.currentFile]
+        defaultConfigurationID = nil
         selectedConfigurationID = RunConfiguration.currentFileID
         optionsByConfigurationID = [:]
         projectToolchain = ProjectToolchainSelection()

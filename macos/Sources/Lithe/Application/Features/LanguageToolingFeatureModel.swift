@@ -9,24 +9,27 @@ import LitheLanguageIntelligenceModule
 final class LanguageToolingFeatureModel: ObservableObject {
     @Published private(set) var catalog: LanguageProviderCatalog
     @Published private(set) var catalogSnapshot: LanguageProviderCatalogSnapshot
-    private(set) var disabledProviderIDs: Set<String> = []
+    @Published private(set) var disabledProviderIDs: Set<String> = []
     private(set) var startupFailures: [String: String] = [:]
     private var providersAwaitingCandidates: Set<String> = []
 
     private let catalogSource: any LanguageProviderCatalogSource
+    private let preferences: any WorkspaceLanguageServerPreferencesStoring
+    private var workspaceURL: URL?
     private var sourceSnapshot: LanguageProviderCatalogSnapshot
     private var sessionsProvider: @MainActor () -> LanguageToolingSessionManager?
     private var documentsProvider: (@MainActor () -> [EditorDocument])?
-    private var workspaceProvider: (@MainActor () -> URL?)?
     private var activateDocument: (@MainActor (EditorDocument) -> Bool)?
     private var notify: (@MainActor (String) -> Void)?
 
     init(
         catalogSource: any LanguageProviderCatalogSource,
         catalogSnapshot: LanguageProviderCatalogSnapshot,
+        preferences: any WorkspaceLanguageServerPreferencesStoring,
         sessionsProvider: @escaping @MainActor () -> LanguageToolingSessionManager?
     ) {
         self.catalogSource = catalogSource
+        self.preferences = preferences
         self.sourceSnapshot = catalogSnapshot
         self.catalogSnapshot = catalogSnapshot
         catalog = catalogSnapshot.catalog
@@ -35,12 +38,10 @@ final class LanguageToolingFeatureModel: ObservableObject {
 
     func configure(
         documentsProvider: @escaping @MainActor () -> [EditorDocument],
-        workspaceProvider: @escaping @MainActor () -> URL?,
         activateDocument: @escaping @MainActor (EditorDocument) -> Bool,
         notify: @escaping @MainActor (String) -> Void
     ) {
         self.documentsProvider = documentsProvider
-        self.workspaceProvider = workspaceProvider
         self.activateDocument = activateDocument
         self.notify = notify
     }
@@ -52,12 +53,16 @@ final class LanguageToolingFeatureModel: ObservableObject {
     }
 
     func resetWorkspaceState() {
-        disabledProviderIDs.removeAll()
         startupFailures.removeAll()
         providersAwaitingCandidates.removeAll()
     }
 
     func reloadCatalog(for workspaceURL: URL?) {
+        self.workspaceURL = workspaceURL?.standardizedFileURL
+        // Restore the workspace choice before document or plugin activation.
+        // Runtime resets must not erase explicit user preferences.
+        disabledProviderIDs = self.workspaceURL.map { preferences.disabledProviderIDs(for: $0) } ?? []
+        resetWorkspaceState()
         let snapshot = catalogSource.load(workspaceURL: workspaceURL)
         sourceSnapshot = snapshot
         sessionsProvider()?.updateCatalog(snapshot.catalog)
@@ -79,11 +84,16 @@ final class LanguageToolingFeatureModel: ObservableObject {
     }
 
     func setEnabled(_ enabled: Bool, providerID: String) {
+        guard let workspaceURL else { return }
         if enabled {
             disabledProviderIDs.remove(providerID)
-            synchronizeOpenDocuments(providerID: providerID)
         } else {
             disabledProviderIDs.insert(providerID)
+        }
+        preferences.saveDisabledProviderIDs(disabledProviderIDs, for: workspaceURL)
+        if enabled {
+            synchronizeOpenDocuments(providerID: providerID)
+        } else {
             providersAwaitingCandidates.remove(providerID)
             sessionsProvider()?.recordLanguageServerLog(
                 providerID: providerID,
@@ -96,14 +106,13 @@ final class LanguageToolingFeatureModel: ObservableObject {
     }
 
     func toolConfigurationDidChange(providerID: String) {
-        disabledProviderIDs.remove(providerID)
         startupFailures[providerID] = nil
         sessionsProvider()?.stopLanguageServer(providerID: providerID)
         sessionsProvider()?.recordLanguageServerLog(
             providerID: providerID,
             level: .info,
             message: "Language server tool configuration changed",
-            detail: "Workspace disable state cleared"
+            detail: "Workspace language server preference preserved"
         )
     }
 
