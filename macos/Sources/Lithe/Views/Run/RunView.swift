@@ -718,13 +718,8 @@ struct RunView: View {
     private func runCheckedConfigurations() {
         let checked = runnableConfigurations.filter { browser.checkedIDs.contains($0.id) }
         guard !checked.isEmpty else { return }
-        if let configuration = checked.first(where: { candidate in
-            !feature.moduleSessions.contains { $0.id == candidate.id && $0.isRunning }
-        }) ?? checked.first {
-            selectedSessionID = configuration.id
-            feature.select(configuration)
-        }
-        contentTab = .console
+        // Checked targets own the launch set; the inspected output and tab
+        // remain owned by the user's row and content-tab selection.
         model.startRunConfigurations(checked.map(\.id))
     }
 
