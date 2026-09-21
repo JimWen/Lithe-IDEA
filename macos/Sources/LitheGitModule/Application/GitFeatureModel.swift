@@ -811,9 +811,11 @@ package final class GitFeatureModel: ObservableObject {
     package func loadLineChanges(for fileURL: URL) async {
         let normalizedURL = fileURL.standardizedFileURL
         guard !loadingLineChangeURLs.contains(normalizedURL) else { return }
+        // New files have no committed line baseline. Keep their complete diff
+        // in Changes without marking every line in the editor as an addition.
         guard let change = gitChanges.first(where: {
             $0.url.standardizedFileURL == normalizedURL
-        }) else {
+        }), change.kind != .added else {
             gitLineChangeMarkers[normalizedURL] = []
             lineChangeHunks[normalizedURL] = [:]
             return

@@ -292,6 +292,93 @@ struct GitModuleTests {
         ])
     }
 
+    @Test(arguments: ["??", "A ", "AM"])
+    func newFileGutterOmitsWholeFileAdditionsWithoutHidingTheFileDiff(status: String) async {
+        let (feature, state) = makeLineChangeFeature(status: status)
+        defer { feature.reset() }
+        await feature.refreshGit()
+
+        await feature.loadLineChanges(for: state.change.url)
+
+        #expect(feature.gitLineChangeMarkers[state.change.url] == [])
+        #expect(state.diffReads.isEmpty)
+
+        // The Changes tool window must still display the entire new file.
+        await feature.selectChange(state.change)
+        #expect(feature.diffRows.map(\.rightText) == ["first added line", "second added line"])
+        #expect(feature.diffRows.allSatisfy { $0.kind == .addition })
+        #expect(feature.diffHunks.map(\.id) == ["h1"])
+        #expect(feature.selectedDiffPatch == "new file patch")
+        #expect(state.diffReads.count == 1)
+    }
+
+    @Test(arguments: [" M", "M "])
+    func trackedFilesRetainStagedAndUnstagedLineMarkers(status: String) async {
+        let (feature, state) = makeLineChangeFeature(status: status)
+        defer { feature.reset() }
+        await feature.refreshGit()
+
+        await feature.loadLineChanges(for: state.change.url)
+
+        #expect(feature.gitLineChangeMarkers[state.change.url] == [
+            GitLineChangeMarker(line: 0, kind: .added, hunkID: "h1"),
+            GitLineChangeMarker(line: 1, kind: .added, hunkID: "h1")
+        ])
+        #expect(state.diffReads == [.init(staged: status == "M ", untracked: false)])
+    }
+
+    @Test(arguments: ["??", "A ", "AM"])
+    func aFileBecomingAddedCannotRestoreOldGutterMarkersOrHunkActions(status: String) async throws {
+        let (feature, state) = makeLineChangeFeature(status: " M")
+        defer { feature.reset() }
+        await feature.refreshGit()
+        await feature.loadLineChanges(for: state.change.url)
+        let oldMarker = try #require(feature.gitLineChangeMarkers[state.change.url]?.first)
+        state.change = Self.lineChange(status: status)
+        await feature.refreshGit()
+
+        await feature.loadLineChanges(for: state.change.url)
+        #expect(feature.gitLineChangeMarkers[state.change.url] == [])
+        #expect(state.diffReads.count == 1)
+
+        // A retained gutter menu must not apply a hunk from the earlier tracked state.
+        await feature.stageLineChange(oldMarker, for: state.change.url)
+        await feature.unstageLineChange(oldMarker, for: state.change.url)
+        feature.requestDiscardLineChange(oldMarker, for: state.change.url)
+        #expect(state.patchModes.isEmpty)
+        #expect(feature.pendingDiscardHunk == nil)
+    }
+
+    private static func lineChange(status: String) -> GitChange {
+        let flags = Array(status)
+        return GitChange(repositoryRoot: URL(fileURLWithPath: "/workspace"), path: "main.rs",
+                         originalPath: nil, indexStatus: flags[0], workTreeStatus: flags[1])
+    }
+
+    private func makeLineChangeFeature(status: String) -> (GitFeatureModel, GitLineChangeTestState) {
+        let state = GitLineChangeTestState(change: Self.lineChange(status: status))
+        let root = state.change.repositoryRoot
+        let document = DiffDocument(patch: "new file patch", rows: [
+            DiffRow(oldLine: nil, newLine: 1, left: nil, right: "first added line", kind: .addition, hunkID: "h1"),
+            DiffRow(oldLine: nil, newLine: 2, left: nil, right: "second added line", kind: .addition, hunkID: "h1")
+        ], hunks: [DiffHunk(id: "h1", header: "@@ -0,0 +1,2 @@", patch: "new file patch")])
+        let feature = GitFeatureModel(service: GitService(operations: TestGitOperations(
+            diffDocumentHandler: { _, staged, untracked in
+                state.recordDiffRead(staged: staged, untracked: untracked)
+                return document
+            },
+            applyPatchHandler: { _, _, mode in
+                state.recordPatch(mode)
+                return GitProcessResult(output: "", exitCode: 0)
+            }
+        )), snapshotProvider: { _ in
+            GitSnapshot(repositoryRoot: root, branch: "main", changes: [state.change])
+        }, repositoryRootsProvider: { _ in [root] })
+        feature.configure(workspaceURLProvider: { root }, isGitLogVisibleProvider: { false },
+                          notify: { _ in }, onStateRefreshed: {})
+        return (feature, state)
+    }
+
     @Test
     func gitLogQueryParsesStructuredFiltersAndQuotedValues() {
         let query = GitLogQuery.parse(
@@ -3281,6 +3368,31 @@ private final class GitGraphHistoryProbe: @unchecked Sendable {
     }
 }
 
+private final class GitLineChangeTestState: @unchecked Sendable {
+    struct DiffRead: Equatable {
+        let staged: Bool
+        let untracked: Bool
+    }
+
+    private let lock = NSLock()
+    private var currentChange: GitChange
+    private var reads: [DiffRead] = []
+    private var patches: [String] = []
+
+    init(change: GitChange) { currentChange = change }
+
+    var change: GitChange {
+        get { lock.withLock { currentChange } }
+        set { lock.withLock { currentChange = newValue } }
+    }
+    var diffReads: [DiffRead] { lock.withLock { reads } }
+    var patchModes: [String] { lock.withLock { patches } }
+    func recordDiffRead(staged: Bool, untracked: Bool) {
+        lock.withLock { reads.append(DiffRead(staged: staged, untracked: untracked)) }
+    }
+    func recordPatch(_ mode: String) { lock.withLock { patches.append(mode) } }
+}
+
 private struct TestGitOperations: GitOperations {
     private let snapshotValue: GitSnapshot?
     private let snapshotsByRoot: [String: GitSnapshot]
@@ -3289,6 +3401,7 @@ private struct TestGitOperations: GitOperations {
     private let typedComparisonValue: GitBranchComparison?
     private let filesValue: [GitCommitFile]?
     private let untrackedDiffDocumentValue: DiffDocument?
+    private let diffDocumentHandler: (@Sendable ([String], Bool, Bool) -> DiffDocument?)?
     private let comparisonDiffDocumentValue: DiffDocument?
     private let typedComparisonDiffDocumentValue: DiffDocument?
     private let historyValue: GitHistorySnapshot?
@@ -3333,6 +3446,7 @@ private struct TestGitOperations: GitOperations {
         historyController: GitHistoryLoadController? = nil,
         filesValue: [GitCommitFile]? = nil,
         untrackedDiffDocumentValue: DiffDocument? = nil,
+        diffDocumentHandler: (@Sendable ([String], Bool, Bool) -> DiffDocument?)? = nil,
         comparisonDiffDocumentValue: DiffDocument? = nil,
         typedComparisonDiffDocumentValue: DiffDocument? = nil,
         snapshotGate: GitModuleTestGate? = nil,
@@ -3370,6 +3484,7 @@ private struct TestGitOperations: GitOperations {
         self.historyController = historyController
         self.filesValue = filesValue
         self.untrackedDiffDocumentValue = untrackedDiffDocumentValue
+        self.diffDocumentHandler = diffDocumentHandler
         self.comparisonDiffDocumentValue = comparisonDiffDocumentValue
         self.typedComparisonDiffDocumentValue = typedComparisonDiffDocumentValue
         self.snapshotGate = snapshotGate
@@ -3423,7 +3538,8 @@ private struct TestGitOperations: GitOperations {
     func watchContext(at rootURL: URL) -> GitWatchContext? { nil }
     func worktrees(at rootURL: URL) -> [GitWorktree]? { nil }
     func diffDocument(at rootURL: URL, pathspecs: [String], staged: Bool, untracked: Bool, whitespace: GitDiffWhitespaceMode) -> DiffDocument? {
-        untracked ? untrackedDiffDocumentValue : nil
+        if let diffDocumentHandler { return diffDocumentHandler(pathspecs, staged, untracked) }
+        return untracked ? untrackedDiffDocumentValue : nil
     }
     func diffPatch(at rootURL: URL, pathspecs: [String], staged: Bool, untracked: Bool, whitespace: GitDiffWhitespaceMode) -> String? { nil }
     func commitDiffDocument(at rootURL: URL, commit: String, pathspecs: [String], whitespace: GitDiffWhitespaceMode) -> DiffDocument? { nil }

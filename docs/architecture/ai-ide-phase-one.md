@@ -230,3 +230,21 @@ LITHE_RUN_LSP_SYNC_BRIDGE_INTEGRATION=1 \
 本轮测试启动的 Lithe、数据库助手与语言服务已退出，自动保存恢复默认，输入法恢复为任务前的选择；清理记录为 `final/cleanup.json`。未推送、打 tag 或发布远端 release。
 
 本轮验证针对 macOS ARM64 和当前 Swift 6.2.4 工具链，没有新增 x86_64、Windows 或未来 Xcode 版本的实机通过声明。Python/Debug、其他 LSP 语义操作、跨窗口归属和异常时序使用对应自动化覆盖；没有将它们全部表述为本轮逐项手工实测。Compose 只验证检测、命名与持久化，没有启动 Docker 服务。HTML 显式绝对 `file:` 资源仍受 WebKit 自身权限约束；相对文档资源已有签名应用探针与安装版验证。
+
+## 11. 原生 Git 装订线与项目切换设置窗口复修
+
+2026-09-22：用户反馈的装订线问题指绿色 Git 竖线，Go 与 Rust 均适用。初次提交 `4f0a71b1` 中无关的装订线收窄调整已撤回，恢复既有列宽；其中设置窗口修复继续保留。用户截图对应的 Rust 子仓库尚无首次提交，文件为 staged-added；原生编辑器曾把整份新文件 diff 的所有新增行都绘成分段绿条。
+
+在同一个隔离示例仓库中实际打开 GoLand 2025.2.4 与 RustRover 2026.2.1，确认两者均采用以下效果：尚未首次提交的新文件以文件名颜色表示新增，不绘制逐行 Git 标记；建立首次提交后插入连续两行，则只在两行旁绘制一段连续绿条。截图与 Git 状态记录位于 `.artifacts/ui-gutter-settings-0922/reference-comparison.json` 及同目录四张 `goland-*` / `rustrover-*` 截图。
+
+修复限定在现有原生编辑器和 Git feature：
+
+- `GitFeatureModel.loadLineChanges` 对 added 文件清空行标记和 hunk 缓存，跳过装订线 diff 读取；Changes 中的完整文件 diff、暂存与提交工作流保持原有路径。
+- 相邻、同类型、同 hunk 的新增/修改行绘为连续色条，覆盖逻辑行的全部软换行片段；未修改行与隐藏行不连接，删除标记保持首个显示行上的短标记。
+- `ProjectSettingsWindow` 不再因隐藏设置视图在切换项目时重建而主动显示。显式设置请求、延迟绑定窗口、关闭后重开仍可用。`4f0a71b1` 安装版已完成 8 次项目切换、红色关闭设置窗口后再切换 8 次，以及显式重开设置的实机检查，证据为 `ui/results.json`；该结果不替代下一安装版的最终复验。
+
+已执行 Swift 6.2.4 真实 Rust Core 链接的失败回归与修复验证。新增文件覆盖 `??`、`A `、`AM`、已跟踪 staged/unstaged、完整 diff 与旧 hunk 操作失效；AppKit 像素回归覆盖连续新增、软换行、清除标记及删除锚点。定向 182 项测试通过，报告为 `.artifacts/test-stability/git-gutter-affected-final.html` 和对应 JUnit；测试稳定性静态检查、服务边界和 whitespace 检查通过。
+
+完整 1523 项测试中 1522 项通过，唯一失败为既有 `nativeRollbackUsesWrittenIdentityAndPreservesExternalWriter`。当时桌面已锁定，独立探针确认普通临时文件可读，使用 `.completeFileProtectionUnlessOpen` 写入并关闭的临时文件读取报 EPERM，与失败路径一致；记录为 `.artifacts/ui-gutter-settings-0922/file-protection-locked.log`。没有为让测试通过而修改文件保护行为。完整报告为 `.artifacts/test-stability/git-gutter-final-full.html`：14 个既有性能警告，无硬预算超限；本轮新增 Git 策略测试各 1 ms、绘图回归 64 ms，两个设置窗口回归 242 / 131 ms。
+
+当前剩余验收：解锁后复跑文件回滚和完整测试，并对重新构建的安装版执行 Go/Rust 新文件、局部连续新增、变更清除及多项目切换界面操作。上述项目完成前，本节不声明最终安装版整体实机验收通过。

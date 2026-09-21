@@ -507,16 +507,10 @@ struct EditorGutterLayout: Equatable {
     /// column as one forgiving interaction target. The marker is still drawn
     /// in `breakpointRange`, but users do not need to hit that narrow strip.
     var breakpointInteractionRange: Range<CGFloat> {
-        breakpointRange.isEmpty ? 0..<0 : lineNumberRange.lowerBound..<breakpointRange.upperBound
+        isSearchPreview ? 0..<0 : lineNumberRange.lowerBound..<breakpointRange.upperBound
     }
 
-    init(
-        lineNumberTextWidth: CGFloat,
-        isSearchPreview: Bool = false,
-        showsBreakpoints: Bool = true,
-        showsNavigationMarkers: Bool = true,
-        showsFolds: Bool = true
-    ) {
+    init(lineNumberTextWidth: CGFloat, isSearchPreview: Bool = false) {
         self.isSearchPreview = isSearchPreview
         let padding = isSearchPreview ? Self.previewSpacing : Self.lineNumberTrailingPadding
         let leading = isSearchPreview ? Self.previewSpacing : 0
@@ -525,9 +519,9 @@ struct EditorGutterLayout: Equatable {
             ceil(lineNumberTextWidth) + padding
         )
         lineNumberRange = leading..<(leading + requiredLineNumberWidth)
-        breakpointRange = lineNumberRange.upperBound..<(lineNumberRange.upperBound + (!isSearchPreview && showsBreakpoints ? 14 : 0))
-        implementationRange = breakpointRange.upperBound..<(breakpointRange.upperBound + (!isSearchPreview && showsNavigationMarkers ? 20 : 0))
-        foldRange = implementationRange.upperBound..<(implementationRange.upperBound + (isSearchPreview ? Self.previewSpacing : (showsFolds ? 15 : 0)))
+        breakpointRange = lineNumberRange.upperBound..<(lineNumberRange.upperBound + (isSearchPreview ? 0 : 14))
+        implementationRange = breakpointRange.upperBound..<(breakpointRange.upperBound + (isSearchPreview ? 0 : 20))
+        foldRange = implementationRange.upperBound..<(implementationRange.upperBound + (isSearchPreview ? Self.previewSpacing : 15))
         gitChangeRange = foldRange.upperBound..<(foldRange.upperBound + (isSearchPreview ? 0 : 3))
         width = gitChangeRange.upperBound
     }
@@ -1100,7 +1094,6 @@ struct CodeEditorView: NSViewRepresentable {
         // `nil` forces the first editor refresh to install gutter callbacks,
         // even when the document starts with no breakpoints.
         private var appliedDebugBreakpointStates: [Int: EditorDebugBreakpointState]?
-        private var appliedSupportsDebugBreakpoints: Bool?
         private var appliedDebugBreakpointMessages: [Int: String] = [:]
         private var appliedRunToCursorEnabled = false
         private var appliedBreakpointsMuted = false
@@ -2054,12 +2047,10 @@ struct CodeEditorView: NSViewRepresentable {
             let isRunToCursorEnabled = model.genericDebugFeatureIfActive?.state == .paused
                 && model.genericDebugFeatureIfActive?.capabilities.supportsGotoTargetsRequest == true
             let areBreakpointsMuted = model.genericDebugFeatureIfActive?.areBreakpointsMuted ?? false
-            let supportsDebugBreakpoints = url.pathExtension.lowercased() == "java"
             if appliedBlameVisible != isBlameVisible
                 || appliedBlameLines != blameLines
                 || appliedDebugBreakpointLines != debugBreakpointLines
                 || appliedDebugBreakpointStates != debugBreakpointStates
-                || appliedSupportsDebugBreakpoints != supportsDebugBreakpoints
                 || appliedDebugBreakpointMessages != debugBreakpointMessages
                 || appliedRunToCursorEnabled != isRunToCursorEnabled
                 || appliedBreakpointsMuted != areBreakpointsMuted
@@ -2068,7 +2059,6 @@ struct CodeEditorView: NSViewRepresentable {
                 appliedBlameLines = blameLines
                 appliedDebugBreakpointLines = debugBreakpointLines
                 appliedDebugBreakpointStates = debugBreakpointStates
-                appliedSupportsDebugBreakpoints = supportsDebugBreakpoints
                 appliedDebugBreakpointMessages = debugBreakpointMessages
                 appliedRunToCursorEnabled = isRunToCursorEnabled
                 appliedBreakpointsMuted = areBreakpointsMuted
@@ -2081,15 +2071,15 @@ struct CodeEditorView: NSViewRepresentable {
                 }
                 gutter?.updateDebugBreakpointLines(
                     debugBreakpointStates,
-                    supportsBreakpoints: supportsDebugBreakpoints,
                     onToggle: { [weak model] line in
                         model?.toggleDebugBreakpoint(
                             fileURL: url,
                             line: EditorDebugBreakpointLocation.productLine(forEditorLine: line)
                         )
                     },
-                    canAdd: { [weak textView] line in
-                        guard supportsDebugBreakpoints, let textView else { return false }
+                    canAdd: { [weak textView, fileExtension] line in
+                        guard fileExtension.lowercased() == "java",
+                              let textView else { return false }
                         return DebugBreakpointLocationValidator.isExecutableJavaLine(
                             source: textView.string,
                             line: EditorDebugBreakpointLocation.productLine(forEditorLine: line)
@@ -4557,7 +4547,6 @@ final class LineNumberGutterView: NSView {
     private var onSelectImplementation: ((JavaImplementationMarker) -> Void)?
     private var debugBreakpointLines: Set<Int> = []
     private var debugBreakpointStatesByLine: [Int: EditorDebugBreakpointState] = [:]
-    private var supportsDebugBreakpoints = false
     private var debugBreakpointMessagesByLine: [Int: String] = [:]
     private var currentExecutionLine: Int?
     private var onToggleDebugBreakpoint: ((Int) -> Void)?
@@ -4586,10 +4575,6 @@ final class LineNumberGutterView: NSView {
 
     private var editorGutterOriginX: CGFloat {
         isBlameVisible ? EditorLayoutMetrics.blameMetadataWidth : 0
-    }
-
-    private var showsBreakpointColumn: Bool {
-        supportsDebugBreakpoints || !debugBreakpointStatesByLine.isEmpty || currentExecutionLine != nil
     }
 
     override var isFlipped: Bool { true }
@@ -4641,15 +4626,7 @@ final class LineNumberGutterView: NSView {
         let textWidth = (String(maximumLineNumber) as NSString).size(
             withAttributes: [.font: lineNumberFont]
         ).width
-        // Keep unavailable language-specific columns out of the native gutter.
-        // Rendering and hit testing must share the same compact layout.
-        let nextLayout = EditorGutterLayout(
-            lineNumberTextWidth: textWidth,
-            isSearchPreview: isSearchPreview,
-            showsBreakpoints: showsBreakpointColumn,
-            showsNavigationMarkers: !runnableMarkers.isEmpty || !implementationMarkers.isEmpty,
-            showsFolds: !foldRegions.isEmpty
-        )
+        let nextLayout = EditorGutterLayout(lineNumberTextWidth: textWidth, isSearchPreview: isSearchPreview)
         guard gutterLayout != nextLayout else { return }
         gutterLayout = nextLayout
         onStandardWidthChange?(nextLayout.width)
@@ -4712,11 +4689,9 @@ final class LineNumberGutterView: NSView {
         collapsedIDs: Set<String>,
         onToggle: @escaping (JavaFoldRegion) -> Void
     ) {
-        let columnsChanged = foldRegions.isEmpty != regions.isEmpty
         foldRegions = regions
         collapsedFoldIDs = collapsedIDs
         onToggleFold = onToggle
-        if columnsChanged { refreshLineNumberLayout() }
         foldIndicatorOpacities = foldIndicatorOpacities.filter { opacity in
             regions.contains { $0.id == opacity.key }
         }
@@ -4733,10 +4708,8 @@ final class LineNumberGutterView: NSView {
         _ markers: [JavaImplementationMarker],
         onSelect: @escaping (JavaImplementationMarker) -> Void
     ) {
-        let columnsChanged = implementationMarkers.isEmpty != markers.isEmpty
         implementationMarkers = markers
         onSelectImplementation = onSelect
-        if columnsChanged { refreshLineNumberLayout() }
         needsDisplay = true
     }
 
@@ -4746,18 +4719,15 @@ final class LineNumberGutterView: NSView {
         onDebug: @escaping (DocumentRunnable) -> Void,
         onModify: @escaping (DocumentRunnable) -> Void
     ) {
-        let columnsChanged = runnableMarkers.isEmpty != markers.isEmpty
         runnableMarkers = markers
         onRunRunnable = onRun
         onDebugRunnable = onDebug
         onModifyRunnable = onModify
-        if columnsChanged { refreshLineNumberLayout() }
         needsDisplay = true
     }
 
     func updateDebugBreakpointLines(
         _ states: [Int: EditorDebugBreakpointState],
-        supportsBreakpoints: Bool = true,
         onToggle: @escaping (Int) -> Void,
         canAdd: ((Int) -> Bool)? = nil,
         onEdit: ((Int) -> Void)? = nil,
@@ -4768,8 +4738,6 @@ final class LineNumberGutterView: NSView {
         isRunToCursorEnabled: Bool = false,
         areBreakpointsMuted: Bool = false
     ) {
-        let showedBreakpointColumn = showsBreakpointColumn
-        supportsDebugBreakpoints = supportsBreakpoints
         debugBreakpointLines = Set(states.keys.map { max(0, $0 - 1) })
         debugBreakpointStatesByLine = Dictionary(
             uniqueKeysWithValues: states.map { (max(0, $0.key - 1), $0.value) }
@@ -4783,14 +4751,11 @@ final class LineNumberGutterView: NSView {
         self.onRunToCursor = onRunToCursor
         self.isRunToCursorEnabled = isRunToCursorEnabled
         self.areBreakpointsMuted = areBreakpointsMuted
-        if showedBreakpointColumn != showsBreakpointColumn { refreshLineNumberLayout() }
         needsDisplay = true
     }
 
     func updateCurrentExecutionLine(_ line: Int?) {
-        let showedBreakpointColumn = showsBreakpointColumn
         currentExecutionLine = line.map { max(0, $0 - 1) }
-        if showedBreakpointColumn != showsBreakpointColumn { refreshLineNumberLayout() }
         needsDisplay = true
     }
 
@@ -5066,7 +5031,16 @@ final class LineNumberGutterView: NSView {
                     drawCurrentExecutionLine(y: y, height: lineRect.height)
                 }
                 if let marker = gitLineChangeMarkersByLine[lineNumber - 1] {
-                    drawGitLineChange(marker, y: y, height: lineRect.height)
+                    // A changed logical line can occupy several visual fragments.
+                    let lastLineRect = layoutManager.lineFragmentRect(
+                        forGlyphAt: min(max(0, NSMaxRange(lineGlyphRange) - 1), layoutManager.numberOfGlyphs - 1),
+                        effectiveRange: nil
+                    )
+                    drawGitLineChange(
+                        marker, y: y,
+                        height: marker.kind == .deleted ? lineRect.height : lastLineRect.maxY - lineRect.minY,
+                        hiddenLines: hiddenLines
+                    )
                 }
             }
             drawLineNumber(lineNumber, y: y, height: lineRect.height)
@@ -5337,7 +5311,8 @@ final class LineNumberGutterView: NSView {
     private func drawGitLineChange(
         _ marker: GitLineChangeMarker,
         y: CGFloat,
-        height: CGFloat
+        height: CGFloat,
+        hiddenLines: Set<Int>
     ) {
         let color: NSColor
         switch marker.kind {
@@ -5346,17 +5321,36 @@ final class LineNumberGutterView: NSView {
         case .deleted: color = palette.gitDeleted
         }
         color.setFill()
-        let markerHeight = marker.kind == .deleted ? 3 : max(4, height - 2)
-        NSBezierPath(
-            roundedRect: NSRect(
-                x: editorGutterOriginX + gutterLayout.gitChangeRange.lowerBound,
-                y: y + max(1, (height - markerHeight) / 2),
-                width: EditorGutterLayout.width(of: gutterLayout.gitChangeRange),
-                height: markerHeight
-            ),
-            xRadius: 1.5,
-            yRadius: 1.5
-        ).fill()
+        let joinsPrevious = joinsGitLineChange(marker, at: marker.line - 1, hiddenLines: hiddenLines)
+        let joinsNext = joinsGitLineChange(marker, at: marker.line + 1, hiddenLines: hiddenLines)
+        let topInset: CGFloat = joinsPrevious ? 0 : 1
+        let bottomInset: CGFloat = joinsNext ? 0 : 1
+        let markerHeight = marker.kind == .deleted ? 3 : max(4, height - topInset - bottomInset)
+        let rect = NSRect(
+            x: editorGutterOriginX + gutterLayout.gitChangeRange.lowerBound,
+            y: marker.kind == .deleted ? y + max(1, (height - markerHeight) / 2) : y + topInset,
+            width: EditorGutterLayout.width(of: gutterLayout.gitChangeRange),
+            height: markerHeight
+        )
+        let radius: CGFloat = 1.5
+        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        // Round only the ends of a change block; adjacent lines share a solid edge.
+        if joinsPrevious {
+            NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: radius).fill()
+        }
+        if joinsNext {
+            NSRect(x: rect.minX, y: rect.maxY - radius, width: rect.width, height: radius).fill()
+        }
+    }
+
+    private func joinsGitLineChange(
+        _ marker: GitLineChangeMarker,
+        at line: Int,
+        hiddenLines: Set<Int>
+    ) -> Bool {
+        guard marker.kind != .deleted, !hiddenLines.contains(line),
+              let adjacent = gitLineChangeMarkersByLine[line] else { return false }
+        return adjacent.kind == marker.kind && adjacent.hunkID == marker.hunkID
     }
 
     private var centeredParagraphStyle: NSParagraphStyle {
