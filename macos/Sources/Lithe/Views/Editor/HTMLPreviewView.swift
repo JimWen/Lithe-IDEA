@@ -2,6 +2,17 @@ import Combine
 import SwiftUI
 
 struct HTMLPreviewView: View {
+    let document: EditorDocument
+
+    var body: some View {
+        // A document switch replaces both the content subscription and WebKit
+        // owner together. Split sizing remains in the surrounding container.
+        HTMLPreviewDocumentView(document: document)
+            .id(document.id)
+    }
+}
+
+private struct HTMLPreviewDocumentView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var document: EditorDocument
     @StateObject private var content: HTMLPreviewContent
@@ -42,7 +53,6 @@ struct HTMLPreviewView: View {
         }
         .background(LitheTheme.editor)
         .onAppear { content.observe(document) }
-        .onChange(of: document.id) { _ in content.observe(document) }
         .onChange(of: document.url) { _ in content.observe(document) }
         .onDisappear { content.stopObserving() }
     }
