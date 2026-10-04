@@ -73,17 +73,15 @@ const DEFAULT_REPOSITORY_SCAN_MAX_DEPTH: usize = usize::MAX;
 static TEMPORARY_INDEX_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static AUTO_STASH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-const REPOSITORY_SCAN_SKIP_DIRS: &[&str] = &[".git"];
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// Request to discover Git repositories belonging to one opened workspace.
 pub struct WorkspaceRepositoriesRequest {
     pub root: String,
-    /// Optional traversal budget; defaults to all directories below the workspace.
+    /// Optional traversal budget; defaults to all eligible directories below the workspace.
     #[serde(default = "default_repository_scan_max_directories")]
     pub max_directories: usize,
-    /// Optional traversal depth; defaults to the complete workspace tree.
+    /// Optional traversal depth; defaults to the complete eligible workspace tree.
     #[serde(default = "default_repository_scan_max_depth")]
     pub max_depth: usize,
 }
@@ -789,10 +787,7 @@ pub fn workspace_repositories(
                 discovered_repositories.insert(canonical_directory.clone());
                 continue;
             }
-            if REPOSITORY_SCAN_SKIP_DIRS
-                .iter()
-                .any(|skipped| name.eq_ignore_ascii_case(skipped))
-            {
+            if !repository_scan_directory_is_visible(&name) {
                 continue;
             }
             let file_type = entry.file_type().map_err(repository_scan_error)?;
@@ -831,6 +826,20 @@ pub fn workspace_repositories(
             })
             .collect(),
     })
+}
+
+fn repository_scan_directory_is_visible(name: &str) -> bool {
+    // These intentional checkout containers are hidden in the file tree but
+    // remain discoverable in Git. Apply exclusions to their children as usual.
+    if name.eq_ignore_ascii_case(".worktree") || name.eq_ignore_ascii_case(".worktrees") {
+        return true;
+    }
+    // Filter descendants, never the explicitly opened root or its containing
+    // repository. Git ignore rules govern tracked files, not repository ownership.
+    !name.starts_with('.')
+        && !crate::project::BUILT_IN_HIDDEN_DIRECTORIES
+            .iter()
+            .any(|hidden| name.eq_ignore_ascii_case(hidden))
 }
 
 /// Executes an argument-based Git command after validating the workspace root.

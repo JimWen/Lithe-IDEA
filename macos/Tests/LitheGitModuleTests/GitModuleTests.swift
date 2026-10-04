@@ -7,6 +7,141 @@ import Testing
 
 @MainActor
 struct GitModuleTests {
+    @Test
+    func repositorySwitchClearsAnInFlightCommitDiff() async throws {
+        let roots = [URL(fileURLWithPath: "/workspace/first"), URL(fileURLWithPath: "/workspace/second")]
+        let started = GitModuleTestGate()
+        let release = GitModuleTestGate()
+        let feature = GitFeatureModel(service: GitService(operations: TestGitOperations(
+            snapshotsByRoot: Dictionary(uniqueKeysWithValues: roots.map {
+                ($0.path, GitSnapshot(repositoryRoot: $0, branch: "main", changes: []))
+            }), repositoryRoots: roots,
+            commitDiffDocumentHandler: {
+                started.open()
+                guard release.waitSynchronously() else {
+                    Issue.record("Commit diff fixture was not released")
+                    return nil
+                }
+                return DiffDocument(rows: [], hunks: [])
+            }
+        )))
+        feature.configure(workspaceURLProvider: { roots[0].deletingLastPathComponent() },
+            isGitLogVisibleProvider: { false }, notify: { _ in }, onStateRefreshed: {})
+        await feature.refreshGit()
+        feature.previewGitCommitSelection(makeTestCommit(hash: "old-commit", subject: "Old"))
+        let task = Task { await feature.showGitCommitDiff(for: GitCommitFile(status: "M", path: "old.txt")) }
+        defer { release.open(); task.cancel(); feature.reset() }
+        try #require(await started.waitUntilOpen())
+        #expect(feature.isLoadingDiff)
+        await feature.selectRepository(roots[1])
+        release.open()
+        try #require(await waitForGitTaskCompletion(task))
+        #expect(feature.selectedGitCommitDiffContext == nil)
+        #expect(!feature.isLoadingDiff)
+        #expect(feature.diffRows.isEmpty)
+        #expect(feature.diffHunks.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func repositorySwitchUsesOnlyTheNewRepositoryReference(selectSpecificReference: Bool) async {
+        let workspace = URL(fileURLWithPath: "/workspace")
+        let first = workspace.appendingPathComponent("first")
+        let second = workspace.appendingPathComponent("second")
+        let probe = GitRepositoryHistoryProbe()
+        let feature = GitFeatureModel(service: GitService(operations: TestGitOperations(
+            snapshotsByRoot: [
+                first.path: GitSnapshot(repositoryRoot: first, branch: "first-only", changes: []),
+                second.path: GitSnapshot(repositoryRoot: second, branch: "second-only", changes: [])
+            ], repositoryRoots: [first, second], repositoryHistoryProbe: probe
+        )))
+        defer { feature.reset() }
+        feature.configure(workspaceURLProvider: { workspace }, isGitLogVisibleProvider: { true },
+            notify: { _ in }, onStateRefreshed: {})
+        await feature.refreshGit()
+        await feature.selectGitReference(probe.reference(for: first))
+        #expect(feature.selectedGitCommit?.hash == "first-commit")
+        let countBeforeSwitch = probe.requests.count
+        let nextReference = selectSpecificReference ? probe.reference(for: second) : nil
+
+        await feature.selectRepository(second, reference: nextReference)
+
+        let requests = Array(probe.requests.dropFirst(countBeforeSwitch))
+        #expect(requests.count == 2) // One visible page plus the independent graph.
+        #expect(requests.allSatisfy { $0.root == second })
+        #expect(requests.filter { $0.reference != nil }.map(\.reference)
+            == [nextReference?.fullName ?? "HEAD"])
+        #expect(probe.closedCursors.contains { $0.root == first && $0.cursor == "first-cursor" })
+        #expect(!probe.closedCursors.contains { $0.root == second && $0.cursor == "first-cursor" })
+        #expect(feature.selectedGitReference == nextReference)
+        #expect(feature.selectedGitCommit?.hash == "second-commit")
+        #expect(feature.gitCommits.map(\.hash) == ["second-commit"])
+    }
+
+    @Test(arguments: [false, true])
+    func latestRepositorySelectionWinsWhileStatusIsPending(returnToOriginal: Bool) async throws {
+        let workspace = URL(fileURLWithPath: "/workspace")
+        let roots = ["first", "second", "third"].map { workspace.appendingPathComponent($0) }
+        let probe = GitRepositoryHistoryProbe()
+        let snapshots = GitRepositorySwitchSnapshots()
+        let feature = GitFeatureModel(
+            service: GitService(operations: TestGitOperations(repositoryHistoryProbe: probe)),
+            snapshotProvider: { root in await snapshots.next(root) },
+            repositoryRootsProvider: { _ in roots })
+        feature.configure(workspaceURLProvider: { workspace }, isGitLogVisibleProvider: { true },
+            notify: { _ in }, onStateRefreshed: {})
+        await feature.refreshGit()
+        await snapshots.blockNext()
+        let oldSelection = Task { await feature.selectRepository(roots[1], reference: probe.reference(for: roots[1])) }
+        defer { snapshots.release.open(); oldSelection.cancel(); feature.reset() }
+        try #require(await snapshots.started.waitUntilOpen())
+        let newestRoot = returnToOriginal ? roots[0] : roots[2]
+        let newestReference = probe.reference(for: newestRoot)
+        // Both tasks inherit MainActor. The release cannot run until the direct
+        // selection below has stored its root/ref and suspended in refreshGit.
+        let releaseTask = Task { snapshots.release.open() }
+        defer { releaseTask.cancel() }
+        await feature.selectRepository(newestRoot, reference: newestReference)
+        try #require(await waitForGitTaskCompletion(oldSelection))
+        await releaseTask.value
+
+        #expect(feature.gitRepositoryRoot == newestRoot)
+        #expect(feature.selectedGitReference == newestReference)
+        #expect(feature.selectedGitCommit?.hash == "\(newestRoot.lastPathComponent)-commit")
+        #expect(!probe.requests.contains { $0.reference == "refs/heads/second-only" })
+    }
+
+    @Test
+    func failedHistoryAfterRepositorySwitchClearsOldCommitSelection() async {
+        let workspace = URL(fileURLWithPath: "/workspace")
+        let first = workspace.appendingPathComponent("first")
+        let second = workspace.appendingPathComponent("second")
+        let probe = GitRepositoryHistoryProbe(failedRoot: second)
+        let feature = GitFeatureModel(service: GitService(operations: TestGitOperations(
+            snapshotsByRoot: [
+                first.path: GitSnapshot(repositoryRoot: first, branch: "first-only", changes: []),
+                second.path: GitSnapshot(repositoryRoot: second, branch: "second-only", changes: [])
+            ], repositoryRoots: [first, second], repositoryHistoryProbe: probe
+        )))
+        defer { feature.reset() }
+        feature.configure(workspaceURLProvider: { workspace }, isGitLogVisibleProvider: { true },
+            notify: { _ in }, onStateRefreshed: {})
+        await feature.refreshGit()
+        await feature.selectGitReference(probe.reference(for: first))
+        #expect(feature.selectedGitCommit != nil)
+        #expect(feature.canLoadMoreGitHistory)
+
+        await feature.selectRepository(second)
+
+        #expect(feature.gitRepositoryRoot == second)
+        #expect(feature.selectedGitReference == nil)
+        #expect(feature.selectedGitCommit == nil)
+        #expect(feature.selectedGitCommitFiles.isEmpty)
+        #expect(feature.gitCommits.isEmpty)
+        #expect(feature.gitReferences.isEmpty)
+        #expect(!feature.canLoadMoreGitHistory)
+        #expect(!feature.isLoadingGitHistory)
+    }
+
     @Test(arguments: [false, true])
     func gitRefreshPreservesStagedDeletionAndUntrackedReplacement(reverseRecords: Bool) async {
         let root = URL(fileURLWithPath: "/workspace")
@@ -3643,6 +3778,64 @@ private actor GitStatusSnapshotSequence {
     }
 }
 
+private actor GitRepositorySwitchSnapshots {
+    let started = GitModuleTestGate()
+    let release = GitModuleTestGate()
+    private var blocksNext = false
+
+    func blockNext() { blocksNext = true }
+
+    func next(_ root: URL) async -> GitSnapshot? {
+        if blocksNext {
+            blocksNext = false
+            started.open()
+            guard await release.waitUntilOpen() else { return nil }
+        }
+        return GitSnapshot(repositoryRoot: root, branch: "\(root.lastPathComponent)-only", changes: [])
+    }
+}
+
+private final class GitRepositoryHistoryProbe: @unchecked Sendable {
+    struct Request: Sendable {
+        let root: URL
+        let reference: String?
+    }
+    struct ClosedCursor: Sendable {
+        let root: URL
+        let cursor: String
+    }
+    private let lock = NSLock()
+    private var requestValues: [Request] = []
+    private var closedCursorValues: [ClosedCursor] = []
+    private let failedRoot: URL?
+
+    init(failedRoot: URL? = nil) { self.failedRoot = failedRoot }
+    var requests: [Request] { lock.withLock { requestValues } }
+    var closedCursors: [ClosedCursor] { lock.withLock { closedCursorValues } }
+
+    func reference(for root: URL) -> GitReference {
+        GitReference(fullName: "refs/heads/\(root.lastPathComponent)-only",
+            shortName: "\(root.lastPathComponent)-only", kind: .local,
+            isCurrent: true, upstreamShortName: nil)
+    }
+
+    func page(at root: URL, reference: GitReference?) -> GitHistoryPage? {
+        lock.withLock { requestValues.append(Request(root: root, reference: reference?.fullName)) }
+        guard root != failedRoot else { return nil }
+        // A branch from another repository fails just as real Git would.
+        guard reference == nil || reference?.fullName == "HEAD"
+            || reference?.fullName == self.reference(for: root).fullName else { return nil }
+        return GitHistoryPage(
+            commits: [makeTestCommit(hash: "\(root.lastPathComponent)-commit", subject: "Fixture")],
+            nextCursor: reference == nil ? nil : "\(root.lastPathComponent)-cursor",
+            hasMore: reference != nil)
+    }
+
+    func close(at root: URL, cursor: String) {
+        lock.withLock { closedCursorValues.append(ClosedCursor(root: root, cursor: cursor)) }
+    }
+}
+
 private struct TestGitOperations: GitOperations {
     private let snapshotValue: GitSnapshot?
     private let snapshotsByRoot: [String: GitSnapshot]
@@ -3651,6 +3844,7 @@ private struct TestGitOperations: GitOperations {
     private let typedComparisonValue: GitBranchComparison?
     private let filesValue: [GitCommitFile]?
     private let untrackedDiffDocumentValue: DiffDocument?
+    private let commitDiffDocumentHandler: (@Sendable () -> DiffDocument?)?
     private let diffDocumentHandler: (@Sendable ([String], Bool, Bool) -> DiffDocument?)?
     private let comparisonDiffDocumentValue: DiffDocument?
     private let typedComparisonDiffDocumentValue: DiffDocument?
@@ -3658,6 +3852,7 @@ private struct TestGitOperations: GitOperations {
     private let referencesValue: GitReferenceSnapshot?
     private let historyPageValues: [String: GitHistoryPage]?
     private let historyPageHandler: (@Sendable () -> GitHistoryPage?)?
+    private let repositoryHistoryProbe: GitRepositoryHistoryProbe?
     private let graphHistoryProbe: GitGraphHistoryProbe?
     private let historyController: GitHistoryLoadController?
     private let snapshotGate: GitModuleTestGate?
@@ -3692,10 +3887,12 @@ private struct TestGitOperations: GitOperations {
         referencesValue: GitReferenceSnapshot? = nil,
         historyPageValues: [String: GitHistoryPage]? = nil,
         historyPageHandler: (@Sendable () -> GitHistoryPage?)? = nil,
+        repositoryHistoryProbe: GitRepositoryHistoryProbe? = nil,
         graphHistoryProbe: GitGraphHistoryProbe? = nil,
         historyController: GitHistoryLoadController? = nil,
         filesValue: [GitCommitFile]? = nil,
         untrackedDiffDocumentValue: DiffDocument? = nil,
+        commitDiffDocumentHandler: (@Sendable () -> DiffDocument?)? = nil,
         diffDocumentHandler: (@Sendable ([String], Bool, Bool) -> DiffDocument?)? = nil,
         comparisonDiffDocumentValue: DiffDocument? = nil,
         typedComparisonDiffDocumentValue: DiffDocument? = nil,
@@ -3730,10 +3927,12 @@ private struct TestGitOperations: GitOperations {
         self.referencesValue = referencesValue
         self.historyPageValues = historyPageValues
         self.historyPageHandler = historyPageHandler
+        self.repositoryHistoryProbe = repositoryHistoryProbe
         self.graphHistoryProbe = graphHistoryProbe
         self.historyController = historyController
         self.filesValue = filesValue
         self.untrackedDiffDocumentValue = untrackedDiffDocumentValue
+        self.commitDiffDocumentHandler = commitDiffDocumentHandler
         self.diffDocumentHandler = diffDocumentHandler
         self.comparisonDiffDocumentValue = comparisonDiffDocumentValue
         self.typedComparisonDiffDocumentValue = typedComparisonDiffDocumentValue
@@ -3792,7 +3991,7 @@ private struct TestGitOperations: GitOperations {
         return untracked ? untrackedDiffDocumentValue : nil
     }
     func diffPatch(at rootURL: URL, pathspecs: [String], staged: Bool, untracked: Bool, whitespace: GitDiffWhitespaceMode) -> String? { nil }
-    func commitDiffDocument(at rootURL: URL, commit: String, pathspecs: [String], whitespace: GitDiffWhitespaceMode) -> DiffDocument? { nil }
+    func commitDiffDocument(at rootURL: URL, commit: String, pathspecs: [String], whitespace: GitDiffWhitespaceMode) -> DiffDocument? { commitDiffDocumentHandler?() }
     func comparisonDiffDocument(at rootURL: URL, reference: String, pathspecs: [String], whitespace: GitDiffWhitespaceMode) -> DiffDocument? { comparisonDiffDocumentValue }
     func comparisonDiffDocument(at rootURL: URL, reference: GitReference, targetReference: GitReference?, pathspecs: [String], whitespace: GitDiffWhitespaceMode) -> DiffDocument? { typedComparisonDiffDocumentValue }
     func applyPatch(_ patch: String, at rootURL: URL, mode: String) -> GitProcessResult? {
@@ -3820,6 +4019,9 @@ private struct TestGitOperations: GitOperations {
         limit: Int,
         operationID: String
     ) -> GitHistoryPage? {
+        if let repositoryHistoryProbe {
+            return repositoryHistoryProbe.page(at: rootURL, reference: reference)
+        }
         if let graphHistoryProbe {
             return graphHistoryProbe.page(reference: reference, cursor: cursor, limit: limit, operationID: operationID)
         }
@@ -3836,8 +4038,9 @@ private struct TestGitOperations: GitOperations {
         )
     }
     func closeHistoryCursor(at rootURL: URL, cursor: String) -> Bool {
+        repositoryHistoryProbe?.close(at: rootURL, cursor: cursor)
         graphHistoryProbe?.close(cursor: cursor)
-        return graphHistoryProbe != nil
+        return graphHistoryProbe != nil || repositoryHistoryProbe != nil
     }
     func cancel(operationID: String) -> Bool {
         graphHistoryProbe?.cancel(operationID: operationID)
