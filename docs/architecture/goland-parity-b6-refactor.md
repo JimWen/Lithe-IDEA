@@ -1,6 +1,8 @@
 # B6 重构：语义编辑事务与 Refactor This
 
-状态：基于 `3680935d`。**第四版，B6a1a 能力纠正与报文快照已实现并通过 Rust 计时及真实 gopls 协议回归；真实编辑/点击及独立候选复验通过；`94af8e89` 已替换系统安装并复验，其余功能未实施（见 §3.4–3.6）。** 第一版因「只核查 LSP 解析侧」被否；
+状态：第 1–10 节保留基于 `3680935d` 的第四版设计与历史验收；2026-10-06 已按当前源码复核，实施边界以第 11 节修订为准。**B6a2 尚未实施，原生编辑器安装门禁已通过，开始协议保真与现有文本入口迁移。**
+
+历史状态：**第四版，B6a1a 能力纠正与报文快照已实现并通过 Rust 计时及真实 gopls 协议回归；真实编辑/点击及独立候选复验通过；`94af8e89` 已替换系统安装并复验，其余功能未实施（见 §3.4–3.6）。** 第一版因「只核查 LSP 解析侧」被否；
 第二版补上协商侧与反向请求侧后仍被独立审查**不放行**，列出 9 条阻塞问题。本版按那 9 条
 逐条修订，并采纳其对 B3b 归属冲突的处置建议。承接
 [B6 设计基线](goland-parity-implementation.md) 与
@@ -113,7 +115,7 @@ C2、C3、C4、C4b、C8、C12、N6、N7、R2 是**当前已存在的正确性缺
 | B6c | Refactor This 入口 + Rename（符号/文件/包） | B6b1 | Extract/Inline/Change Signature |
 | B6d | Extract/Inline/Change Signature、Move/Copy/Safe Delete | B6c、B6a1b（若 a1a 重测确认仍需要） | 非 Go 语言的 Go 特有语义 |
 
-B6a1a 的探针结论已回写 §3.4；生产能力修正及测试结果见 §3.5。B6a2 的 symbol 分支须将协商、请求、保真解析与消费者一起交付，不能先宣称能力再补实现。
+B6a1a 的探针结论已回写 §3.4；生产能力修正及测试结果见 §3.5。B6a2 的 symbol/selectionRange 分支可以先交付协议与类型，但生产能力声明、自动请求及产品完成状态必须与真实消费者共同启用，见第 11 节。
 
 ### 2.2 B3b 归属冲突的处置（采纳审查建议）
 
@@ -434,8 +436,9 @@ Rust Core 只做协议解析与规范化：不访问文件、不判断路径是�
 **「不做能力回退」指的是不猜测、不用全文替换冒充语义重构，不是把已有可用能力按新位门控掉。**
 
 `requestLanguageCodeActions` 接受真实选区：编辑器把 UTF-16 selection 转成
-`LanguageServerRange`，零宽选区保持零宽（行为不变），非零选区如实传递。选区跨行、
-含 IME 未确认文本、或 document revision 与请求时不一致时不发请求。
+`LanguageServerRange`，零宽选区保持零宽（行为不变），非零选区如实传递。合法跨行选区同样发送；逆序、越界、非法 UTF-16 边界、
+含 IME 未确认文本，或文档身份/revision 与请求快照不一致时拒绝请求。响应、resolve 和
+实际应用前再次检查原快照，不能把较新缓冲区当作旧请求的来源（第 11 节修订）。
 
 ### 5.6 契约文档与 fixture
 
@@ -691,3 +694,78 @@ version 6.2；实际使用仓库内解包的 swift.org 6.2.4 工具链，必须�
 规范条款需在实施前逐条对照实现；文档引用不是对齐的完成证明。
 本文所有「实测」结论来自本机 gopls v0.20.0，换 server 版本需重新验证。
 **R3 另有协商条件限定，见 §1.3。**
+
+
+<a id="b6-current-implementation-rulings"></a>
+
+## 11. 2026-10-06 实施前复核与衔接裁定
+
+当前源码基线为 `e380bc38`。前置原生编辑器门禁已在 `d7973669` 系统安装版完成，
+包括跨文件 Undo/Redo、emoji、未保存 HTML 预览、Git 行标记、设置窗口及 Go LSP 重启；
+完整 Swift 1544 项测试通过，实际范围和证据见
+[原生编辑器验收](ai-ide-phase-one.md)。本节是 B6 的实施前复核，不是 B6a2 功能验收。
+
+### 11.1 已有能力与实际缺口
+
+- `fd7d3cd1` 之后已经存在混合缓冲区/磁盘文本事务、mutation lease、身份保护补偿、
+  Search Replace 的实际 Apply、选中文件/occurrence 排除及共享 Undo/Redo；`8ec7e1eb`
+  又修复了原生输入历史的生命周期。第 2、6、9 节中“租约/Undo/Apply 均未实现”的历史
+  说法不能继续作为实施依据，也不应重新引入已删除的上游 owner。
+- 这些能力不等于 B6b1/B6b2 整体完成：`AppModel+Development.applyLanguageWorkspaceEdit`
+  仍是旧 map 路径，缺有序资源操作、LSP 版本和请求身份校验；现有 coordinator 的文本
+  批次会去重并排序，不能直接解释有序 create/edit/rename/delete。
+- B6a1b 的反向 applyEdit 处理器和完成命令仍未实现。§3.4 已证明 Extract constant 可以
+  走 resolve，所以 B6a2 继续只依赖 B6a1a；不能把 a1b 永久删除，也不把它错误地放回
+  所有 B6a2 工作的硬前置。
+
+### 11.2 第一条可交付链：保真协议与安全文本接入
+
+出站方案确定为**有类型的统一序列化**，不并行保留 raw JSON 退路，也不提供会降级的
+`.changes` 派生访问器。有序模型必须包含全局 `changeAnnotations`、文本/资源 annotation ID、
+版本与资源选项；§5.1 的简略 enum 不是完整 wire 定义。协议语义依据为
+[官方 LSP 3.17 WorkspaceEdit 定义](https://github.com/microsoft/language-server-protocol/blob/gh-pages/_specifications/lsp/3.17/types/workspaceEdit.md)。
+
+B6a2 发布前先完成 B6b1 的**最小纯文本适配**：完整预检 ordered operations，按顺序在
+临时文本中解释重复 URI 的编辑，再生成每路径 source → final replacement，交给既有
+`WorkspaceTextEditUndoController` 和 `WorkspaceTextEditCoordinator`。不能拼接同 URI 的
+编辑数组、逐项写入，或为规避适配而拒绝全部 versioned documentChanges；后者会破坏
+已有 Go Rename。资源操作以及需要确认而尚无确认界面的 annotation，当前整单明确拒绝、
+零修改，但仍完整保存并可往返，相关 capability 暂不声明。完整资源事务仍归 B6b1。
+
+同步快照来自现有 RuntimeSession 的实际 session 身份、同步版本及其对应的来源文本/字节身份，经 Session 协议和
+Manager 暴露；不得从 `EditorDocument.revision` 猜测 LSP 版本。当前 Manager 的
+rename/format/codeActions 忽略传入的 text/root，所以必须实际同步请求缓冲区后再捕获
+上下文。请求上下文保留 workspace generation、document ID、locationRevision、编辑
+revision 与同步快照，并贯穿响应、动作选择、resolve 和 apply。已同步版本精确比较；
+真正未打开目标的 gopls version 0 按 §6.2 使用内容/磁盘身份快照，不能与不存在的版本比较。
+所有目标都查询产生动作的原 session，不按目标扩展名另行路由；已打开但未同步、或同步
+版本对应文本与当前缓冲区不同的目标整单拒绝，包括 dirty 的 version-0 目标。
+
+Rename、Formatting、Code Action、Completion 四条入口一起迁移。全为打开文档的
+Completion 保留同步、无文件 IO 的提交路径，复用同一租约、Undo 与选区恢复 owner；
+additionalTextEdits 对光标位置的影响纳入验证。Code Action 的 command 必须等 edit
+实际 applied 后执行，并核对原 workspace/session 与事务产出的后置文档身份；不能在本次
+修改推进 revision 后仍要求原 revision 不变。磁盘等待期间切项目/重启 session 则取消命令，
+已提交的编辑据实报告。打开文件使用既有文档回同步；未打开文件使用 watcher 通知，集合不重叠。
+
+以上接口、版本零值、取消/补偿、同步快路径和消费者衔接已完成独立只读方案审查。
+审查未运行新产品测试，也未修改源代码；补充的同步内容身份、applied→command 身份复核与悬空 annotation 整单失败用例已纳入
+执行计划，独立审查允许开始失败回归；后续仍须先观察失败回归，再实施和验收。
+本地执行步骤与裁定记录位于 `.artifacts/b6a2/workspace-edit-plan.md` 和 `progress.md`。
+
+### 11.3 后续方法、选区和消费者门控
+
+- prepareRename 按 §5.2 的三种结果实现，Rename 仍按 `.rename` 能力门控，不要求服务器
+  必须支持 prepareRename。已有 Rename 入口消费其范围/placeholder；内联重命名完整交互
+  仍归 B6c，不能用 prepareRename API 代替它。
+- 合法多行 UTF-16 选区与零宽选区都可请求 Code Actions。原 §5.5 的“跨行不请求”会
+  阻断 Extract Function，已更正；未提交 IME、非法范围、过期文档身份/revision 拒绝，
+  返回与 resolve 后再次检查。
+- selectionRange/documentSymbol 的类型、请求、解析、能力探测和共享 fixture 可以作为
+  B6a2 协议预交付。documentSymbol 产品消费者仍是 B7b/L4a，selectionRange 的选区扩展
+  消费者归 L8；消费方尚未接入时，不开启新的生产声明或自动请求，不称产品分支完成。
+  B7b 依赖该协议交付，不能反过来阻塞 B6a2 的纯文本迁移。既有 Go/Rust runnable gutter
+  继续保留；它不自动证明 B7b 的剩余协议计划已经完成。
+
+本节没有完成或删除 B6a1b、B6a2 的其余方法、B6b 的资源事务与 Undo、B6c/B6d。
+第一条文本链完成后，继续上述方法与消费者，按原验收矩阵实际构建、安装、对照和分阶段提交。
