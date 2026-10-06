@@ -1,6 +1,6 @@
 # 一期限定裁剪范围与上游合并策略
 
-日期：2026-09-05（初始裁剪验收）；2026-09-21（上游集成）；2026-09-22（原生编辑器复验）。初始裁剪结果见第 7–9 节；本次已合入至 v0.5.0。安装版实机操作暴露的跨文件 Undo 崩溃已有文档级修复，2026-10-06 完整自动测试通过；最终安装版实机验收尚未完成，详见第 10–12 节。
+日期：2026-09-05（初始裁剪验收）；2026-09-21（上游集成）；2026-10-06（原生编辑器最终复验）。初始裁剪结果见第 7–9 节；本次已合入至 v0.5.0。跨文件 Undo 崩溃、关闭的 Go LSP 设置项丢失及同状态 Git 行标记过期均已修复，完整自动测试和 `d7973669` 系统安装版实机复验通过，详见第 10–12 节。后续 GoLand/RustRover 对齐规划仍未完成。
 
 ## 1. 本轮范围
 
@@ -219,7 +219,7 @@ LITHE_RUN_LSP_SYNC_BRIDGE_INTEGRATION=1 \
 - HTML 在安装版 `5f9325be` 中按 index → other → anchors → index 来回切换，当前文档与 CSS/SVG 预览一致；原生 emoji 输入随后暴露的崩溃由 `1ae1a9cb` 修复，两个真实 NSTextView 输入/撤销回归通过。
 - 工作区 Go 语言服务在设置中显示 Running，关闭开关后停止；本次结束时已删除仅属于验收项目的临时禁用偏好，恢复默认启用。
 
-**尚未完成的实机复验**：安装最终 `1ae1a9cb` 后，桌面已锁定，前台为 `loginwindow`，无法再执行原生 emoji 输入、未保存 HTML 预览及 Go LSP 重启状态检查。已请求解锁；这些项目不计入 UI 通过项。最终自动化测试包含这次输入崩溃的两个参数回归（23 ms），但不将自动化结果等同于安装版的最后一次手工/界面操作。
+**历史未完成的实机复验（已由第 12 节补齐）**：安装 `1ae1a9cb` 后，桌面已锁定，前台为 `loginwindow`，当时无法再执行原生 emoji 输入、未保存 HTML 预览及 Go LSP 重启状态检查。这些项目不计入该历史安装版的 UI 通过项。最终自动化测试包含这次输入崩溃的两个参数回归（23 ms），但不将自动化结果等同于安装版的最后一次手工/界面操作。
 
 ### 安装、清理与范围限制
 
@@ -255,14 +255,14 @@ LITHE_RUN_LSP_SYNC_BRIDGE_INTEGRATION=1 \
 
 同一实机操作中，切回 Rust 后 Cmd+Z 导致崩溃；另一次启用 Zombie 的安装版复现明确记录 `NSConcreteTextStorage _undoRedoTextOperation:` 向已释放对象发送消息。根因为项目共享撤销栈中的原生 TextKit 目标比历史记录更早释放。证据为 `crash-undo-rust.ips`、`zombie-ui.stderr.log`、`crash-undo-rust-zombie.ips`；修复方案在本地 `native-undo-design.md`。新增自动回归的 red2 分组/释放前提无效，red3/red4 在释放前提失败，不能冒充已重现崩溃的自动测试；实机 Zombie 证据独立成立。
 
-2026-09-22 当时剩余验收为稳定文档 Undo 修复和自动回归；2026-10-06 已完成这两项（见第 12 节）。当前仍需重新构建替换系统安装，验证跨文件 Undo/Redo、软换行标记、最终版本的多项目交替切换与设置窗口显式开关，以及尚未结束的 emoji、未保存 HTML 预览和 Go LSP 跨重启检查。上述项目完成前，不声明最终安装版整体实机验收通过，也不进入后续 P0/P1 功能实施。
+2026-09-22 当时剩余验收为稳定文档 Undo 修复和自动回归。2026-10-06 已完成修复、完整自动回归及 `d7973669` 系统安装版的跨文件 Undo/Redo、软换行标记、多项目交替切换与设置显式开关、emoji、未保存 HTML 预览和 Go LSP 跨重启检查（见第 12 节）。本节原生编辑器基线门禁已通过，可以继续后续 P0/P1 规划；这不代表后续功能已经完成。
 
 ARM64 Release 构建已成功（198.01 秒），产品提交 `69a56d679f43c6fb139989aa7aaffa79eda40410`，并已原子替换 `/Applications/Lithe.app`。签名、架构、必需资源与程序校验值核验一致，主程序 SHA-256 为 `b297731f5e5cf124cbc3e424444bf6a0ab68e526ba515eb2d3c8f8a837e1df89`，安装凭据为 `.artifacts/ui-gutter-settings-0922/installed-final/installation.json`。版本仍为 `0.1.0`；`dirty=true` 仅对应前述四份并行修改的架构文档。本段为安装后的文字补记，不重建产品。
 
 安装后未在锁屏状态下留下新的 Lithe 实例。解锁后已关闭 GoLand 中本次创建的 `git-gutter-comparison` 对照项目，原先已运行的 GoLand 及用户项目保持不动，实际 Window 菜单记录为 `goland-menu-cleanup.jsonl`。Zombie 复现结束后 Lithe、数据库 helper 和语言服务均无残留，输入法恢复原选择；清理记录为 `.artifacts/ui-gutter-settings-0922/cleanup-after-zombie.json`。这些清理记录不替代后续修复验收结束时的再次清理。
 
 
-## 12. 原生 Undo 生命周期修复（2026-10-06，安装验收待完成）
+## 12. 原生 Undo 生命周期修复（2026-10-06，安装验收通过）
 
 共享撤销历史改为由 `WorkspaceTextEditUndoController` 保存文档级增量，目标不再依赖临时
 `NSTextStorage`、编辑视图或 Coordinator。已接入的原生编辑器停止向 AppKit 登记文本
@@ -299,7 +299,7 @@ HTML 内容的实际渲染（磁盘内容保持原值）。三轮原生项目标
 Undo/Redo 和保存，并按 AX 内容与磁盘字节核对；这次对比只覆盖编辑历史，不代表后续
 语义、运行和调试规划已验收。
 
-实机检查发现两个后续问题，当前整体安装验收仍未通过：
+`8ec7e1eb` 实机检查发现两个后续问题，均已在最终 `d7973669` 安装版修复并复验：
 
 - Go 插件启用偏好为 true，但保有历史隔离标记，已通过 Plugins → Enable → Confirm
   恢复并正常重启，确认 Go Running。随后关闭工作区 Go LSP 并重启，关闭偏好仍在，
@@ -308,7 +308,7 @@ Undo/Redo 和保存，并按 AX 内容与磁盘字节核对；这次对比只覆
   已将项目语言选择移到现有 presenter，按声明能力和匹配文件决定可配置项，保留
   执行层的启动参数与模块启用检查。新增回归先以空列表失败，修复后相关 21 项测试
   通过（`native-undo-lsp-visibility-green.{json,html,junit.xml}`），新实例恢复偏好、
-  显示关闭服务、重新激活及仅语法插件不显示 LSP 均有覆盖。独立审查通过；已纳入下述完整回归，新安装包复验待执行。
+  显示关闭服务、重新激活及仅语法插件不显示 LSP 均有覆盖。独立审查通过；修复提交 `463043f7`，完整回归及最终安装结果见下文。
 - 软换行截图确认新增长行色条覆盖全部六个显示片段，但保存再次修改的同一文件后，
   Git 标记仍显示前一次 diff：磁盘已是第 2、3 行纯新增，界面仍留第 1 行删除锚点和
   第 2 行色条。根因是 `GitChange` 只记录路径与状态，同一 `M` 状态刷新不清除标记
@@ -317,11 +317,40 @@ Undo/Redo 和保存，并按 AX 内容与磁盘字节核对；这次对比只覆
   内串行重试，保持按需加载，不增加逐次键入 diff 或 Git 历史刷新。三个失败回归均已
   转绿，174 条相关计时记录通过，新增用例各 1 ms，原有重复刷新优化仍通过；报告为
   `native-undo-gutter-freshness-green.{json,html,junit.xml}`。独立审查没有阻断项。
-  已纳入下述完整回归；最终安装复验待执行，不能将此实机场景记为通过。
+  修复提交 `d7973669`，完整回归及最终安装结果见下文。
 
 两项修复合并后的 Swift 6.2.4、真实 Rust Core 链接完整回归通过：1544 项、184 个
-suite，44.749 秒；1533 条独立计时记录均通过，进程用时 46.198 秒。报告为
+suite，44.749 秒；1533 条独立计时记录均通过，无跳过或硬预算超限，14 个性能警告，
+新增五项回归各 1 ms，进程用时 46.198 秒。报告为
 `.artifacts/test-stability/native-undo-installed-fixes-full.{json,html,junit.xml}`。
 
-原始日志、截图、AX/磁盘断言与过程记录位于 `.artifacts/ui-native-undo-1006/`。
-以上两个问题完成修复及最终安装复验前，第 11 节整体门禁和后续规划继续保持未完成。
+最终 ARM64 Release 构建用时 200.64 秒，产品源码为 `d7973669abef45bad8b7d5f50485c088fe3dd7a0`，
+已原子替换 `/Applications/Lithe.app`。签名、资源、架构与程序 SHA-256 一致
+（`cf0e8ed5ad62c1538897afae722210dce9bef88a358d042e32f9f3ff2ff40691`），
+版本仍为 `0.1.0`。凭据为 `.artifacts/ui-native-undo-1006/installed-final/installation.json`，
+前一安装版保留在同目录 `previous-Lithe.app`。构建的 `dirty=true` 仅对应四份既有架构
+文档编辑，产品输入与提交一致；本验收补记不再次构建产品。
+
+该安装版使用用户明确授权的本地 Accessibility／键盘脚本完成以下实机操作：
+
+- 冷启动时，前一安装版保存的 Go Off 偏好正确显示，重新启用达到 Running；再执行
+  Running → Off → 退出 → 冷启动 → Off → Running，设置项与偏好均保留。
+  证据为 `ui/final-go-{off-restored,running,off-after-restart,running-after-restart}`。
+- 同一 `M` 文件连续保存两种内容后，自动刷新清除旧删除锚点，第 2 行的六个软换行
+  显示片段与新增第 3 行连成绿条。保存后首帧仍可能等待异步 diff，随后自行更新；
+  未使用手动刷新或切换文件。证据为 `ui/final-gutter-{first-save,second-save,second-settled}.png`。
+- 再次执行编辑 Rust → 编辑 Go → Undo Go → 切回 Rust → Undo Rust → Redo Rust／保存
+  → 切回 Go → Redo Go／保存。AX 内容与磁盘字节均匹配，emoji 保留，未发生崩溃。
+- HTML 未保存修改实际渲染为 `Final unsaved preview 🦀`，磁盘仍保持原内容；
+  检查后通过 Undo 恢复缓冲区。证据为 `ui/final-unsaved-html-preview`。
+- 两个隔离项目完成四轮、八次不同项目间的原生标签切换，并显式打开／关闭设置四次。
+  每次切换和设置关闭后持续 1.2 秒观察，设置窗口保持隐藏。
+  证据为 `ui/final-switch-*`、`ui/final-settings-open-*` 及 `ui/results.json`。
+
+自动保存、软换行及隔离项目 LSP 偏好均按验收前的键存在性恢复，输入法恢复原选择。
+Go 插件原来即为 enabled=true；通过插件界面恢复后保留其启用状态，不重新写入历史故障
+隔离标记。Lithe、gopls、rust-analyzer、proc-macro helper 及本次启动的 RustRover 均已退出，
+原有 GoLand 进程保持运行，本次对照文件标签已关闭。清理证据为 `cleanup-final.json`。
+
+原始日志、截图、AX／磁盘断言与过程记录位于 `.artifacts/ui-native-undo-1006/`。
+第 11 节原生编辑器基线门禁已通过；后续重构、语言和运行／调试对齐规划仍按各自范围推进。
