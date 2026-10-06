@@ -33,7 +33,7 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
 
     private var sessionID: String?
     private var pendingOperations: [String: PendingOperation] = [:]
-    private var documentVersions: [URL: Int] = [:]
+    private var synchronizedDocuments: [URL: LanguageServerSynchronizedDocumentSnapshot] = [:]
     private var pollTask: Task<Void, Never>?
     private var state: LanguageServerSessionState = .stopped
     private var processID: Int32?
@@ -142,6 +142,15 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
         }
     }
 
+    package var sessionIdentity: String? { state == .ready ? sessionID : nil }
+
+    package func synchronizedDocumentSnapshot(for fileURL: URL) -> LanguageServerSynchronizedDocumentSnapshot? {
+        guard let identity = sessionIdentity,
+              let snapshot = synchronizedDocuments[fileURL.standardizedFileURL],
+              snapshot.sessionIdentity == identity else { return nil }
+        return snapshot
+    }
+
     package func synchronize(fileURL: URL, text: String, languageID: String) throws {
         guard let sessionID else { throw LanguageServerRuntimeSessionError.notReady }
         // Documents synced before initialize completes are held by the runtime and
@@ -153,7 +162,9 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
             text: text
         ) {
         case .success(let sync):
-            documentVersions[fileURL.standardizedFileURL] = sync.documentVersion
+            synchronizedDocuments[fileURL.standardizedFileURL] = LanguageServerSynchronizedDocumentSnapshot(
+                sessionIdentity: sessionID, version: sync.documentVersion, sourceText: text
+            )
         case .failure(let error):
             throw LanguageServerRuntimeSessionError.documentSyncFailed(error.userMessage)
         }
@@ -177,7 +188,9 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
             changes: changes
         ) {
         case .success(let sync):
-            documentVersions[fileURL.standardizedFileURL] = sync.documentVersion
+            synchronizedDocuments[fileURL.standardizedFileURL] = LanguageServerSynchronizedDocumentSnapshot(
+                sessionIdentity: sessionID, version: sync.documentVersion, sourceText: text
+            )
         case .failure(let error):
             throw LanguageServerRuntimeSessionError.documentSyncFailed(error.userMessage)
         }
@@ -211,7 +224,7 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
 
     package func closeDocument(_ fileURL: URL) {
         guard let sessionID else { return }
-        documentVersions[fileURL.standardizedFileURL] = nil
+        synchronizedDocuments[fileURL.standardizedFileURL] = nil
         // The runtime owns which documents are open, so closing one it does not
         // know about is simply not its business.
         core.closeLanguageServerDocument(sessionID: sessionID, fileURL: fileURL.standardizedFileURL)
@@ -225,7 +238,7 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
         guard let sessionID, state == .ready else {
             throw LanguageServerRuntimeSessionError.notReady
         }
-        guard let documentVersion = documentVersions[normalizedURL] else {
+        guard let documentVersion = synchronizedDocuments[normalizedURL]?.version else {
             throw LanguageServerRuntimeSessionError.documentNotSynchronized
         }
         switch core.requestJavaNavigationMarkers(
@@ -242,7 +255,7 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
                 completion(result.flatMap {
                     Self.decodeEventResult($0, as: JavaNavigationMarkersPayload.self)
                 }.flatMap { payload in
-                    guard self.documentVersions[normalizedURL] == payload.documentVersion else {
+                    guard self.synchronizedDocuments[normalizedURL]?.version == payload.documentVersion else {
                         return .failure(LanguageServerRuntimeSessionError.staleDocument)
                     }
                     return .success(payload.makeModels())
@@ -262,7 +275,7 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
         guard let sessionID, state == .ready else {
             throw LanguageServerRuntimeSessionError.notReady
         }
-        guard let documentVersion = documentVersions[normalizedURL] else {
+        guard let documentVersion = synchronizedDocuments[normalizedURL]?.version else {
             throw LanguageServerRuntimeSessionError.documentNotSynchronized
         }
         switch core.resolveJavaNavigation(
@@ -280,7 +293,7 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
                 completion(result.flatMap {
                     Self.decodeEventResult($0, as: JavaNavigationLocationsPayload.self)
                 }.flatMap { payload in
-                    guard self.documentVersions[normalizedURL] == payload.documentVersion else {
+                    guard self.synchronizedDocuments[normalizedURL]?.version == payload.documentVersion else {
                         return .failure(LanguageServerRuntimeSessionError.staleDocument)
                     }
                     return .success(payload.makeModels())
@@ -340,7 +353,7 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
         try request(.rename, fileURL: fileURL, position: position, newName: newName) { result in
             completion(result.flatMap {
                 Self.decodeEventResult($0, as: WorkspaceEditPayload.self)
-            }.map { $0.makeModel() })
+            })
         }
     }
 
@@ -611,7 +624,7 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
             core.destroyLanguageServer(sessionID: sessionID)
         }
         sessionID = nil
-        documentVersions = [:]
+        synchronizedDocuments = [:]
         if let processID {
             processRegistry?.unregisterLanguageServerProcess(pid: processID, moduleID: moduleID)
             self.processID = nil
@@ -843,9 +856,10 @@ private struct RangePayload: Decodable {
 private struct TextEditPayload: Decodable {
     let range: RangePayload
     let newText: String
+    let annotationId: String?
 
     func makeModel() -> LanguageServerTextEdit {
-        LanguageServerTextEdit(range: range.makeModel(), newText: newText)
+        LanguageServerTextEdit(range: range.makeModel(), newText: newText, annotationID: annotationId)
     }
 }
 
@@ -996,20 +1010,7 @@ private struct VirtualDocumentPayload: Decodable {
     let text: String
 }
 
-private struct WorkspaceEditPayload: Decodable {
-    let changes: [String: [TextEditPayload]]
-
-    func makeModel() -> LanguageServerWorkspaceEdit {
-        LanguageServerWorkspaceEdit(changes: Dictionary(
-            uniqueKeysWithValues: changes.map { path, edits in
-                (
-                    URL(fileURLWithPath: path).standardizedFileURL,
-                    edits.map { $0.makeModel() }
-                )
-            }
-        ))
-    }
-}
+private typealias WorkspaceEditPayload = LanguageServerWorkspaceEdit
 
 private struct FormattingPayload: Decodable {
     let edits: [TextEditPayload]
@@ -1039,7 +1040,7 @@ private struct CodeActionPayload: Decodable {
             title: title,
             kind: kind,
             isPreferred: isPreferred,
-            edit: edit?.makeModel(),
+            edit: edit,
             command: command?.makeModel(),
             data: data
         )

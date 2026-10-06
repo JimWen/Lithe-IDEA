@@ -435,9 +435,10 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
     struct LspTextEditPayload: Decodable, Sendable {
         let range: LspRangePayload
         let newText: String
+        let annotationId: String?
 
         func makeModel() -> LanguageServerTextEdit {
-            LanguageServerTextEdit(range: range.makeModel(), newText: newText)
+            LanguageServerTextEdit(range: range.makeModel(), newText: newText, annotationID: annotationId)
         }
     }
 
@@ -540,22 +541,7 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         let text: String
     }
 
-    struct LspWorkspaceEditPayload: Decodable, Sendable {
-        let changes: [String: [LspTextEditPayload]]
-
-        func makeModel() -> LanguageServerWorkspaceEdit {
-            LanguageServerWorkspaceEdit(
-                changes: Dictionary(
-                    uniqueKeysWithValues: changes.map { path, edits in
-                        (
-                            URL(fileURLWithPath: path).standardizedFileURL,
-                            edits.map { $0.makeModel() }
-                        )
-                    }
-                )
-            )
-        }
-    }
+    typealias LspWorkspaceEditPayload = LanguageServerWorkspaceEdit
 
     struct LspFormattingPayload: Decodable, Sendable {
         let edits: [LspTextEditPayload]
@@ -593,7 +579,7 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
                     title: title,
                     kind: kind,
                     isPreferred: isPreferred,
-                    edit: edit?.makeModel(),
+                    edit: edit,
                     command: command?.makeModel(),
                     data: data
                 )
@@ -1348,14 +1334,8 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         let data: ToolingJSONValue?
     }
 
-    private struct LspClientTextEditRequest: Encodable {
-        let range: LspTextEditsRequest.TextEdit.Range
-        let newText: String
-    }
-
-    private struct LspClientWorkspaceEditRequest: Encodable {
-        let changes: [String: [LspClientTextEditRequest]]
-    }
+    private typealias LspClientTextEditRequest = LanguageServerTextEditWire
+    private typealias LspClientWorkspaceEditRequest = LanguageServerWorkspaceEditWire
 
     private struct LspClientCommandRequest: Encodable {
         let title: String
@@ -3172,13 +3152,7 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
     private static func makeTextEditRequest(
         _ edit: LanguageServerTextEdit
     ) -> LspClientTextEditRequest {
-        LspClientTextEditRequest(
-            range: .init(
-                start: .init(line: edit.range.start.line, utf16Column: edit.range.start.utf16Column),
-                end: .init(line: edit.range.end.line, utf16Column: edit.range.end.utf16Column)
-            ),
-            newText: edit.newText
-        )
+        LanguageServerTextEditWire(edit)
     }
 
     private static func makeCodeActionRequest(
@@ -3209,13 +3183,7 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
     private static func makeWorkspaceEditRequest(
         _ edit: LanguageServerWorkspaceEdit
     ) -> LspClientWorkspaceEditRequest {
-        LspClientWorkspaceEditRequest(
-            changes: Dictionary(
-                uniqueKeysWithValues: edit.changes.map { url, edits in
-                    (url.standardizedFileURL.path, edits.map(makeTextEditRequest))
-                }
-            )
-        )
+        LanguageServerWorkspaceEditWire(edit)
     }
 
     private func execute<Payload: Encodable, Data: Decodable>(

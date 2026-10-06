@@ -2348,18 +2348,13 @@ struct RunConfigurationIntegrationTests {
             renameResult = result
         }
         core.enqueueRequestSuccess(operation: .rename, result: [
-            "changes": [
-                source.standardizedFileURL.path: [[
-                    "range": [
-                        "start": ["line": 0, "utf16Column": 17],
-                        "end": ["line": 0, "utf16Column": 22]
-                    ],
-                    "newText": "headline"
-                ]]
-            ]
+            "operations": [["kind": "edit", "uri": source.absoluteString, "version": NSNull(), "edits": [[
+                "range": ["start": ["line": 0, "utf16Column": 17], "end": ["line": 0, "utf16Column": 22]],
+                "newText": "headline"
+            ]]]], "changeAnnotations": [:]
         ])
         #expect(await Self.waitForMainActorCondition { renameResult != nil })
-        #expect(try renameResult?.get().changes[source.standardizedFileURL]?.first?.newText == "headline")
+        #expect(try renameResult?.get().operations.first?.textEditsForTest.first?.newText == "headline")
 
         var formatResult: Result<[LanguageServerTextEdit], Error>?
         try manager.format(
@@ -2445,21 +2440,16 @@ struct RunConfigurationIntegrationTests {
                 "kind": "quickfix",
                 "isPreferred": true,
                 "edit": [
-                    "changes": [
-                        source.standardizedFileURL.path: [[
-                            "range": [
-                                "start": ["line": 0, "utf16Column": 10],
-                                "end": ["line": 0, "utf16Column": 10]
-                            ],
-                            "newText": " "
-                        ]]
-                    ]
+                    "operations": [["kind": "edit", "uri": source.absoluteString, "version": NSNull(), "edits": [[
+                        "range": ["start": ["line": 0, "utf16Column": 10], "end": ["line": 0, "utf16Column": 10]],
+                        "newText": " "
+                    ]]]], "changeAnnotations": [:]
                 ],
                 "data": ["token": "fix-1"]
             ]
         ])
         #expect(await Self.waitForMainActorCondition { actionResolveResult != nil })
-        #expect(try actionResolveResult?.get().edit?.changes[source.standardizedFileURL]?.first?.newText == " ")
+        #expect(try actionResolveResult?.get().edit?.operations.first?.textEditsForTest.first?.newText == " ")
 
         var executeResult: Result<Void, Error>?
         try manager.execute(
@@ -4298,6 +4288,91 @@ struct RunConfigurationIntegrationTests {
         return try? JSONSerialization.jsonObject(with: body) as? [String: Any]
     }
 
+    @Test
+    func languageWorkspaceEditRuntimeDecodesSharedOrderedFixtures() async throws {
+        let harness = makeLanguageServerHarness()
+        defer { harness.session.stop() }
+        let ready = TestGate()
+        harness.session.onStateChange = { state in
+            if state == .ready { ready.open() }
+        }
+        try harness.session.start(rootURL: harness.root, workspaceFingerprint: nil)
+        try harness.session.synchronize(fileURL: harness.source, text: "struct App {}\n", languageID: "swift")
+        harness.core.enqueueReady(capabilities: ["rename"])
+        #expect(await ready.waitUntilOpen(), "session should consume its ready event")
+        for example in try WorkspaceEditFixture.validCases() {
+            let completed = TestGate()
+            var result: Result<LanguageServerWorkspaceEdit, Error>?
+            try harness.session.rename(fileURL: harness.source,
+                                       position: .init(line: 0, utf16Column: 7), newName: "Renamed") {
+                result = $0
+                completed.open()
+            }
+            harness.core.enqueueRequestSuccess(operation: .rename, result: example.normalized)
+            #expect(await completed.waitUntilOpen(), "\(example.name) must complete before the local deadline")
+            do {
+                let model = try #require(result).get()
+                let normalized = try JSONSerialization.jsonObject(with: JSONEncoder().encode(model)) as? NSDictionary
+                #expect(normalized == example.normalized as NSDictionary, "\(example.name) must survive the runtime consumer")
+            } catch {
+                Issue.record("\(example.name) failed normalized runtime decoding: \(error)")
+            }
+        }
+    }
+
+    @Test
+    func languageWorkspaceEditRequestsSynchronizeTheirActualSourceBeforeSending() async throws {
+        let harness = makeLanguageServerHarness()
+        defer { harness.manager.stopAllLanguageServers() }
+        let ready = TestGate()
+        harness.manager.onLanguageServerStateChange = { _, state, _ in
+            if state == .ready { ready.open() }
+        }
+        try harness.manager.synchronizeLanguageServer(for: harness.source, text: "struct App {}\n", rootURL: harness.root)
+        harness.core.enqueueReady(capabilities: ["rename", "formatting", "codeActions"])
+        try #require(await ready.waitUntilOpen(), "language server must reach ready")
+        try harness.manager.rename(fileURL: harness.source, text: "struct RenameSource {}\n",
+                                   position: .init(line: 0, utf16Column: 7), newName: "Renamed", rootURL: harness.root) { _ in }
+        #expect(harness.core.syncCalls.last?.text == "struct RenameSource {}\n")
+        try harness.manager.format(fileURL: harness.source, text: "struct FormatSource {}\n", rootURL: harness.root) { _ in }
+        #expect(harness.core.syncCalls.last?.text == "struct FormatSource {}\n")
+        try harness.manager.codeActions(fileURL: harness.source, text: "struct ActionSource {}\n",
+                                        range: .init(start: .init(line: 0, utf16Column: 0), end: .init(line: 0, utf16Column: 0)),
+                                        diagnostics: [], rootURL: harness.root) { _ in }
+        #expect(harness.core.syncCalls.last?.text == "struct ActionSource {}\n")
+    }
+
+    @Test
+    func languageWorkspaceEditSyncSnapshotBindsAcceptedSourceAndClearsOnCloseAndStop() async throws {
+        let harness = makeLanguageServerHarness()
+        defer { harness.session.stop() }
+        let ready = TestGate()
+        harness.session.onStateChange = { if $0 == .ready { ready.open() } }
+        try harness.session.start(rootURL: harness.root, workspaceFingerprint: nil)
+        harness.core.enqueueReady(capabilities: ["rename"])
+        try #require(await ready.waitUntilOpen())
+        #expect(harness.session.synchronizedDocumentSnapshot(for: harness.source) == nil)
+        try harness.session.synchronize(fileURL: harness.source, text: "let name = \"🦀\"", languageID: "swift")
+        let snapshot = harness.session.synchronizedDocumentSnapshot(for: harness.source)
+        #expect(snapshot?.sourceText == "let name = \"🦀\"")
+        #expect(snapshot?.version == 1)
+        #expect(snapshot?.sessionIdentity == harness.session.sessionIdentity)
+        #expect(snapshot?.sessionIdentity.isEmpty == false)
+        harness.core.syncFailure = .init(code: "fixture.sync", message: "Rejected new snapshot")
+        #expect(throws: (any Error).self) {
+            try harness.session.synchronize(fileURL: harness.source, text: "rejected", languageID: "swift")
+        }
+        #expect(harness.session.synchronizedDocumentSnapshot(for: harness.source) == snapshot)
+        harness.core.syncFailure = nil
+        harness.session.closeDocument(harness.source)
+        #expect(harness.session.synchronizedDocumentSnapshot(for: harness.source) == nil)
+        try harness.session.synchronize(fileURL: harness.source, text: "reopened", languageID: "swift")
+        #expect(harness.session.synchronizedDocumentSnapshot(for: harness.source)?.sourceText == "reopened")
+        harness.session.stop()
+        #expect(harness.session.sessionIdentity == nil)
+        #expect(harness.session.synchronizedDocumentSnapshot(for: harness.source) == nil)
+    }
+
     private func makeLanguageServerHarness(
         initializeTimeoutNanoseconds: UInt64 = 10_000_000_000,
         requestTimeoutNanoseconds: UInt64 = 30_000_000_000
@@ -4657,6 +4732,7 @@ private final class TestLanguageServerRuntimeCore: LanguageServerRuntimeCore, @u
     private(set) var requestCalls: [RequestCall] = []
     private(set) var cancelCalls: [CancelCall] = []
     private(set) var destroyedSessionIDs: [String] = []
+    var syncFailure: LanguageServerRuntimeFailure?
 
     init(providerID: String = "swift", sessionID: String? = nil) {
         self.providerID = providerID
@@ -4714,6 +4790,7 @@ private final class TestLanguageServerRuntimeCore: LanguageServerRuntimeCore, @u
         languageID: String,
         text: String
     ) -> Result<LanguageServerDocumentSync, LanguageServerRuntimeFailure> {
+        if let syncFailure { return .failure(syncFailure) }
         syncCalls.append(SyncCall(
             sessionID: sessionID,
             fileURL: fileURL,

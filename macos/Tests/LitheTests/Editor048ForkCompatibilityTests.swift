@@ -182,9 +182,12 @@ struct Editor048ForkCompatibilityTests {
             documentA.markSavedWithoutWriting()
             #expect(!documentA.isDirty)
         }
-        #expect(await releasedA.waitUntilOpen(timeout: .seconds(2)), "Old editor release did not complete")
-        #expect(await releasedACoordinatorGate.waitUntilOpen(timeout: .seconds(2)), "Old coordinator release did not complete")
-        #expect(await releasedAStorageGate.waitUntilOpen(timeout: .seconds(2)), "Old text storage release did not complete")
+        await drainNativeReleaseEvents(
+            until: [releasedA, releasedACoordinatorGate, releasedAStorageGate], timeout: .seconds(2)
+        )
+        #expect(releasedA.isOpen, "Old editor release did not complete")
+        #expect(releasedACoordinatorGate.isOpen, "Old coordinator release did not complete")
+        #expect(releasedAStorageGate.isOpen, "Old text storage release did not complete")
         #expect(releasedACoordinator == nil)
         #expect(releasedATextStorage == nil)
         try #require(releasedAView == nil, "Switching documents must release the old native editor")
@@ -231,9 +234,12 @@ struct Editor048ForkCompatibilityTests {
             #expect(editor.view.selectedRange() == NSRange(location: sourceB.utf16.count, length: 0))
             #expect(documentA.text == editedA, "The newest shared action must undo document B first")
         }
-        #expect(await releasedB.waitUntilOpen(timeout: .seconds(2)), "Old editor release did not complete")
-        #expect(await releasedBCoordinatorGate.waitUntilOpen(timeout: .seconds(2)), "Old coordinator release did not complete")
-        #expect(await releasedBStorageGate.waitUntilOpen(timeout: .seconds(2)), "Old text storage release did not complete")
+        await drainNativeReleaseEvents(
+            until: [releasedB, releasedBCoordinatorGate, releasedBStorageGate], timeout: .seconds(2)
+        )
+        #expect(releasedB.isOpen, "Old editor release did not complete")
+        #expect(releasedBCoordinatorGate.isOpen, "Old coordinator release did not complete")
+        #expect(releasedBStorageGate.isOpen, "Old text storage release did not complete")
         #expect(releasedBCoordinator == nil)
         #expect(releasedBTextStorage == nil)
         try #require(releasedBView == nil, "Returning to document A must release document B's native editor")
@@ -676,4 +682,34 @@ private final class EditorReleaseObservation: NSObject {
     let gate: TestGate
     init(gate: TestGate) { self.gate = gate }
     deinit { gate.open() }
+}
+
+// SwiftPM drives a CFRunLoop without NSApplication's per-event autorelease
+// pools. Run AppKit's delayed release callbacks inside a pool owned by each
+// event turn, so the lifetime assertion measures owners rather than the host's
+// outer pool. Schedule outside a main-queue task before entering the native
+// loop: nesting while that queue is draining would starve queued callbacks.
+@MainActor
+private func drainNativeReleaseEvents(until gates: [TestGate], timeout: Duration) async {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    let maximumEventTurnSeconds = 0.02
+    await withCheckedContinuation { continuation in
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue) {
+            precondition(Thread.isMainThread)
+            while !gates.allSatisfy(\.isOpen), clock.now < deadline {
+                let remaining = clock.now.duration(to: deadline).components
+                let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
+                // Timer callbacks do not make returnAfterSourceHandled return.
+                // Bound each event turn so their autoreleases drain promptly;
+                // the overall deadline never moves and no sleep is involved.
+                let result = autoreleasepool {
+                    CFRunLoopRunInMode(.defaultMode, min(maximumEventTurnSeconds, max(0, seconds)), true)
+                }
+                if result == .finished { break }
+            }
+            continuation.resume()
+        }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
 }

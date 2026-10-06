@@ -7,6 +7,9 @@ package struct WorkspaceTextEdit: Equatable, Sendable {
     package let replacementText: String
     package let sourceIdentity: String
 
+    /// Unchanged targets remain transaction preconditions without being written.
+    package var changesText: Bool { !sourceText.utf8.elementsEqual(replacementText.utf8) }
+
     package init(path: String, sourceText: String, replacementText: String, sourceIdentity: String) {
         self.path = path
         self.sourceText = sourceText

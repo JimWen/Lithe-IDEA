@@ -7,6 +7,7 @@ mod process;
 mod scripted;
 mod transport;
 mod types;
+mod workspace_edit;
 
 pub(crate) use client::*;
 pub(crate) use engine::*;

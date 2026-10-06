@@ -286,6 +286,13 @@ pub struct LspClientResponse {
     pub events: Vec<LspClientEvent>,
 }
 
+/// Stable client-side result validation failure, separate from server JSON-RPC errors.
+#[derive(Debug, Clone, Serialize)]
+pub struct LspClientResultError {
+    pub code: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 /// Normalized event produced while reducing a server message.
@@ -306,4 +313,7 @@ pub struct LspClientEvent {
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Failed normalization completes only this request, without a partial result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_error: Option<LspClientResultError>,
 }

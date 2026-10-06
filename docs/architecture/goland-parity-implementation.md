@@ -24,7 +24,7 @@ Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已
 | B4a4 | [Terminal 启动配置](goland-parity-b4a4-terminal-startup-done.md) | 已完成 |
 | B4a5 | [Terminal 显示与输入](goland-parity-b4a5-terminal-display-done.md) | 已完成 |
 | B4a6 | [Terminal 虚拟环境](goland-parity-b4a6-terminal-venv-done.md) | 已完成 |
-| B6 | [语义编辑事务与重构](goland-parity-b6-refactor.md) | B6a1a 已验收；2026-10-06 原生编辑器门禁通过，B6a2 实施前衔接审查完成、尚未编码；复用既有文本事务/Undo，完整资源事务仍待实施，见[当前裁定](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
+| B6 | [语义编辑事务与重构](goland-parity-b6-refactor.md) | B6a1a 已验收；2026-10-06 原生编辑器门禁通过，B6a2 首个文本切片 Rust/Swift 自动验证通过，安装与实机验收待完成；复用既有文本事务/Undo，完整资源事务仍待实施，见[当前裁定](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
 | B7a | [Go Tools / Cargo](goland-parity-b7a-go-cargo.md) | 部分完成 |
 | B7a2a / B7a2b | [进程清理、工具捕获与插件资源](goland-parity-b7a2b-project-tool-capture-done.md) | 已完成 |
 | B7a2c | [项目元数据读取与刷新](goland-parity-b7a2c-project-metadata-refresh.md) | c1/c2 完成，c3 随 B7a3 完成 |

@@ -1206,6 +1206,47 @@ virtualUri }` without a document `uri`. Its terminal `requestCompleted` event
 returns `{ text }`, where `text` is the provider-resolved UTF-8 source for the
 opaque virtual URI.
 
+Rename returns a normalized workspace edit with `operations` and
+`changeAnnotations`, replacing the former path-keyed `changes` map. Code Action
+and resolve use this same shape in `edit`. Each operation has a `kind`:
+
+| Kind | Fields |
+| --- | --- |
+| `edit` | `uri`, nullable `version`, ordered `edits` |
+| `create` | `uri`, optional `options` (`overwrite`, `ignoreIfExists`), optional `annotationId` |
+| `rename` | `oldUri`, `newUri`, optional create/rename `options`, optional `annotationId` |
+| `delete` | `uri`, optional `options` (`recursive`, `ignoreIfNotExists`), optional `annotationId` |
+
+Text edits contain `range`, `newText`, and an optional `annotationId`. Ranges
+use zero-based `line` / `utf16Column`; annotation entries retain `label`,
+optional `needsConfirmation`, and optional `description`. Original file URI
+strings, signed 32-bit document versions (including zero), operation order and
+equal-position edit order survive normalization. Omitted and null versions
+normalize to null. If the server supplies `documentChanges`, that array takes
+precedence even when empty; otherwise `changes` entries are ordered by URI UTF-8
+bytes. Repeated URI operations remain separate. Only a nullable Rename result
+means an empty edit; an explicit Code Action `edit` must be an object.
+
+Malformed edits fail the entire response, including a mixed valid/invalid code
+action list. The stable codes are `lsp.workspaceEdit.malformedEdit`,
+`lsp.workspaceEdit.unknownOperation`, `lsp.workspaceEdit.missingURI`, and
+`lsp.workspaceEdit.unsupportedScheme`. Formatting and completion edits also
+reject missing/defaulted coordinates or replacement text instead of returning
+a successful subset. The pure reducer carries client validation errors in
+`resultError: {code, message}`, distinct from a server's raw JSON-RPC `error`.
+The runtime emits one `requestCompleted` with the same operation ID and stable
+error code, no partial result, and leaves the session usable. Response claim,
+normalization and state commit are atomic relative to deadline expiry.
+
+For `codeAction/resolve`, hosts encode typed operations back to ordered LSP
+`documentChanges`, preserving original file URI strings, versions, resource
+options and annotations, and convert `utf16Column` back to `character`.
+Representing resource operations does not advertise or authorize applying them.
+The host must validate workspace ownership, session/source freshness, required
+confirmation and transaction support before mutation. The common fixture is
+`shared/fixtures/lsp/workspace-edit-v1.json`, consumed by Rust workspace-edit
+tests and Swift `LanguageWorkspaceEditTests` / the runtime integration tests.
+
 `lsp.pollEvents` drains events ordered by per-session `sequence`. `lsp.waitEvents`
 accepts `{ sessionId, timeoutMilliseconds }` and waits on a session event
 channel until events are queued or the timeout elapses, then drains the same

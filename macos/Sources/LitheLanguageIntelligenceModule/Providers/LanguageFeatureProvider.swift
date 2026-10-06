@@ -202,10 +202,17 @@ package final class LanguageServerFeatureProvider: LanguageFeatureProvider {
         in context: LanguageFeatureRequestContext,
         completion: @escaping (Result<[LanguageServerCompletionItem], Error>) -> Void
     ) throws {
+        let identity = session.sessionIdentity
         try session.completions(
             fileURL: context.fileURL,
             position: context.position,
-            completion: completion
+            completion: { result in
+                completion(result.map { values in values.map { value in
+                    var value = value
+                    value.originSessionIdentity = identity
+                    return value
+                } })
+            }
         )
     }
 

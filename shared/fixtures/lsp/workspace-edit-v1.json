@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "valid": [
+    {
+      "name": "ordered_resources_repeated_uri_versions_annotations",
+      "wire": {
+        "changes": { "not-a-file-uri": "ignored because documentChanges takes precedence" },
+        "documentChanges": [
+          { "textDocument": { "uri": "file:///workspace/na%C3%AFve%20space.go", "version": 7 }, "edits": [{ "range": { "start": { "line": 1, "character": 2 }, "end": { "line": 1, "character": 5 } }, "newText": "first", "annotationId": "text" }] },
+          { "textDocument": { "uri": "file:///workspace/na%C3%AFve%20space.go", "version": 8 }, "edits": [{ "range": { "start": { "line": 1, "character": 2 }, "end": { "line": 1, "character": 7 } }, "newText": "second" }] },
+          { "kind": "rename", "oldUri": "file:///workspace/na%C3%AFve%20space.go", "newUri": "file:///workspace/renamed.go", "options": { "overwrite": false, "ignoreIfExists": true }, "annotationId": "files" },
+          { "kind": "create", "uri": "file:///workspace/new.go", "options": { "overwrite": true, "ignoreIfExists": false }, "annotationId": "files" },
+          { "textDocument": { "uri": "file:///workspace/new.go", "version": null }, "edits": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "newText": "package demo\n" }] },
+          { "kind": "delete", "uri": "file:///workspace/old-dir", "options": { "recursive": true, "ignoreIfNotExists": false }, "annotationId": "files" }
+        ],
+        "changeAnnotations": {
+          "text": { "label": "Rename reference", "needsConfirmation": false },
+          "files": { "label": "Update resources", "description": "Files and a directory", "needsConfirmation": true }
+        }
+      },
+      "normalized": {
+        "operations": [
+          { "kind": "edit", "uri": "file:///workspace/na%C3%AFve%20space.go", "version": 7, "edits": [{ "range": { "start": { "line": 1, "utf16Column": 2 }, "end": { "line": 1, "utf16Column": 5 } }, "newText": "first", "annotationId": "text" }] },
+          { "kind": "edit", "uri": "file:///workspace/na%C3%AFve%20space.go", "version": 8, "edits": [{ "range": { "start": { "line": 1, "utf16Column": 2 }, "end": { "line": 1, "utf16Column": 7 } }, "newText": "second" }] },
+          { "kind": "rename", "oldUri": "file:///workspace/na%C3%AFve%20space.go", "newUri": "file:///workspace/renamed.go", "options": { "overwrite": false, "ignoreIfExists": true }, "annotationId": "files" },
+          { "kind": "create", "uri": "file:///workspace/new.go", "options": { "overwrite": true, "ignoreIfExists": false }, "annotationId": "files" },
+          { "kind": "edit", "uri": "file:///workspace/new.go", "version": null, "edits": [{ "range": { "start": { "line": 0, "utf16Column": 0 }, "end": { "line": 0, "utf16Column": 0 } }, "newText": "package demo\n" }] },
+          { "kind": "delete", "uri": "file:///workspace/old-dir", "options": { "recursive": true, "ignoreIfNotExists": false }, "annotationId": "files" }
+        ],
+        "changeAnnotations": {
+          "text": { "label": "Rename reference", "needsConfirmation": false },
+          "files": { "label": "Update resources", "description": "Files and a directory", "needsConfirmation": true }
+        }
+      }
+    },
+    {
+      "name": "changes_sorted_by_uri_preserve_equal_position_order",
+      "wire": { "changes": {
+        "file:///workspace/z.go": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "newText": "z" }],
+        "file:///workspace/a.go": [
+          { "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "newText": "first" },
+          { "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "newText": "second" }
+        ]
+      } },
+      "normalized": { "operations": [
+        { "kind": "edit", "uri": "file:///workspace/a.go", "version": null, "edits": [
+          { "range": { "start": { "line": 0, "utf16Column": 0 }, "end": { "line": 0, "utf16Column": 0 } }, "newText": "first" },
+          { "range": { "start": { "line": 0, "utf16Column": 0 }, "end": { "line": 0, "utf16Column": 0 } }, "newText": "second" }
+        ] },
+        { "kind": "edit", "uri": "file:///workspace/z.go", "version": null, "edits": [{ "range": { "start": { "line": 0, "utf16Column": 0 }, "end": { "line": 0, "utf16Column": 0 } }, "newText": "z" }] }
+      ], "changeAnnotations": {} }
+    },
+    {
+      "name": "version_zero_distinct_from_missing_and_null",
+      "wire": { "documentChanges": [
+        { "textDocument": { "uri": "file:///workspace/zero.go", "version": 0 }, "edits": [] },
+        { "textDocument": { "uri": "file:///workspace/missing.go" }, "edits": [] },
+        { "textDocument": { "uri": "file:///workspace/null.go", "version": null }, "edits": [] }
+      ] },
+      "normalized": { "operations": [
+        { "kind": "edit", "uri": "file:///workspace/zero.go", "version": 0, "edits": [] },
+        { "kind": "edit", "uri": "file:///workspace/missing.go", "version": null, "edits": [] },
+        { "kind": "edit", "uri": "file:///workspace/null.go", "version": null, "edits": [] }
+      ], "changeAnnotations": {} }
+    },
+    { "name": "empty_document_changes_precede_changes", "wire": { "documentChanges": [], "changes": { "file:///workspace/ignored.go": [] } }, "normalized": { "operations": [], "changeAnnotations": {} } },
+    { "name": "null_rename_result_is_no_edit", "wire": null, "normalized": { "operations": [], "changeAnnotations": {} } }
+  ],
+  "invalid": [
+    { "name": "unknown_operation", "wire": { "documentChanges": [{ "kind": "move", "uri": "file:///workspace/a.go" }] }, "code": "lsp.workspaceEdit.unknownOperation" },
+    { "name": "missing_uri", "wire": { "documentChanges": [{ "textDocument": { "version": 1 }, "edits": [] }] }, "code": "lsp.workspaceEdit.missingURI" },
+    { "name": "unsupported_scheme", "wire": { "changes": { "untitled:buffer": [] } }, "code": "lsp.workspaceEdit.unsupportedScheme" },
+    { "name": "missing_position", "wire": { "changes": { "file:///workspace/a.go": [{ "range": { "start": { "character": 0 }, "end": { "line": 0, "character": 0 } }, "newText": "x" }] } }, "code": "lsp.workspaceEdit.malformedEdit" },
+    { "name": "noninteger_position", "wire": { "changes": { "file:///workspace/a.go": [{ "range": { "start": { "line": 0.5, "character": 0 }, "end": { "line": 1, "character": 0 } }, "newText": "x" }] } }, "code": "lsp.workspaceEdit.malformedEdit" },
+    { "name": "negative_position", "wire": { "changes": { "file:///workspace/a.go": [{ "range": { "start": { "line": 0, "character": -1 }, "end": { "line": 0, "character": 0 } }, "newText": "x" }] } }, "code": "lsp.workspaceEdit.malformedEdit" },
+    { "name": "reversed_range", "wire": { "changes": { "file:///workspace/a.go": [{ "range": { "start": { "line": 2, "character": 0 }, "end": { "line": 1, "character": 0 } }, "newText": "x" }] } }, "code": "lsp.workspaceEdit.malformedEdit" },
+    { "name": "missing_new_text", "wire": { "changes": { "file:///workspace/a.go": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } } }] } }, "code": "lsp.workspaceEdit.malformedEdit" },
+    { "name": "valid_then_malformed_edit", "wire": { "changes": { "file:///workspace/a.go": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }, "newText": "valid" }, { "newText": "invalid" }] } }, "code": "lsp.workspaceEdit.malformedEdit" },
+    { "name": "version_not_integer", "wire": { "documentChanges": [{ "textDocument": { "uri": "file:///workspace/a.go", "version": "0" }, "edits": [] }] }, "code": "lsp.workspaceEdit.malformedEdit" },
+    { "name": "dangling_text_annotation", "wire": { "documentChanges": [{ "textDocument": { "uri": "file:///workspace/a.go", "version": 1 }, "edits": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }, "newText": "x", "annotationId": "missing" }] }] }, "code": "lsp.workspaceEdit.malformedEdit" },
+    { "name": "dangling_resource_annotation", "wire": { "documentChanges": [{ "kind": "create", "uri": "file:///workspace/a.go", "annotationId": "missing" }] }, "code": "lsp.workspaceEdit.malformedEdit" },
+    { "name": "malformed_resource_option", "wire": { "documentChanges": [{ "kind": "delete", "uri": "file:///workspace/a.go", "options": { "recursive": "true" } }] }, "code": "lsp.workspaceEdit.malformedEdit" },
+    { "name": "document_changes_is_not_array", "wire": { "documentChanges": {} }, "code": "lsp.workspaceEdit.malformedEdit" },
+    {"name": "relative_file_uri", "wire": {"changes": {"file:relative.go": []}}, "code": "lsp.workspaceEdit.malformedEdit"},
+    {"name": "raw_backslash_uri", "wire": {"changes": {"file:///workspace\\file.go": []}}, "code": "lsp.workspaceEdit.malformedEdit"},
+    {"name": "raw_forbidden_ascii_uri", "wire": {"changes": {"file:///workspace/a<.go": []}}, "code": "lsp.workspaceEdit.malformedEdit"}
+  ]
+}

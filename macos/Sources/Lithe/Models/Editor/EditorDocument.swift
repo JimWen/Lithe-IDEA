@@ -105,7 +105,15 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     func acquireMutationLease() -> MutationLease? {
         // A native write owns its captured bytes until completion. Workspace
         // transactions must not overlap that write or its disk reconciliation.
-        guard !isReadOnly, activeMutationLease == nil, lifecycleState.status != .saving else { return nil }
+        guard lifecycleState.status != .saving else { return nil }
+        return acquireSynchronousBufferMutationLease()
+    }
+
+    /// Reserves live buffers for a synchronous, no-I/O editor action. Release
+    /// before yielding the main actor. An in-flight save still owns its captured
+    /// bytes, exactly as when native typing or Undo advances the live revision.
+    func acquireSynchronousBufferMutationLease() -> MutationLease? {
+        guard !isReadOnly, activeMutationLease == nil else { return nil }
         let lease = MutationLease(id: UUID())
         activeMutationLease = lease
         return lease
@@ -200,6 +208,13 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
             end: Self.position(at: source.length - suffix, in: source),
             text: target.substring(with: NSRange(location: start, length: target.length - suffix - start))
         )]
+    }
+
+    /// A successful full synchronization covers earlier native deltas only
+    /// when the server's accepted bytes still equal the live buffer.
+    func acknowledgeLanguageServerSnapshot(_ acceptedText: String) {
+        guard storedText.utf8.elementsEqual(acceptedText.utf8) else { return }
+        pendingLanguageServerBaseText = nil
     }
 
     private static func position(

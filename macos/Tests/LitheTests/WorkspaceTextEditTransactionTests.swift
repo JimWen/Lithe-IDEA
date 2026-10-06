@@ -89,6 +89,84 @@ struct WorkspaceTextEditTransactionTests {
         #expect(await first.value.state == .applied)
     }
 
+    @Test
+    func finalHostCommitFailureCompensatesDiskAfterTheLastWrite() async {
+        let files = TransactionMemoryFiles(["file.txt": "old"])
+        let result = await WorkspaceTextEditCoordinator().apply(
+            [edit("file.txt", "old", "new")], at: URL(fileURLWithPath: "/workspace"), operations: files,
+            commit: { throw CancellationError() })
+        #expect(result.state == .cancelled)
+        #expect(result.recoveryPaths.isEmpty)
+        #expect(await files.text("file.txt") == "old")
+    }
+
+    @Test(arguments: ["unchanged", "bytes", "identity"])
+    func finalUnchangedTargetValidationCompensatesOnlyActualWrites(change: String) async {
+        let root = URL(fileURLWithPath: "/workspace")
+        let files = TransactionMemoryFiles(["changed.txt": "old", "noop.txt": "old"], gatesWrite: true)
+        let task = Task { await WorkspaceTextEditCoordinator().apply(
+            [edit("changed.txt", "old", "new"), edit("noop.txt", "old", "old")], at: root, operations: files) }
+        defer { task.cancel(); files.release.open() }
+        #expect(await files.entered.waitUntilOpen(timeout: .seconds(2)))
+        if change != "unchanged" { await files.set("external", for: "noop.txt") }
+        if change == "identity" { await files.set("old", for: "noop.txt") }
+        files.release.open()
+        let result = await task.value
+        #expect(result.state == (change == "unchanged" ? .applied : .failed))
+        #expect(await files.text("changed.txt") == (change == "unchanged" ? "new" : "old"))
+        #expect(await files.text("noop.txt") == (change == "bytes" ? "external" : "old"))
+        #expect(result.changedPaths == (change == "unchanged" ? ["changed.txt"] : []))
+        #expect(result.recoveryPaths.isEmpty)
+    }
+
+    @Test
+    func changedContextDuringDiskCaptureDoesNotCommitBuffersOrRegisterUndo() async throws {
+        let root = URL(fileURLWithPath: "/workspace")
+        let document = EditorDocument(url: root.appendingPathComponent("open.txt"), text: "old", modificationDate: nil)
+        let files = TransactionMemoryFiles(["closed.txt": "old"], gatesCapture: true)
+        let controller = WorkspaceTextEditUndoController(undoManager: UndoManager(), coordinator: WorkspaceTextEditCoordinator(), operations: files)
+        controller.configure(documents: { [document] }, willMutate: { _ in }, didMutate: { _ in }, notifyFailure: { _ in })
+        var current = true
+        let task = Task { await controller.apply([edit("open.txt", "old", "new"), edit("closed.txt", "old", "new")], at: root,
+            expectedBuffers: [document.url: WorkspaceTextEditBufferSnapshot(document)], validate: { current }) }
+        defer { task.cancel(); controller.reset(); files.release.open() }
+        #expect(await files.entered.waitUntilOpen(timeout: .seconds(2)))
+        current = false
+        files.release.open()
+        #expect(await task.value.state == .cancelled)
+        #expect(document.text == "old")
+        #expect(!document.hasMutationLease)
+        #expect(!controller.canUndo)
+        #expect(await files.text("closed.txt") == "old")
+    }
+
+    @Test(arguments: [false, true])
+    func completionHistoryCannotChangeAReopenedOrReloadedDocument(reopen: Bool) async throws {
+        let root = URL(fileURLWithPath: "/workspace")
+        let url = root.appendingPathComponent("open.txt")
+        var document = EditorDocument(url: url, text: "old", modificationDate: nil)
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        let controller = WorkspaceTextEditUndoController(undoManager: undo, coordinator: WorkspaceTextEditCoordinator(),
+            operations: TransactionMemoryFiles([:]))
+        var failures: [String] = []
+        controller.configure(documents: { [document] }, willMutate: { _ in }, didMutate: { _ in }, notifyFailure: { failures.append($0) })
+        defer { controller.reset() }
+        #expect(controller.applyOpenDocumentEdits([edit("open.txt", "old", "new")], at: root,
+            expectedBuffers: [url: WorkspaceTextEditBufferSnapshot(document)]).state == .applied)
+        if reopen {
+            controller.handleDocumentClosed(document)
+            document = EditorDocument(url: url, text: "new", modificationDate: nil)
+        } else {
+            document.replaceWithDiskContent("new")
+        }
+        _ = controller.undo()
+        _ = await controller.waitForCurrentOperation()
+        #expect(document.text == "new")
+        #expect(!controller.canRedo)
+        #expect(failures.count == 1)
+    }
+
     @Test(arguments: [false, true])
     func nativeRollbackUsesWrittenIdentityAndPreservesExternalWriter(externalChange: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("lithe-transaction-\(UUID().uuidString)")
@@ -114,14 +192,16 @@ private actor TransactionMemoryFiles: WorkspaceTextEditFileOperations {
     nonisolated let entered = TestGate()
     nonisolated let release = TestGate()
     private var values: [String: String]
-    private var generation = 0
+    private var generations: [String: Int] = [:]
     private let gatesCapture: Bool
-    init(_ values: [String: String], gatesCapture: Bool = false) {
+    private let gatesWrite: Bool
+    init(_ values: [String: String], gatesCapture: Bool = false, gatesWrite: Bool = false) {
         self.values = values
         self.gatesCapture = gatesCapture
+        self.gatesWrite = gatesWrite
     }
     func text(_ path: String) -> String? { values[path] }
-    func set(_ text: String, for path: String) { values[path] = text; generation += 1 }
+    func set(_ text: String, for path: String) { values[path] = text; generations[path, default: 0] += 1 }
     func capture(_ paths: [String], at workspaceURL: URL) async throws -> [WorkspaceTextEditSnapshot] {
         if gatesCapture {
             entered.open()
@@ -129,14 +209,20 @@ private actor TransactionMemoryFiles: WorkspaceTextEditFileOperations {
         }
         return try paths.map { path in
             guard let text = values[path] else { throw CocoaError(.fileNoSuchFile) }
-            return WorkspaceTextEditSnapshot(path: path, text: text, identity: String(generation))
+            return WorkspaceTextEditSnapshot(path: path, text: text, identity: String(generations[path, default: 0]))
         }
     }
     func replace(_ edit: WorkspaceTextEdit, expected snapshot: WorkspaceTextEditSnapshot,
-                 at workspaceURL: URL) throws -> WorkspaceTextEditSnapshot {
+                 at workspaceURL: URL) async throws -> WorkspaceTextEditSnapshot {
         guard values[edit.path] == snapshot.text else { throw CocoaError(.fileWriteUnknown) }
         set(edit.replacementText, for: edit.path)
-        return WorkspaceTextEditSnapshot(path: edit.path, text: edit.replacementText, identity: String(generation))
+        let written = WorkspaceTextEditSnapshot(path: edit.path, text: edit.replacementText, identity: String(generations[edit.path, default: 0]))
+        if gatesWrite {
+            entered.open()
+            let released = await release.waitUntilOpen(timeout: .seconds(2))
+            if !released, !Task.isCancelled { Issue.record("Write gate did not release before its deadline") }
+        }
+        return written
     }
     func restore(_ snapshot: WorkspaceTextEditSnapshot, expected writtenSnapshot: WorkspaceTextEditSnapshot,
                  at workspaceURL: URL) throws {

@@ -4,6 +4,21 @@ import Testing
 
 @MainActor
 struct EditorDocumentPersistenceBoundaryTests {
+    @Test func acceptedSnapshotAcknowledgmentRequiresExactBytesAndPreservesDocumentIdentity() {
+        let document = EditorDocument(url: URL(fileURLWithPath: "/fixture/main.go"), text: "é", modificationDate: nil)
+        #expect(document.applyLiveEditorEdit(replacedRange: NSRange(location: 0, length: 1), replacement: "e\u{301}"))
+        document.acknowledgeLanguageServerSnapshot("é")
+        #expect(document.takePendingLanguageServerChanges().count == 1)
+        #expect(document.applyLiveEditorEdit(replacedRange: NSRange(location: 2, length: 0), replacement: "!"))
+        let revision = document.lifecycleState.revision
+        let generation = document.nativeHistoryGeneration
+        document.acknowledgeLanguageServerSnapshot(document.text)
+        #expect(document.takePendingLanguageServerChanges().isEmpty)
+        #expect(document.lifecycleState.revision == revision)
+        #expect(document.nativeHistoryGeneration == generation)
+        #expect(document.isDirty)
+    }
+
     @Test(arguments: ["\n", "\r", "\r\n"])
     func nativeIncrementalLSPChangesCountLineTerminators(separator: String) throws {
         let text = "first" + separator + "a😀b"

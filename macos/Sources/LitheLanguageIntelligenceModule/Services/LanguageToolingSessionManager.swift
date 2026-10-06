@@ -3,6 +3,13 @@ import Foundation
 import LitheCoreContracts
 import LitheModuleAPI
 
+/// Identifies one backend lifetime in one workspace, not merely a provider.
+package struct LanguageEditingSessionToken: Equatable, Sendable {
+    package let providerID: String
+    package let identity: String
+    package let rootURL: URL
+}
+
 package enum LanguageToolingSessionError: LocalizedError, Equatable, Sendable {
     case noProvider(fileExtension: String)
     case providerNotInstalled(String)
@@ -288,6 +295,46 @@ package final class LanguageToolingSessionManager: ObservableObject,
                     ?? descriptor.languageIdentifier(for: fileURL)
             )
         }
+    }
+
+    /// Synchronizes before the host freezes document revisions for an edit
+    /// request. Local completion providers do not require a server token.
+    package func prepareEditingSession(fileURL: URL, text: String, rootURL: URL) throws -> LanguageEditingSessionToken? {
+        guard readyLanguageServerSession(for: fileURL) != nil else { return nil }
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
+        guard let descriptor = catalog.provider(for: fileURL),
+              let session = readyLanguageServerSession(for: fileURL),
+              let identity = session.sessionIdentity else {
+            throw unavailableLanguageServerError(for: fileURL)
+        }
+        return LanguageEditingSessionToken(providerID: descriptor.id, identity: identity,
+                                           rootURL: rootURL.standardizedFileURL)
+    }
+
+    /// Resolves only the original owner. Target extensions never select a
+    /// different provider during a workspace edit, resolve, or command.
+    package func editingSession(matching token: LanguageEditingSessionToken) throws -> any LanguageServerSession {
+        guard languageServerRoots[token.providerID] == token.rootURL,
+              languageServerStates[token.providerID] == .ready,
+              let session = languageServers[token.providerID], session.isRunning,
+              session.sessionIdentity == token.identity else {
+            throw LanguageToolingSessionError.toolingUnavailable("The language server session changed. Request the action again.")
+        }
+        return session
+    }
+
+    package func isCurrentEditingSession(_ token: LanguageEditingSessionToken) -> Bool {
+        (try? editingSession(matching: token)) != nil
+    }
+
+    package func synchronizeEditingDocument(fileURL: URL, text: String, in token: LanguageEditingSessionToken) throws {
+        let session = try editingSession(matching: token)
+        guard let descriptor = catalog.descriptors.first(where: { $0.id == token.providerID }) else {
+            throw unavailableLanguageServerError(for: fileURL)
+        }
+        try session.synchronize(fileURL: fileURL, text: text,
+                                languageID: extensionLanguageIdentifiers[token.providerID]
+                                    ?? descriptor.languageIdentifier(for: fileURL))
     }
 
     /// Starts one workspace-owned session without opening a document.
@@ -1000,12 +1047,13 @@ package final class LanguageToolingSessionManager: ObservableObject,
 
     package func rename(
         fileURL: URL,
-        text _: String,
+        text: String,
         position: LanguageServerPosition,
         newName: String,
-        rootURL _: URL,
+        rootURL: URL,
         completion: @escaping (Result<LanguageServerWorkspaceEdit, Error>) -> Void
     ) throws {
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
         if let session = readyLanguageServerSession(for: fileURL) {
             try session.rename(
                 fileURL: fileURL,
@@ -1020,8 +1068,8 @@ package final class LanguageToolingSessionManager: ObservableObject,
 
     package func format(
         fileURL: URL,
-        text _: String,
-        rootURL _: URL,
+        text: String,
+        rootURL: URL,
         options _: [String: Any] = [
             "tabSize": 4,
             "insertSpaces": true,
@@ -1031,6 +1079,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
         ],
         completion: @escaping (Result<[LanguageServerTextEdit], Error>) -> Void
     ) throws {
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
         if let session = readyLanguageServerSession(for: fileURL) {
             try session.format(fileURL: fileURL, completion: completion)
             return
@@ -1040,12 +1089,13 @@ package final class LanguageToolingSessionManager: ObservableObject,
 
     package func codeActions(
         fileURL: URL,
-        text _: String,
+        text: String,
         range: LanguageServerRange,
         diagnostics: [LanguageServerDiagnostic],
-        rootURL _: URL,
+        rootURL: URL,
         completion: @escaping (Result<[LanguageServerCodeAction], Error>) -> Void
     ) throws {
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
         if let session = readyLanguageServerSession(for: fileURL) {
             try session.codeActions(
                 fileURL: fileURL,

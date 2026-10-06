@@ -489,6 +489,10 @@ struct RuntimeSession {
     provider_id: String,
     #[cfg(test)]
     root_uri: String,
+    /// One-shot deterministic interleaving at the response reduction boundary.
+    /// Tests expire deadlines here without scheduling or sleeping on real time.
+    #[cfg(test)]
+    before_response_reduction: Mutex<Option<Box<dyn FnOnce(&RuntimeSession) + Send>>>,
     /// Serializes protocol-state commits with complete outbound message batches.
     /// Callers acquire this before `state` whenever an action can write to the
     /// server, preserving the same order in memory and on the wire.
@@ -831,6 +835,8 @@ impl LspEngine {
             provider_id: request.provider_id,
             #[cfg(test)]
             root_uri: request.root_uri,
+            #[cfg(test)]
+            before_response_reduction: Mutex::new(None),
             outbound_order: Mutex::new(()),
             state: Mutex::new(SessionState {
                 lifecycle: LspLifecycleState::Created,
@@ -1684,45 +1690,47 @@ impl RuntimeSession {
         } else {
             None
         };
-        let (known_pending, pending_before, old_capabilities) = {
-            let state = self.lock_state()?;
-            let pending = response_id
-                .as_ref()
-                .and_then(|id| state.pending.get(id).cloned());
-            (
-                response_id
-                    .as_ref()
-                    .is_none_or(|id| state.client.pending_requests.contains_key(id)),
-                pending,
-                state.client.server_capabilities.clone(),
-            )
-        };
-        // A response whose request has timed out, been cancelled, or belongs
-        // to an older session is intentionally ignored.
-        if response_id.is_some() && !known_pending {
-            self.log(
-                "info",
-                "Ignored a late language-server response",
-                response_id,
-            );
-            return Ok(());
+        #[cfg(test)]
+        if response_id.is_some() {
+            let probe = self.before_response_reduction.lock().unwrap().take();
+            if let Some(probe) = probe {
+                probe(self);
+            }
         }
 
-        let reduced = {
-            let state = self.lock_state()?;
-            client_apply_server_message(ClientApplyServerMessageRequest {
-                state: state.client.clone(),
-                message,
-            })?
-        };
-        let mut outbound = reduced.messages;
+        let mut outbound;
         let mut flush_documents = false;
         let mut ready_server_info = None;
         let mut fail_initialize: Option<(String, Option<String>)> = None;
         let mut service_ready = false;
         let mut fail_service_ready = None;
         {
+            // The deadline monitor deliberately does not acquire outbound_order.
+            // Claim, reduce and commit under one state lock so it cannot expire
+            // a captured pending request between reduction and terminal delivery.
             let mut state = self.lock_state()?;
+            if response_id
+                .as_ref()
+                .is_some_and(|id| !state.client.pending_requests.contains_key(id))
+            {
+                push_log_event(
+                    self,
+                    &mut state,
+                    "info",
+                    "Ignored a late language-server response",
+                    response_id,
+                );
+                return Ok(());
+            }
+            let pending_before = response_id
+                .as_ref()
+                .and_then(|id| state.pending.get(id).cloned());
+            let old_capabilities = state.client.server_capabilities.clone();
+            let reduced = client_apply_server_message(ClientApplyServerMessageRequest {
+                state: state.client.clone(),
+                message,
+            })?;
+            outbound = reduced.messages;
             state.client = reduced.state;
             if let Some(request_id) = response_id.as_ref() {
                 state.client.pending_requests.remove(request_id);
@@ -1783,8 +1791,20 @@ impl RuntimeSession {
                                 .events
                                 .iter()
                                 .find(|event| event.request_id.as_ref() == response_id.as_ref());
-                            let error =
-                                event.and_then(|event| event.error.as_ref()).map(|detail| {
+                            let error = event.and_then(|event| {
+                                if let Some(error) = &event.result_error {
+                                    return Some(runtime_error(
+                                        self,
+                                        &error.code,
+                                        "request",
+                                        Some(&pending.method),
+                                        pending.document_uri.as_deref(),
+                                        &error.message,
+                                        None,
+                                        None,
+                                    ));
+                                }
+                                event.error.as_ref().map(|detail| {
                                     runtime_error(
                                         self,
                                         "serverError",
@@ -1795,7 +1815,8 @@ impl RuntimeSession {
                                         Some(detail),
                                         None,
                                     )
-                                });
+                                })
+                            });
                             let result = normalize_provider_navigation_result(
                                 &self.provider_id,
                                 event.and_then(|event| event.result.clone()),
@@ -4412,6 +4433,104 @@ mod tests {
         assert!(session.process.exit_status().is_some());
         assert_eq!(session.snapshot().unwrap().state, LspLifecycleState::Failed);
         assert!(session.snapshot().unwrap().pending_operation_ids.is_empty());
+    }
+
+    #[test]
+    fn workspace_edit_parse_failure_preserves_one_terminal_operation_and_ready_session() {
+        struct Cleanup(Arc<RuntimeSession>);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                self.0.kill_process();
+            }
+        }
+
+        let mut harness = Harness::ready();
+        let session = harness.session();
+        let _cleanup = Cleanup(session.clone());
+        let uri = "file:///workspace/main.go";
+        harness.sync(uri, "package main\n");
+        let operation_id = harness.request(LspSemanticOperation::Rename, uri);
+        let request_id = harness.server.await_request("textDocument/rename").unwrap();
+        let response = json!({
+            "jsonrpc": "2.0", "id": request_id,
+            "result": { "documentChanges": [{ "kind": "move", "uri": uri }] }
+        });
+        // Drive the owned reducer synchronously, including a duplicate late
+        // response, so no sleep is needed to prove single terminal delivery.
+        session.handle_server_message(response.to_string()).unwrap();
+        session.handle_server_message(response.to_string()).unwrap();
+        harness.poll();
+        let completed: Vec<_> = harness
+            .events
+            .iter()
+            .filter(|event| event.operation_id.as_ref() == Some(&operation_id))
+            .collect();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].kind, "requestCompleted");
+        assert!(completed[0].result.is_none());
+        let error = completed[0]
+            .error
+            .as_ref()
+            .expect("invalid edit must fail its operation");
+        assert_eq!(error.code, "lsp.workspaceEdit.unknownOperation");
+        assert_eq!(error.method.as_deref(), Some("textDocument/rename"));
+        assert_eq!(error.document_uri.as_deref(), Some(uri));
+        assert!(harness.snapshot().pending_operation_ids.is_empty());
+        assert_eq!(harness.snapshot().state, LspLifecycleState::Ready);
+    }
+
+    #[test]
+    fn workspace_edit_response_cannot_complete_an_operation_expired_before_reduction() {
+        struct Cleanup(Arc<RuntimeSession>);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                self.0.kill_process();
+            }
+        }
+        let mut harness = Harness::ready();
+        let session = harness.session();
+        let _cleanup = Cleanup(session.clone());
+        let uri = "file:///workspace/main.go";
+        harness.sync(uri, "package main\n");
+        let operation_id = harness.request(LspSemanticOperation::Rename, uri);
+        let retained_operation = harness.request(LspSemanticOperation::Hover, uri);
+        let request_id = harness.server.await_request("textDocument/rename").unwrap();
+        let expired_id = request_id.clone();
+        *session.before_response_reduction.lock().unwrap() = Some(Box::new(move |session| {
+            session
+                .lock_state()
+                .unwrap()
+                .pending
+                .get_mut(&expired_id)
+                .unwrap()
+                .deadline = Instant::now();
+            session.expire_deadlines();
+        }));
+        // The timeout wins at the reducer boundary. The arriving response must
+        // not recreate that request or emit a second success/error completion.
+        let response = json!({
+            "jsonrpc": "2.0", "id": request_id,
+            "result": { "documentChanges": [{ "kind": "move", "uri": uri }] }
+        });
+        session.handle_server_message(response.to_string()).unwrap();
+        session.handle_server_message(response.to_string()).unwrap();
+        harness.poll();
+        let completed: Vec<_> = harness
+            .events
+            .iter()
+            .filter(|event| event.operation_id.as_ref() == Some(&operation_id))
+            .collect();
+        assert_eq!(completed.len(), 1, "a request has one terminal owner");
+        assert_eq!(completed[0].error.as_ref().unwrap().code, "requestTimeout");
+        assert_eq!(
+            harness.snapshot().pending_operation_ids,
+            vec![retained_operation]
+        );
+        let state = session.lock_state().unwrap();
+        assert!(!state.pending.contains_key(&request_id));
+        assert!(!state.client.pending_requests.contains_key(&request_id));
+        drop(state);
+        assert_eq!(harness.snapshot().state, LspLifecycleState::Ready);
     }
 
     /// Criterion 5: a request deadline removes the pending request.

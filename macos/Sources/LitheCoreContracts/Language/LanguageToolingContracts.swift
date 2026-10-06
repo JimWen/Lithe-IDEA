@@ -221,7 +221,7 @@ package extension LanguageProviderCatalog {
     }
 }
 
-public struct LanguageServerPosition: Equatable, Sendable {
+public struct LanguageServerPosition: Codable, Equatable, Sendable {
     public let line: Int
     public let utf16Column: Int
 
@@ -231,7 +231,7 @@ public struct LanguageServerPosition: Equatable, Sendable {
     }
 }
 
-public struct LanguageServerRange: Equatable, Sendable {
+public struct LanguageServerRange: Codable, Equatable, Sendable {
     public let start: LanguageServerPosition
     public let end: LanguageServerPosition
 
@@ -313,6 +313,10 @@ package struct LanguageServerHover: Equatable, Sendable {
 }
 
 package struct LanguageServerCompletionItem: Identifiable, Equatable, Sendable {
+    /// Host-local provenance; never serialized into an LSP request.
+    package var requestContextID: UUID? = nil
+    /// Set only by the LSP provider; local candidates never require its session.
+    package var originSessionIdentity: String? = nil
     package let label: String
     package let detail: String?
     package let documentation: String?
@@ -478,25 +482,26 @@ package struct LanguageServerLogEntry: Identifiable, Equatable, Sendable {
     }
 }
 
-package struct LanguageServerTextEdit: Equatable, Sendable {
+package struct LanguageServerTextEdit: Codable, Equatable, Sendable {
     package let range: LanguageServerRange
     package let newText: String
+    package let annotationID: String?
 
-    package init(range: LanguageServerRange, newText: String) {
+    package init(range: LanguageServerRange, newText: String, annotationID: String? = nil) {
         self.range = range
         self.newText = newText
+        self.annotationID = annotationID
     }
-}
 
-package struct LanguageServerWorkspaceEdit: Equatable, Sendable {
-    package let changes: [URL: [LanguageServerTextEdit]]
-
-    package init(changes: [URL: [LanguageServerTextEdit]] = [:]) {
-        self.changes = changes
+    private enum CodingKeys: String, CodingKey {
+        case range, newText
+        case annotationID = "annotationId"
     }
 }
 
 package struct LanguageServerCodeAction: Identifiable, Equatable, Sendable {
+    /// Host-local provenance retained across menu selection and resolve.
+    package var requestContextID: UUID? = nil
     package let title: String
     package let kind: String?
     package let isPreferred: Bool
@@ -526,6 +531,8 @@ package struct LanguageServerCodeAction: Identifiable, Equatable, Sendable {
 @MainActor
 package protocol LanguageServerSession: AnyObject {
     var isRunning: Bool { get }
+    var sessionIdentity: String? { get }
+    func synchronizedDocumentSnapshot(for fileURL: URL) -> LanguageServerSynchronizedDocumentSnapshot?
     /// Packaged Java Test runner, if this JDT LS session was launched with one.
     var javaTestRunnerURL: URL? { get }
     var onDiagnostics: ((URL, [LanguageServerDiagnostic]) -> Void)? { get set }
@@ -613,6 +620,10 @@ package protocol LanguageServerSession: AnyObject {
 }
 
 package extension LanguageServerSession {
+    // Sessions that do not expose synchronized source identity cannot supply
+    // versioned workspace edits to the guarded host application path.
+    var sessionIdentity: String? { nil }
+    func synchronizedDocumentSnapshot(for fileURL: URL) -> LanguageServerSynchronizedDocumentSnapshot? { nil }
 }
 
 package extension LanguageServerSession {

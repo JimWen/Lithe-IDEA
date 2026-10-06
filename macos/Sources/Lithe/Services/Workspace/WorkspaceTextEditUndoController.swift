@@ -3,8 +3,8 @@ import Foundation
 import LitheCoreContracts
 
 /// Coordinates disk and open-buffer edits, including every Undo/Redo cycle.
-/// Native UndoManager callbacks register their inverse synchronously; the owned
-/// task validates and commits the transition before publishing buffer changes.
+/// Buffer-only history commits synchronously. Mixed disk history uses an owned
+/// task and retains compensation until the final buffer commit succeeds.
 @MainActor
 final class WorkspaceTextEditUndoController: ObservableObject {
     enum NativeTextEditKind: Sendable {
@@ -88,7 +88,7 @@ final class WorkspaceTextEditUndoController: ObservableObject {
     var canRedo: Bool { canTraverseNativeHistory && undoManager.canRedo }
 
     private var canTraverseNativeHistory: Bool {
-        !isApplying && !nativeDocuments.values.contains(where: \.hasMutationLease)
+        !isApplying && !documents().contains(where: \.hasMutationLease)
     }
 
     init(undoManager: UndoManager, coordinator: WorkspaceTextEditCoordinator,
@@ -143,6 +143,9 @@ final class WorkspaceTextEditUndoController: ObservableObject {
         await operationTask?.value
     }
 
+    /// Keep the owned task joinable until compensation and lease cleanup finish.
+    func cancelCurrentOperation() { operationTask?.cancel() }
+
     @discardableResult
     func undo() -> Bool {
         guard canUndo else { return false }
@@ -159,14 +162,27 @@ final class WorkspaceTextEditUndoController: ObservableObject {
         return true
     }
 
-    func apply(_ edits: [WorkspaceTextEdit], at workspaceURL: URL) async -> WorkspaceTextEditTransactionResult {
+    struct SelectionRestoration {
+        let before: NSRange
+        let after: NSRange
+        let restore: @MainActor (NSRange) -> Void
+        var inverse: Self { Self(before: after, after: before, restore: restore) }
+    }
+
+    func apply(_ edits: [WorkspaceTextEdit], at workspaceURL: URL,
+               expectedBuffers: [URL: WorkspaceTextEditBufferSnapshot]? = nil,
+               validate: @escaping @MainActor () -> Bool = { true },
+               didCommit: @escaping @MainActor ([URL: WorkspaceTextEditBufferSnapshot]) -> Void = { _ in }) async -> WorkspaceTextEditTransactionResult {
         guard !isApplying else { return rejected(edits) }
         breakNativeEditCoalescing()
         isApplying = true
         let task = Task { @MainActor in
-            let result = await self.perform(edits, at: workspaceURL)
-            if result.state == .applied, !Task.isCancelled {
+            let result = await self.perform(edits, at: workspaceURL, expectedBuffers: expectedBuffers,
+                                            validate: validate) {
                 self.registerTransition(self.inverse(edits), at: workspaceURL)
+                didCommit(Dictionary(uniqueKeysWithValues: self.documents().map {
+                    ($0.url.standardizedFileURL, WorkspaceTextEditBufferSnapshot($0))
+                }))
             }
             self.isApplying = false
             return result
@@ -175,30 +191,84 @@ final class WorkspaceTextEditUndoController: ObservableObject {
         return await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
 
-    private func registerTransition(_ edits: [WorkspaceTextEdit], at workspaceURL: URL) {
+    /// Completion commits during NSTextView's callback and performs no file I/O.
+    func applyOpenDocumentEdits(_ edits: [WorkspaceTextEdit], at workspaceURL: URL,
+                                expectedBuffers: [URL: WorkspaceTextEditBufferSnapshot],
+                                selection: SelectionRestoration? = nil) -> WorkspaceTextEditTransactionResult {
+        guard !isApplying else { return rejected(edits) }
+        breakNativeEditCoalescing()
+        isApplying = true
+        defer { isApplying = false }
+        guard let batch = prepare(edits, at: workspaceURL, expectedBuffers: expectedBuffers, requireOpen: true) else {
+            return rejected(edits)
+        }
+        defer { release(batch) }
+        let changed = batch.buffers.filter { $0.edit.changesText }
+        willMutate(batch.buffers.map(\.document))
+        changed.forEach { $0.document.commitMutationText($0.edit.replacementText, lease: $0.lease) }
+        if let selection { selection.restore(selection.after) }
+        let history = Dictionary(uniqueKeysWithValues: changed.map {
+            ($0.document.url.standardizedFileURL, WorkspaceTextEditBufferSnapshot($0.document))
+        })
+        registerTransition(inverse(edits), at: workspaceURL, selection: selection?.inverse, history: history)
+        return WorkspaceTextEditTransactionResult(transactionID: UUID(), state: .applied, changedPaths: edits.filter(\.changesText).map(\.path))
+    }
+
+    private func registerTransition(_ edits: [WorkspaceTextEdit], at workspaceURL: URL,
+                                    selection: SelectionRestoration? = nil,
+                                    history: [URL: WorkspaceTextEditBufferSnapshot]? = nil) {
         guard !edits.isEmpty else { return }
         // Separate the workspace operation from the current native typing group.
         // During undo/redo AppKit owns this group and the inverse must join it.
         let ownsGroup = !undoManager.isUndoing && !undoManager.isRedoing
         if ownsGroup { undoManager.beginUndoGrouping() }
         undoManager.registerUndo(withTarget: self) { target in
-            guard !target.isApplying else { return }
-            target.registerTransition(target.inverse(edits), at: workspaceURL)
-            target.isApplying = true
-            target.operationTask = Task { @MainActor in
-                let result = await target.perform(edits, at: workspaceURL)
-                if result.state != .applied {
-                    // Neither the failed transition nor its optimistic inverse
-                    // may overwrite a later external/user edit on the next click.
+            MainActor.assumeIsolated {
+                guard !target.isApplying else { return }
+                guard target.matchesHistory(history) else {
                     target.undoManager.removeAllActions(withTarget: target)
-                    target.notifyFailure("Could not undo or redo the replacement because files changed. Review the current files.")
+                    target.notifyFailure("Could not undo or redo because the original document was closed or reloaded.")
+                    return
                 }
-                target.isApplying = false
-                return result
+                if history != nil {
+                    let current = Dictionary(uniqueKeysWithValues: target.documents().map {
+                        ($0.url.standardizedFileURL, WorkspaceTextEditBufferSnapshot($0))
+                    })
+                    let result = target.applyOpenDocumentEdits(edits, at: workspaceURL,
+                        expectedBuffers: current, selection: selection)
+                    if result.state != .applied {
+                        target.undoManager.removeAllActions(withTarget: target)
+                        target.notifyFailure("Could not undo or redo the replacement because files changed. Review the current files.")
+                    }
+                    return
+                }
+                target.registerTransition(target.inverse(edits), at: workspaceURL, selection: selection?.inverse, history: history)
+                target.isApplying = true
+                target.operationTask = Task { @MainActor in
+                    let result = await target.perform(edits, at: workspaceURL, validate: { target.matchesHistory(history) }, onCommit: {
+                        if let selection { selection.restore(selection.after) }
+                    })
+                    if result.state != .applied {
+                        // Neither the failed transition nor its optimistic inverse
+                        // may overwrite a later external/user edit on the next click.
+                        target.undoManager.removeAllActions(withTarget: target)
+                        target.notifyFailure("Could not undo or redo the replacement because files changed. Review the current files.")
+                    }
+                    target.isApplying = false
+                    return result
+                }
             }
         }
         undoManager.setActionName("Replace Text")
         if ownsGroup { undoManager.endUndoGrouping() }
+    }
+
+    private func matchesHistory(_ history: [URL: WorkspaceTextEditBufferSnapshot]?) -> Bool {
+        guard let history else { return true }
+        let current = documents()
+        return history.allSatisfy { url, expected in
+            current.first(where: { $0.url.standardizedFileURL == url }).map(expected.matchesHistory) == true
+        }
     }
 
     private func registerNativeTransition(_ transition: NativeTextTransition, document: EditorDocument) {
@@ -319,44 +389,94 @@ final class WorkspaceTextEditUndoController: ObservableObject {
         return true
     }
 
-    private func perform(_ edits: [WorkspaceTextEdit], at workspaceURL: URL) async -> WorkspaceTextEditTransactionResult {
-        guard !Task.isCancelled else {
-            return WorkspaceTextEditTransactionResult(transactionID: UUID(), state: .cancelled)
-        }
+    private struct BufferMutation {
+        let document: EditorDocument
+        let edit: WorkspaceTextEdit
+        let lease: EditorDocument.MutationLease
+    }
+
+    private struct PreparedBatch {
+        let buffers: [BufferMutation]
+        let disk: [WorkspaceTextEdit]
+    }
+
+    private func prepare(_ edits: [WorkspaceTextEdit], at workspaceURL: URL,
+                         expectedBuffers: [URL: WorkspaceTextEditBufferSnapshot]?,
+                         requireOpen: Bool = false) -> PreparedBatch? {
         guard Set(edits.map(\.path)).count == edits.count,
-              edits.allSatisfy(WorkspaceTextEditCoordinator.isValidPath) else { return rejected(edits) }
+              edits.allSatisfy(WorkspaceTextEditCoordinator.isValidPath) else { return nil }
         let openDocuments = documents()
-        var leased: [(document: EditorDocument, lease: EditorDocument.MutationLease)] = []
-        var buffers: [(document: EditorDocument, edit: WorkspaceTextEdit, lease: EditorDocument.MutationLease)] = []
+        var buffers: [BufferMutation] = []
         var disk: [WorkspaceTextEdit] = []
+        var prepared = false
         defer {
-            leased.forEach { $0.document.releaseMutationLease($0.lease) }
-            didMutate(leased.map(\.document))
+            if !prepared { buffers.forEach { $0.document.releaseMutationLease($0.lease) } }
         }
         for edit in edits {
             let url = workspaceURL.appendingPathComponent(edit.path).standardizedFileURL
             guard let document = openDocuments.first(where: { $0.url.standardizedFileURL == url }) else {
+                guard !requireOpen, expectedBuffers?[url] == nil else { return nil }
                 disk.append(edit)
                 continue
             }
+            if let expectedBuffers {
+                guard let expected = expectedBuffers[url], expected.matches(document) else { return nil }
+            }
             guard !document.isReadOnly, !document.hasExternalConflict,
-                  document.text.utf8.elementsEqual(edit.sourceText.utf8),
-                  let lease = document.acquireMutationLease() else { return rejected(edits) }
-            leased.append((document, lease))
-            buffers.append((document, edit, lease))
+                  document.text.utf8.elementsEqual(edit.sourceText.utf8) else { return nil }
+            // Only this no-I/O path holds leases without yielding. A save's
+            // captured snapshot remains independent of synchronous live edits.
+            let lease = requireOpen ? document.acquireSynchronousBufferMutationLease() : document.acquireMutationLease()
+            guard let lease else { return nil }
+            buffers.append(BufferMutation(document: document, edit: edit, lease: lease))
         }
-        willMutate(leased.map(\.document))
-        let result = await coordinator.apply(disk, at: workspaceURL, operations: operations)
+        prepared = true
+        return PreparedBatch(buffers: buffers, disk: disk)
+    }
+
+    private func release(_ batch: PreparedBatch) {
+        batch.buffers.forEach { $0.document.releaseMutationLease($0.lease) }
+        // Even unchanged leased buffers may have deferred watcher events or
+        // suspended autosave. End the lifecycle for every lease we acquired.
+        didMutate(batch.buffers.map(\.document))
+    }
+
+    private func perform(_ edits: [WorkspaceTextEdit], at workspaceURL: URL,
+                         expectedBuffers: [URL: WorkspaceTextEditBufferSnapshot]? = nil,
+                         validate: @escaping @MainActor () -> Bool = { true },
+                         onCommit: @escaping @MainActor () -> Void = {}) async -> WorkspaceTextEditTransactionResult {
+        guard !Task.isCancelled, validate() else {
+            return WorkspaceTextEditTransactionResult(transactionID: UUID(), state: .cancelled)
+        }
+        guard let batch = prepare(edits, at: workspaceURL, expectedBuffers: expectedBuffers) else { return rejected(edits) }
+        defer { release(batch) }
+        willMutate(batch.buffers.map(\.document))
+        let result = await coordinator.apply(batch.disk, at: workspaceURL, operations: operations,
+            validate: { await MainActor.run { validate() } }, commit: { @MainActor in
+                guard !Task.isCancelled, validate() else { throw CancellationError() }
+                let current = self.documents()
+                for buffer in batch.buffers {
+                    guard current.contains(where: { $0 === buffer.document }),
+                          buffer.document.url.standardizedFileURL == workspaceURL.appendingPathComponent(buffer.edit.path).standardizedFileURL,
+                          buffer.document.hasMutationLease,
+                          buffer.document.text.utf8.elementsEqual(buffer.edit.sourceText.utf8),
+                          !buffer.document.isReadOnly, !buffer.document.hasExternalConflict else { throw CancellationError() }
+                }
+                for edit in batch.disk {
+                    guard !current.contains(where: { $0.url.standardizedFileURL == workspaceURL.appendingPathComponent(edit.path).standardizedFileURL }) else {
+                        throw CancellationError()
+                    }
+                }
+                batch.buffers.filter { $0.edit.changesText }.forEach { $0.document.commitMutationText($0.edit.replacementText, lease: $0.lease) }
+                onCommit()
+            })
         guard result.state == .applied else { return result }
-        // Even an already-dirty document must publish a programmatic change so
-        // its NSTextView replaces the visible buffer and refreshes LSP state.
-        for buffer in buffers { buffer.document.commitMutationText(buffer.edit.replacementText, lease: buffer.lease) }
         return WorkspaceTextEditTransactionResult(transactionID: result.transactionID,
-                                                  state: .applied, changedPaths: edits.map(\.path))
+                                                  state: .applied, changedPaths: edits.filter(\.changesText).map(\.path))
     }
 
     private func inverse(_ edits: [WorkspaceTextEdit]) -> [WorkspaceTextEdit] {
-        edits.map { WorkspaceTextEdit(path: $0.path, sourceText: $0.replacementText,
+        edits.filter(\.changesText).map { WorkspaceTextEdit(path: $0.path, sourceText: $0.replacementText,
                                      replacementText: $0.sourceText, sourceIdentity: "") }
     }
 

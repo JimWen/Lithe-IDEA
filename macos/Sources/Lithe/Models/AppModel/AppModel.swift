@@ -168,6 +168,11 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     let keyboardShortcutFeature: KeyboardShortcutFeatureModel
     let workbenchBackgroundFeature: WorkbenchBackgroundFeatureModel
     let runtimeFeature: RuntimeSettingsFeatureModel
+    var languageEditContexts: [UUID: LanguageEditRequestContext] = [:]
+    var languageEditTask: Task<Void, Never>?
+    var languageEditGeneration: UInt64 = 0
+    var acceptsLanguageEdits = true
+    var pendingLanguageEditProjectChange: (@MainActor () -> Void)?
     let languageToolingFeature: LanguageToolingFeatureModel
     let debugLaunchConfigurationResolver: DebugLaunchConfigurationResolver
     let debugPortAvailabilityChecker: any DebugPortAvailabilityChecking
@@ -743,6 +748,12 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     }
 
     func shutdownProjectSession() async {
+        acceptsLanguageEdits = false
+        languageEditGeneration &+= 1
+        languageEditTask?.cancel()
+        languageEditContexts.removeAll()
+        pendingLanguageEditProjectChange = nil
+        services.workspaceTextEditUndoController.cancelCurrentOperation()
         shortcutDetector?.stop()
         let pendingSidebarRefresh = sidebarRefreshTask
         sidebarRefreshTask = nil
@@ -752,6 +763,8 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         // otherwise create a new sidebar refresh while teardown awaits it.
         pendingSidebarRefresh?.cancel()
         pendingMenuCommands.forEach { $0.cancel() }
+        await languageEditTask?.value
+        _ = await services.workspaceTextEditUndoController.waitForCurrentOperation()
         await pendingSidebarRefresh?.value
         for task in pendingMenuCommands { await task.value }
         commandStateFeatureStorage?.stop()
@@ -970,6 +983,10 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     }
 
     func openProjectDirectly(_ url: URL) {
+        guard !deferProjectChangeUntilLanguageEditCompletes({ [weak self] in self?.openProjectDirectly(url) }) else { return }
+        acceptsLanguageEdits = true
+        languageEditGeneration &+= 1
+        languageEditContexts.removeAll()
         let normalizedURL = url.standardizedFileURL
         beginModuleRuntimeShutdown()
         if let previousWorkspaceURL = workspaceURL {
@@ -1066,6 +1083,10 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     }
 
     private func performCloseProject() {
+        guard !deferProjectChangeUntilLanguageEditCompletes({ [weak self] in self?.performCloseProject() }) else { return }
+        acceptsLanguageEdits = false
+        languageEditGeneration &+= 1
+        languageEditContexts.removeAll()
         cancelJavaLanguageServerPreparation()
         beginModuleRuntimeShutdown()
         if let workspaceURL {

@@ -868,12 +868,23 @@ struct CodeEditorView: NSViewRepresentable {
                 }
             }
             textView.onCompletionRequested = { [weak model, weak textView] line, column in
+                guard let textView, !textView.hasMarkedText() else { return }
+                let selection = textView.selectedRange()
                 model?.requestLanguageCompletions(line: line, utf16Column: column) { [weak textView] items in
-                    textView?.presentLanguageCompletions(items)
+                    guard let textView, !textView.hasMarkedText(), textView.selectedRange() == selection else { return }
+                    textView.presentLanguageCompletions(items)
                 }
             }
-            textView.onCompletionSelected = { [weak model] item, range in
-                model?.applyLanguageCompletion(item, fallbackRange: range)
+            textView.onCompletionSelected = { [weak model, weak textView, viewportStore] item, range in
+                guard let textView, !textView.hasMarkedText() else { return }
+                let selection = textView.selectedRange()
+                model?.applyLanguageCompletion(item, fallbackRange: range, beforeSelection: selection,
+                    canApply: { [weak textView, weak model] in
+                        guard let textView else { return false }
+                        return !textView.hasMarkedText() && textView.selectedRange() == selection && model?.activeDocument?.id == document.id
+                    }, restoreSelection: { [documentID = document.id] selection in
+                        viewportStore.restoreSelection(selection, for: documentID)
+                    })
             }
             textView.onRenameRequested = { [weak model] line, column, newName in
                 model?.requestLanguageRename(line: line, utf16Column: column, newName: newName)
@@ -2901,6 +2912,8 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     var documentID: UUID?
     private var lastCaretBackgroundRanges: [NSRange] = []
     private var completionItemsByID: [String: LanguageServerCompletionItem] = [:]
+    private var completionMenuSelection: NSRange?
+    private var completionMenuFallbackRange: NSRange?
     private var languageHoverPopover: NSPopover?
     private weak var languageHoverTextView: NSTextView?
     private weak var languageHoverScrollView: NSScrollView?
@@ -4704,7 +4717,10 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     func presentLanguageCompletions(_ items: [LanguageServerCompletionItem]) {
-        guard !items.isEmpty, window != nil else { return }
+        guard !items.isEmpty, window != nil, !hasMarkedText() else { return }
+        completionMenuSelection = selectedRange()
+        let completionRange = rangeForUserCompletion
+        completionMenuFallbackRange = completionRange.location == NSNotFound ? selectedRange() : completionRange
         completionItemsByID = [:]
         for item in items.prefix(200) { completionItemsByID[item.id] = item }
         let menu = NSMenu(title: "Completions")
@@ -4784,9 +4800,10 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     @objc private func insertLanguageCompletion(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
+        guard !hasMarkedText(), selectedRange() == completionMenuSelection,
+              let fallbackRange = completionMenuFallbackRange,
+              let id = sender.representedObject as? String,
               let item = completionItemsByID[id] else { return }
-        let fallbackRange = rangeForUserCompletion
         let start = languageServerPosition(at: fallbackRange.location)
         let end = languageServerPosition(at: NSMaxRange(fallbackRange))
         let languageRange = LanguageServerRange(

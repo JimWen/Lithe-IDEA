@@ -6,6 +6,56 @@ import Testing
 @MainActor
 struct NativeTextEditUndoControllerTests {
     @Test
+    func eventGroupedTypingCompletionTypingUndoRemainsSynchronous() async throws {
+        let document = document("f", named: "completion.swift")
+        let harness = NativeUndoHarness(documents: [document])
+        harness.undoManager.groupsByEvent = true
+        defer { harness.controller.reset() }
+
+        for step in 0..<3 {
+            let closed = TestGate()
+            let observer = NotificationCenter.default.addObserver(forName: .NSUndoManagerDidCloseUndoGroup,
+                object: harness.undoManager, queue: nil) { _ in
+                MainActor.assumeIsolated {
+                    if harness.undoManager.groupingLevel == 0 { closed.open() }
+                }
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
+            if step == 1 {
+                let result = harness.controller.applyOpenDocumentEdits(
+                    [workspaceEdit("completion.swift", from: "fu", to: "func")],
+                    at: document.url.deletingLastPathComponent(),
+                    expectedBuffers: [document.url: WorkspaceTextEditBufferSnapshot(document)],
+                    selection: .init(before: NSRange(location: 2, length: 0), after: NSRange(location: 4, length: 0),
+                        restore: { [observations = harness.observations, id = document.id] in observations.record($0, for: id) }))
+                #expect(result.state == .applied)
+            } else {
+                let offset = step == 0 ? 1 : 4
+                applyNativeEdit(to: document, range: NSRange(location: offset, length: 0),
+                    replacement: step == 0 ? "u" : " ", beforeSelection: NSRange(location: offset, length: 0),
+                    afterSelection: NSRange(location: offset + 1, length: 0), kind: .typing, harness: harness)
+            }
+            // Observe actual event-group closure rather than manually closing it.
+            try #require(await closed.waitUntilOpen(timeout: .seconds(2)))
+        }
+        for (text, caret) in [("func", 4), ("fu", 2), ("f", 1)] {
+            #expect(harness.controller.undo())
+            #expect(document.text == text)
+            #expect(harness.observations.selection(for: document) == NSRange(location: caret, length: 0))
+            #expect(!document.hasMutationLease && !harness.controller.isApplying)
+        }
+        #expect(!harness.controller.canUndo)
+        for (text, caret) in [("fu", 2), ("func", 4), ("func ", 5)] {
+            #expect(harness.controller.redo())
+            #expect(document.text == text)
+            #expect(harness.observations.selection(for: document) == NSRange(location: caret, length: 0))
+            #expect(!document.hasMutationLease && !harness.controller.isApplying)
+        }
+        #expect(harness.observations.failures.isEmpty)
+        #expect(!harness.controller.canRedo)
+    }
+
+    @Test
     func defaultEventGroupingKeepsSeparateDocumentActionsInOrder() async throws {
         let documentA = document("A", named: "event-A.swift")
         let documentB = document("B", named: "event-B.swift")

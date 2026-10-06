@@ -1317,7 +1317,7 @@ fn client_core_shapes_feature_responses_for_swift_models() {
     .unwrap();
     let rename_result = renamed.events[0].result.as_ref().unwrap();
     assert_eq!(
-        rename_result["changes"]["/tmp/project/main.rs"][0]["newText"],
+        rename_result["operations"][0]["edits"][0]["newText"],
         "start"
     );
 
@@ -1464,7 +1464,7 @@ fn client_core_shapes_feature_responses_for_swift_models() {
     let action_result = code_actioned.events[0].result.as_ref().unwrap();
     assert_eq!(action_result["actions"][0]["title"], "Apply rename");
     assert_eq!(
-        action_result["actions"][0]["edit"]["changes"]["/tmp/project/main.rs"][0]["newText"],
+        action_result["actions"][0]["edit"]["operations"][0]["edits"][0]["newText"],
         "start"
     );
     assert_eq!(
@@ -1524,8 +1524,7 @@ fn client_core_shapes_feature_responses_for_swift_models() {
     .unwrap();
     let code_action_resolve_result = code_action_resolved.events[0].result.as_ref().unwrap();
     assert_eq!(
-        code_action_resolve_result["action"]["edit"]["changes"]["/tmp/project/main.rs"][0]
-            ["newText"],
+        code_action_resolve_result["action"]["edit"]["operations"][0]["edits"][0]["newText"],
         "start"
     );
 
@@ -2115,5 +2114,234 @@ fn client_core_rejects_unknown_server_requests_with_method_not_found() {
                 "message": "Method not found"
             }
         })
+    );
+}
+
+// Workspace edits cross both the pure client and the runtime bridge. These
+// fixtures assert observable normalized payloads, not a private parser shape.
+fn workspace_edit_fixture() -> Value {
+    serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../shared/fixtures/lsp/workspace-edit-v1.json"
+    )))
+    .expect("shared workspace edit fixture must be valid JSON")
+}
+
+fn workspace_edit_response_event(method: &str, result: Value) -> Value {
+    let opened = client_open_document(ClientOpenDocumentRequest {
+        state: LspClientState::default(),
+        uri: "file:///workspace/main.go".to_string(),
+        language_id: "go".to_string(),
+        text: "package main\n".to_string(),
+    })
+    .expect("fixture document should open");
+    let requested = client_feature_request(ClientFeatureRequest {
+        state: opened.state,
+        uri: "file:///workspace/main.go".to_string(),
+        method: method.to_string(),
+        position: Some(LspPosition {
+            line: 0,
+            utf16_column: 0,
+        }),
+        new_name: Some("renamed".to_string()),
+        range: Some(LspRange {
+            start: LspPosition {
+                line: 0,
+                utf16_column: 0,
+            },
+            end: LspPosition {
+                line: 0,
+                utf16_column: 0,
+            },
+        }),
+        diagnostics: Vec::new(),
+        completion_item: Some(json!({ "label": "completion", "data": { "id": 3 } })),
+        code_action: Some(json!({ "title": "Update sources", "data": { "id": 3 } })),
+        command: None,
+    })
+    .expect("existing language request should be accepted");
+    let outgoing: Value = serde_json::from_str(&requested.messages[0]).unwrap();
+    let response = client_apply_server_message(ClientApplyServerMessageRequest {
+        state: requested.state,
+        message: json!({ "jsonrpc": "2.0", "id": outgoing["id"], "result": result }).to_string(),
+    })
+    .expect("a malformed feature payload must finish its request, not fail the message reducer");
+    assert!(response.state.pending_requests.is_empty());
+    assert_eq!(
+        response.events.len(),
+        1,
+        "each response has one terminal event"
+    );
+    let event = serde_json::to_value(&response.events[0]).unwrap();
+    assert_eq!(event["requestId"], outgoing["id"]);
+    assert_eq!(event["method"], method);
+    event
+}
+
+#[test]
+fn workspace_edit_rename_preserves_shared_valid_matrix() {
+    let fixture = workspace_edit_fixture();
+    let mismatches: Vec<_> = fixture["valid"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|case| {
+            let event = workspace_edit_response_event("textDocument/rename", case["wire"].clone());
+            (event["result"] != case["normalized"] || event["kind"] != "response")
+                .then(|| format!("{}: {}", case["name"], event))
+        })
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "workspace edit fidelity failures: {mismatches:#?}"
+    );
+}
+
+#[test]
+fn workspace_edit_malformed_matrix_fails_without_partial_results() {
+    let fixture = workspace_edit_fixture();
+    let mismatches: Vec<_> = fixture["invalid"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|case| {
+            let event = workspace_edit_response_event("textDocument/rename", case["wire"].clone());
+            let expected = event["kind"] == "error"
+                && event["result"].is_null()
+                && event["resultError"]["code"] == case["code"]
+                && event["resultError"]["message"]
+                    .as_str()
+                    .is_some_and(|message| !message.is_empty());
+            (!expected).then(|| format!("{}: {}", case["name"], event))
+        })
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "unsafe partial/defaulted edits: {mismatches:#?}"
+    );
+}
+
+#[test]
+fn workspace_edit_code_actions_preserve_ordered_edits_and_opaque_data() {
+    let fixture = workspace_edit_fixture();
+    let case = &fixture["valid"][0];
+    let data = json!({ "opaque": [null, false, 0, "🦀"], "nested": { "token": "fixture-token" } });
+    let event = workspace_edit_response_event(
+        "textDocument/codeAction",
+        json!([{
+            "title": "Update sources", "edit": case["wire"], "data": data
+        }]),
+    );
+    assert_eq!(event["result"]["actions"][0]["edit"], case["normalized"]);
+    assert_eq!(event["result"]["actions"][0]["data"], data);
+}
+
+#[test]
+fn workspace_edit_resolve_preserves_resource_options_and_versions() {
+    let fixture = workspace_edit_fixture();
+    let case = &fixture["valid"][0];
+    let event = workspace_edit_response_event(
+        "codeAction/resolve",
+        json!({
+            "title": "Update sources", "edit": case["wire"], "data": { "id": 3 }
+        }),
+    );
+    assert_eq!(event["result"]["action"]["edit"], case["normalized"]);
+    assert_eq!(event["result"]["action"]["data"], json!({ "id": 3 }));
+}
+
+#[test]
+fn workspace_edit_malformed_action_rejects_the_entire_action_response() {
+    let event = workspace_edit_response_event(
+        "textDocument/codeAction",
+        json!([
+            { "title": "Valid", "edit": { "changes": { "file:///workspace/a.go": [] } } },
+            { "title": "Invalid", "edit": { "documentChanges": [{ "kind": "unknown" }] } }
+        ]),
+    );
+    assert_eq!(event["kind"], "error");
+    assert!(
+        event["result"].is_null(),
+        "no successful subset may escape validation"
+    );
+    assert_eq!(
+        event["resultError"]["code"],
+        "lsp.workspaceEdit.unknownOperation"
+    );
+}
+
+#[test]
+fn workspace_edit_malformed_resolve_has_a_stable_error() {
+    let event = workspace_edit_response_event(
+        "codeAction/resolve",
+        json!({
+            "title": "Invalid", "edit": { "documentChanges": [{ "kind": "create" }] }
+        }),
+    );
+    assert_eq!(event["kind"], "error");
+    assert!(event["result"].is_null());
+    assert_eq!(event["resultError"]["code"], "lsp.workspaceEdit.missingURI");
+}
+
+#[test]
+fn workspace_edit_null_action_edit_cannot_release_its_command() {
+    for method in ["textDocument/codeAction", "codeAction/resolve"] {
+        let action = json!({
+            "title": "Malformed action", "edit": null,
+            "command": { "title": "Follow-up", "command": "fixture.command" }
+        });
+        let result = if method == "textDocument/codeAction" {
+            json!([action])
+        } else {
+            action
+        };
+        let event = workspace_edit_response_event(method, result);
+        assert_eq!(event["kind"], "error", "{method}: {event}");
+        assert!(event["result"].is_null());
+        assert_eq!(
+            event["resultError"]["code"],
+            "lsp.workspaceEdit.malformedEdit"
+        );
+    }
+}
+
+#[test]
+fn workspace_edit_formatting_and_completion_never_drop_or_default_malformed_edits() {
+    let valid = json!({
+        "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
+        "newText": "valid"
+    });
+    let invalid = json!({
+        "range": { "start": { "character": 0 }, "end": { "line": 0, "character": 0 } },
+        "newText": "invalid"
+    });
+    let cases = [
+        ("textDocument/formatting", json!([valid, invalid])),
+        (
+            "textDocument/completion",
+            json!([{"label": "invalid", "textEdit": invalid}]),
+        ),
+        (
+            "textDocument/completion",
+            json!([{"label": "invalid", "additionalTextEdits": [valid, invalid]}]),
+        ),
+        (
+            "completionItem/resolve",
+            json!({"label": "invalid", "textEdit": invalid}),
+        ),
+    ];
+    let failures: Vec<_> = cases
+        .into_iter()
+        .filter_map(|(method, result)| {
+            let event = workspace_edit_response_event(method, result);
+            let rejected = event["kind"] == "error"
+                && event["result"].is_null()
+                && event["resultError"]["code"] == "lsp.workspaceEdit.malformedEdit";
+            (!rejected).then(|| format!("{method}: {event}"))
+        })
+        .collect();
+    assert!(
+        failures.is_empty(),
+        "Malformed edits escaped validation: {failures:#?}"
     );
 }

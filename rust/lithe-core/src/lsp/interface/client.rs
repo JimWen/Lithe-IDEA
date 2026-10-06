@@ -1,6 +1,9 @@
 //! Pure LSP client-state transitions and JSON-RPC message construction.
 
 use super::types::*;
+use super::workspace_edit::{
+    parse_plain_text_edit, parse_plain_text_edits, parse_workspace_edit, WorkspaceEditParseError,
+};
 use crate::lsp::{
     apply_content_changes_sequential, order_incremental_changes_for_replay, ApplyTextEditsRequest,
     LspTextEdit,
@@ -365,6 +368,7 @@ pub fn client_apply_server_message(
                         diagnostics: Some(diagnostics),
                         result: None,
                         error: None,
+                        result_error: None,
                     });
                 }
             }
@@ -411,6 +415,7 @@ pub fn client_apply_server_message(
                         diagnostics: None,
                         result: message.get("params").cloned(),
                         error: None,
+                        result_error: None,
                     });
                 }
             }
@@ -442,9 +447,16 @@ pub fn client_apply_server_message(
             state.diagnostic_versions.clear();
             responses.push(json_rpc_message_without_params(None, "exit")?);
         }
-        let result = lsp_feature_result_for_method(pending.as_deref(), message.get("result"));
+        let (result, result_error) = if message.get("error").is_some() {
+            (None, None)
+        } else {
+            match lsp_feature_result_for_method(pending.as_deref(), message.get("result")) {
+                Ok(result) => (result, None),
+                Err(error) => (None, Some(error)),
+            }
+        };
         events.push(LspClientEvent {
-            kind: if message.get("error").is_some() {
+            kind: if message.get("error").is_some() || result_error.is_some() {
                 "error".to_string()
             } else {
                 "response".to_string()
@@ -456,6 +468,7 @@ pub fn client_apply_server_message(
             diagnostics: None,
             result,
             error: message.get("error").map(|value| value.to_string()),
+            result_error,
         });
     }
 
@@ -813,13 +826,18 @@ fn parse_lsp_position(value: &Value) -> Option<LspPositionResponse> {
     })
 }
 
-fn lsp_feature_result_for_method(method: Option<&str>, result: Option<&Value>) -> Option<Value> {
-    let result = result?;
-    match method {
+fn lsp_feature_result_for_method(
+    method: Option<&str>,
+    result: Option<&Value>,
+) -> Result<Option<Value>, WorkspaceEditParseError> {
+    let Some(result) = result else {
+        return Ok(None);
+    };
+    Ok(match method {
         Some("textDocument/completion") => Some(json!({
-            "items": parse_completion_items(result)
+            "items": parse_completion_items(result)?
         })),
-        Some("completionItem/resolve") => parse_completion_item(result).map(|item| {
+        Some("completionItem/resolve") => parse_completion_item(result)?.map(|item| {
             json!({
                 "item": item
             })
@@ -827,14 +845,15 @@ fn lsp_feature_result_for_method(method: Option<&str>, result: Option<&Value>) -
         Some("textDocument/hover") => Some(json!({
             "hover": parse_hover(result)
         })),
-        Some("textDocument/rename") => Some(json!({
-            "changes": parse_workspace_edit(result)
-        })),
+        Some("textDocument/rename") => Some(if result.is_null() {
+            // Rename alone permits a null result meaning no edit. An explicit
+            // CodeAction.edit must be an object or its command could escape.
+            json!({ "operations": [], "changeAnnotations": {} })
+        } else {
+            parse_workspace_edit(result)?
+        }),
         Some("textDocument/formatting") => Some(json!({
-            "edits": result
-                .as_array()
-                .map(|edits| edits.iter().filter_map(parse_lsp_text_edit_value).collect::<Vec<_>>())
-                .unwrap_or_default()
+            "edits": if result.is_null() { Vec::new() } else { parse_plain_text_edits(result)? }
         })),
         Some("textDocument/inlayHint") => Some(json!({
             "hints": parse_inlay_hints(result)
@@ -846,9 +865,9 @@ fn lsp_feature_result_for_method(method: Option<&str>, result: Option<&Value>) -
             "lenses": parse_code_lenses(result)
         })),
         Some("textDocument/codeAction") => Some(json!({
-            "actions": parse_code_actions(result)
+            "actions": parse_code_actions(result)?
         })),
-        Some("codeAction/resolve") => parse_code_action(result).map(|action| {
+        Some("codeAction/resolve") => parse_code_action(result)?.map(|action| {
             json!({
                 "action": action
             })
@@ -863,24 +882,36 @@ fn lsp_feature_result_for_method(method: Option<&str>, result: Option<&Value>) -
             "locations": parse_locations(result)
         })),
         _ => Some(result.clone()),
-    }
+    })
 }
 
-fn parse_completion_items(result: &Value) -> Vec<Value> {
+fn parse_completion_items(result: &Value) -> Result<Vec<Value>, WorkspaceEditParseError> {
     let values = result
         .as_array()
         .or_else(|| result.get("items").and_then(Value::as_array));
     let Some(values) = values else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    values
+    let items = values
         .iter()
-        .filter_map(|item| parse_completion_item(item))
-        .collect()
+        .map(parse_completion_item)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(items.into_iter().flatten().collect())
 }
 
-fn parse_completion_item(item: &Value) -> Option<Value> {
-    let label = item.get("label").and_then(Value::as_str)?;
+fn parse_completion_item(item: &Value) -> Result<Option<Value>, WorkspaceEditParseError> {
+    let text_edit = item
+        .get("textEdit")
+        .map(parse_plain_text_edit)
+        .transpose()?;
+    let additional_edits = item
+        .get("additionalTextEdits")
+        .map(parse_plain_text_edits)
+        .transpose()?
+        .unwrap_or_default();
+    let Some(label) = item.get("label").and_then(Value::as_str) else {
+        return Ok(None);
+    };
     let insert_text = item
         .get("insertText")
         .and_then(Value::as_str)
@@ -890,7 +921,7 @@ fn parse_completion_item(item: &Value) -> Option<Value> {
                 .and_then(Value::as_str)
         })
         .unwrap_or(label);
-    Some(json!({
+    Ok(Some(json!({
         "label": label,
         "insertText": insert_text,
         "kind": item.get("kind").and_then(Value::as_i64),
@@ -898,14 +929,10 @@ fn parse_completion_item(item: &Value) -> Option<Value> {
         "documentation": completion_documentation(item.get("documentation")),
         "sortText": item.get("sortText").and_then(Value::as_str),
         "filterText": item.get("filterText").and_then(Value::as_str),
-        "textEdit": item.get("textEdit").and_then(parse_lsp_text_edit_value),
-        "additionalTextEdits": item
-            .get("additionalTextEdits")
-            .and_then(Value::as_array)
-            .map(|edits| edits.iter().filter_map(parse_lsp_text_edit_value).collect::<Vec<_>>())
-            .unwrap_or_default(),
+        "textEdit": text_edit,
+        "additionalTextEdits": additional_edits,
         "data": item.get("data").cloned().unwrap_or(Value::Null)
-    }))
+    })))
 }
 
 fn completion_documentation(value: Option<&Value>) -> Option<String> {
@@ -1092,33 +1119,37 @@ fn parse_locations(result: &Value) -> Vec<Value> {
         .collect()
 }
 
-fn parse_code_actions(result: &Value) -> Vec<Value> {
+fn parse_code_actions(result: &Value) -> Result<Vec<Value>, WorkspaceEditParseError> {
     let Some(values) = result.as_array() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    values.iter().filter_map(parse_code_action).collect()
+    // A malformed workspace edit must not be hidden by filter_map, even when
+    // another action in the same response could otherwise be displayed.
+    let actions = values
+        .iter()
+        .map(parse_code_action)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(actions.into_iter().flatten().collect())
 }
 
-fn parse_code_action(action: &Value) -> Option<Value> {
-    let title = action.get("title").and_then(Value::as_str)?;
+fn parse_code_action(action: &Value) -> Result<Option<Value>, WorkspaceEditParseError> {
+    let edit = action.get("edit").map(parse_workspace_edit).transpose()?;
+    let Some(title) = action.get("title").and_then(Value::as_str) else {
+        return Ok(None);
+    };
     let command = if action.get("command").and_then(Value::as_str).is_some() {
         parse_lsp_command(action)
     } else {
         action.get("command").and_then(parse_lsp_command)
     };
-    Some(json!({
+    Ok(Some(json!({
         "title": title,
         "kind": action.get("kind").and_then(Value::as_str),
-        "isPreferred": action
-            .get("isPreferred")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        "edit": action.get("edit").map(|edit| json!({
-            "changes": parse_workspace_edit(edit)
-        })),
+        "isPreferred": action.get("isPreferred").and_then(Value::as_bool).unwrap_or(false),
+        "edit": edit,
         "command": command,
         "data": action.get("data").cloned().unwrap_or(Value::Null)
-    }))
+    })))
 }
 
 fn parse_lsp_command(value: &Value) -> Option<Value> {
@@ -1133,52 +1164,8 @@ fn parse_lsp_command(value: &Value) -> Option<Value> {
     }))
 }
 
-fn parse_workspace_edit(result: &Value) -> serde_json::Map<String, Value> {
-    let mut changes = serde_json::Map::new();
-    if let Some(entries) = result.get("changes").and_then(Value::as_object) {
-        for (uri, edits) in entries {
-            let parsed = edits
-                .as_array()
-                .map(|edits| {
-                    edits
-                        .iter()
-                        .filter_map(parse_lsp_text_edit_value)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            changes.insert(file_path_from_uri(uri), json!(parsed));
-        }
-    }
-    if let Some(document_changes) = result.get("documentChanges").and_then(Value::as_array) {
-        for change in document_changes {
-            let Some(uri) = change
-                .get("textDocument")
-                .and_then(|document| document.get("uri"))
-                .and_then(Value::as_str)
-            else {
-                continue;
-            };
-            let parsed = change
-                .get("edits")
-                .and_then(Value::as_array)
-                .map(|edits| {
-                    edits
-                        .iter()
-                        .filter_map(parse_lsp_text_edit_value)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            changes.insert(file_path_from_uri(uri), json!(parsed));
-        }
-    }
-    changes
-}
-
 fn parse_lsp_text_edit_value(value: &Value) -> Option<Value> {
-    Some(json!({
-        "range": parse_lsp_range_value(value.get("range")?)?,
-        "newText": value.get("newText").and_then(Value::as_str).unwrap_or_default()
-    }))
+    parse_plain_text_edit(value).ok()
 }
 
 fn parse_lsp_range_value(value: &Value) -> Option<Value> {
@@ -1189,14 +1176,16 @@ fn parse_lsp_range_value(value: &Value) -> Option<Value> {
 }
 
 fn parse_lsp_position_value(value: &Value) -> Option<Value> {
-    Some(json!({
-        "line": value.get("line").and_then(Value::as_i64).unwrap_or(0),
-        "utf16Column": value
-            .get("character")
-            .or_else(|| value.get("utf16Column"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0)
-    }))
+    let line = value
+        .get("line")?
+        .as_u64()
+        .filter(|value| *value <= i32::MAX as u64)?;
+    let column = value
+        .get("character")
+        .or_else(|| value.get("utf16Column"))?
+        .as_u64()
+        .filter(|value| *value <= i32::MAX as u64)?;
+    Some(json!({ "line": line, "utf16Column": column }))
 }
 
 pub(crate) fn file_path_from_uri(uri: &str) -> String {

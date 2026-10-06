@@ -1,6 +1,6 @@
 # B6 重构：语义编辑事务与 Refactor This
 
-状态：第 1–10 节保留基于 `3680935d` 的第四版设计与历史验收；2026-10-06 已按当前源码复核，实施边界以第 11 节修订为准。**B6a2 尚未实施，原生编辑器安装门禁已通过，开始协议保真与现有文本入口迁移。**
+状态：第 1–10 节保留基于 `3680935d` 的第四版设计与历史验收；2026-10-06 已按当前源码复核，实施边界以第 11 节修订为准。**B6a2 首个文本编辑切片已实现并通过 Rust/Swift 自动验证；原生编辑器历史安装门禁已通过，本切片的安装与实机验收待完成。B6a2 整体仍未完成。**
 
 历史状态：**第四版，B6a1a 能力纠正与报文快照已实现并通过 Rust 计时及真实 gopls 协议回归；真实编辑/点击及独立候选复验通过；`94af8e89` 已替换系统安装并复验，其余功能未实施（见 §3.4–3.6）。** 第一版因「只核查 LSP 解析侧」被否；
 第二版补上协商侧与反向请求侧后仍被独立审查**不放行**，列出 9 条阻塞问题。本版按那 9 条
@@ -711,8 +711,8 @@ version 6.2；实际使用仓库内解包的 swift.org 6.2.4 工具链，必须�
   Search Replace 的实际 Apply、选中文件/occurrence 排除及共享 Undo/Redo；`8ec7e1eb`
   又修复了原生输入历史的生命周期。第 2、6、9 节中“租约/Undo/Apply 均未实现”的历史
   说法不能继续作为实施依据，也不应重新引入已删除的上游 owner。
-- 这些能力不等于 B6b1/B6b2 整体完成：`AppModel+Development.applyLanguageWorkspaceEdit`
-  仍是旧 map 路径，缺有序资源操作、LSP 版本和请求身份校验；现有 coordinator 的文本
+- 这些能力不等于 B6b1/B6b2 整体完成：实施前的 `AppModel+Development.applyLanguageWorkspaceEdit`
+  是旧 map 路径，缺有序资源操作、LSP 版本和请求身份校验；既有 coordinator 的文本
   批次会去重并排序，不能直接解释有序 create/edit/rename/delete。
 - B6a1b 的反向 applyEdit 处理器和完成命令仍未实现。§3.4 已证明 Extract constant 可以
   走 resolve，所以 B6a2 继续只依赖 B6a1a；不能把 a1b 永久删除，也不把它错误地放回
@@ -769,3 +769,64 @@ additionalTextEdits 对光标位置的影响纳入验证。Code Action 的 comma
 
 本节没有完成或删除 B6a1b、B6a2 的其余方法、B6b 的资源事务与 Undo、B6c/B6d。
 第一条文本链完成后，继续上述方法与消费者，按原验收矩阵实际构建、安装、对照和分阶段提交。
+
+
+### 11.4 首个文本切片实现与自动验证（2026-10-06）
+
+本批基于 `df2196c0` 实现有序 workspace edit 与四个既有文本入口迁移；自动验证通过，
+安装与实机验收待完成，不表示 B6a2 整体完成。Rust 严格模型保留操作顺序、版本、资源
+选项及注释，Swift 两个解码入口和 resolve 出站共用 typed codec。非法编辑整单失败，
+解析错误保留 operation ID，响应与超时归约使用同一状态锁，避免同请求双终态。
+
+宿主四个入口迁至 `AppModel+LanguageEditing`，通过原 session token、workspace generation、
+文档 UUID/locationRevision/revision 和精确 UTF-8 同步来源校验。Planner 在修改前拒绝
+资源/确认操作，顺序解释重复 URI，向既有文本事务输出每个路径的唯一最终替换。
+全缓冲区补全使用同一控制器的同步路径，保存前后选区；Undo 身份使用原生历史世代，
+不绑定已经因自身修改推进的 LSP version 或请求 revision。内建补全与 LSP 候选分别保留来源。
+补全 Undo/Redo 同样同步结束，使用仅允许同步缓冲区操作的 lease；保存中的已捕获内容
+独立于 live buffer，异步磁盘事务的 lease 不放宽。完整同步成功后，仅原会话已接受且与
+当前 UTF-8 字节相同的快照可以清除已覆盖的原生增量，避免 debounce 重复升版本。
+
+独立只读复核要求并已纳入实现/回归：磁盘补偿快照保留到 MainActor 最终提交；失效或
+忙时响应不得取消现有事务；关闭/切项目等待所属编辑及磁盘 Undo/Redo 补偿后再释放
+原 workspace；文档重开/重新载入后不得重放旧补全历史；初始化 version 0 不推算为 1。
+无变化目标保留为事务前置条件，再次核对磁盘身份/内容，不写盘、不登记历史、不发送
+变化通知；其 lease 收尾仍排空延迟文件观察事件。Code Action 命令仅在实际应用完成、
+提交后身份仍匹配并回同步原会话后发送。最终静态复核无剩余阻断项。
+
+自动验证与复现证据如下（报告均在 `.artifacts/test-stability/`）：
+
+- Rust 完整计时回归 523 项通过，92.063 秒：
+  `b6a2-workspace-edit-uri-final-rust.json`。严格 URI、空 action edit、格式化/补全整单失败、
+  响应与超时竞争均有实际失败回归，随后修复。
+- `verify-rust-core.sh` 通过，122.277 秒，包含 Rust/Swift bridge 和相关集成；日志与有界
+  进程结果在 `.artifacts/b6a2/verify-rust-core.log`、`verify-rust-core-result.json`。
+- 最终 Rust-linked 完整 Swift：控制台 1574 项、186 suites 全部通过，45.912 秒；
+  `b6a2-text-verified.json` 记录 1563 个计时条目，全部通过，无超时或硬预算失败。
+  14 项超过 1 秒预警；本批修改中最慢为原生释放检查 1.015 秒，补全提交 30ms。
+  HTML 模块健康度与预警已在浏览器检查，截图在 `.artifacts/b6a2/ui/test-report-final.png`。
+- Swift-only 定向检查 41 项通过，0.168 秒，无性能预警：`b6a2-swift-fallback-final.json`。
+  测试夹具注入原生读取与窄生命周期决策，独立覆盖无 Rust 实现的回退；不绕过宿主事务。
+- 补全无法 Undo、旧会话版本化动作被接受、同步遗留 native delta、无变化目标丢失
+  前置条件、磁盘 Undo 补偿中提前切项目均有实际 red/green 回归。原始证据包括
+  `b6a2-workspace-edit-host-red-corrected.json`、`b6a2-completion-undo-sync-red.json`、
+  `b6a2-pending-native-sync-red.json`、`b6a2-preconditions-replay-red.json`。
+  单次观察事件排空使用禁用重复原生投递的夹具，真实失败后修复，见
+  `b6a2-noop-watcher-controlled-red.json`。
+- 原生磁盘回滚先因锁屏保护 EPERM 失败；用户解锁后两个分支通过，最终完整套件再次
+  通过，未改变文件保护策略。原生 storage 释放检查的超时后内存图证明唯一强引用为
+  主线程 autorelease pool；测试现通过原生 RunLoop 回调逐轮排空池，每轮最多 20ms，
+  三项释放共用固定 2 秒期限。保留原 A→释放→B 顺序、所有弱引用/选区/历史断言，
+  未修改生产生命周期、清空历史或拆卸 TextKit 图。修复前失败、修复后定向及完整通过；
+  内存图在 `.artifacts/b6a2/native-storage-after-timeout.memgraph`。未新增静态扫描例外。
+- Rust 注释/fmt、共享 JSON、service/module 边界、测试稳定性静态门禁及 diff/新增文件
+  空白检查通过。测试与探针启动的 Lithe/helper/gopls 进程已结束。
+
+真实 gopls 0.20.0 经当前 Core 检查跨文件 Rename（打开版本 1 / 未打开版本 0）、
+非 ASCII 文件 URI、格式化和 Organize Imports（版本 4）通过；修改前后 `go test` 均正常。
+记录 `.artifacts/b6a2/real-gopls/core-probe.json`。当前能力组合未返回可 resolve 的 data，
+故真实 resolve 验收仍待完成；此探针不代替安装应用的 UI 验收。
+
+接下来从本批提交构建、安装并记录 Lithe/GoLand/RustRover 实机验收，随后继续 §11.3
+其余方法/消费者。prepareRename、真实选区 Code Action、符号/selectionRange、资源事务、
+反向请求和 B6c/B6d 仍未完成。
