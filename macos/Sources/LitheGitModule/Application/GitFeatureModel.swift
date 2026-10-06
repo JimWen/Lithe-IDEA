@@ -311,7 +311,8 @@ package final class GitFeatureModel: ObservableObject {
     private func cancelOwnedGitExecutions() {
         for execution in activeGitExecutions.values { service.cancelExecution(execution) }
     }
-    private var loadingLineChangeURLs: Set<URL> = []
+    private var lineChangeRequests: [URL: UUID] = [:]
+    private var lineChangeGeneration: UInt64 = 0
     private var lineChangeHunks: [URL: [String: DiffHunk]] = [:]
     private var worktreeRequestGeneration: UInt64 = 0
     private var worktreeInspectionRequestGeneration: UInt64 = 0
@@ -445,9 +446,8 @@ package final class GitFeatureModel: ObservableObject {
         pendingDiscardHunk = nil
         isCommitting = false
         gitBlameLines = [:]
-        gitLineChangeMarkers = [:]
-        loadingLineChangeURLs = []
-        lineChangeHunks = [:]
+        invalidateLineChanges()
+        lineChangeRequests = [:]
         gitReferences = []
         recentGitReferences = []
         gitCommits = []
@@ -566,6 +566,11 @@ package final class GitFeatureModel: ObservableObject {
             didChange = true
         }
         let snapshot = await workspaceSnapshot(workspaceURL: workspaceURL, repositoryRoots: repositoryRoots)
+        guard !Task.isCancelled else { return }
+        // Status flags do not identify file contents: consecutive saves can
+        // keep M while changing every marker and actionable hunk. Invalidate
+        // the lazy editor cache without refreshing unrelated history/UI state.
+        invalidateLineChanges()
         if let snapshot {
             guard !Task.isCancelled else { return }
             let changesChanged = gitChanges != snapshot.changes
@@ -599,8 +604,6 @@ package final class GitFeatureModel: ObservableObject {
             }
             if changesChanged {
                 gitChanges = snapshot.changes
-                gitLineChangeMarkers = [:]
-                lineChangeHunks = [:]
                 didChange = true
             }
             reconcilePendingStagingStates(with: snapshot.changes)
@@ -808,27 +811,47 @@ package final class GitFeatureModel: ObservableObject {
         await selectChange(change)
     }
 
+    private func invalidateLineChanges() {
+        lineChangeGeneration &+= 1
+        lineChangeHunks = [:]
+        if !gitLineChangeMarkers.isEmpty { gitLineChangeMarkers = [:] }
+    }
+
     package func loadLineChanges(for fileURL: URL) async {
         let normalizedURL = fileURL.standardizedFileURL
-        guard !loadingLineChangeURLs.contains(normalizedURL) else { return }
-        // New files have no committed line baseline. Keep their complete diff
-        // in Changes without marking every line in the editor as an addition.
-        guard let change = gitChanges.first(where: {
-            $0.url.standardizedFileURL == normalizedURL
-        }), change.kind != .added else {
-            gitLineChangeMarkers[normalizedURL] = []
-            lineChangeHunks[normalizedURL] = [:]
+        guard !Task.isCancelled, lineChangeRequests[normalizedURL] == nil else { return }
+        let requestID = UUID()
+        lineChangeRequests[normalizedURL] = requestID
+        defer {
+            // A reset can already have installed another request for this URL.
+            if lineChangeRequests[normalizedURL] == requestID {
+                lineChangeRequests[normalizedURL] = nil
+            }
+        }
+
+        while !Task.isCancelled, lineChangeRequests[normalizedURL] == requestID {
+            // New files have no committed line baseline. Keep their complete
+            // diff in Changes without marking every editor line as added.
+            guard let change = gitChanges.first(where: {
+                $0.url.standardizedFileURL == normalizedURL
+            }), change.kind != .added else {
+                gitLineChangeMarkers[normalizedURL] = []
+                lineChangeHunks[normalizedURL] = [:]
+                return
+            }
+            let generation = lineChangeGeneration
+            let document = await service.diffDocument(for: change)
+            guard !Task.isCancelled, lineChangeRequests[normalizedURL] == requestID else { return }
+            // A refresh superseded this diff. Retry within the existing lazy
+            // request so an editor awaiting it receives the current contents.
+            guard generation == lineChangeGeneration else { continue }
+            guard gitChanges.contains(change) else { return }
+            lineChangeHunks[normalizedURL] = Dictionary(
+                uniqueKeysWithValues: document.hunks.map { ($0.id, $0) }
+            )
+            gitLineChangeMarkers[normalizedURL] = GitLineChangeProjection.markers(from: document.rows)
             return
         }
-        loadingLineChangeURLs.insert(normalizedURL)
-        defer { loadingLineChangeURLs.remove(normalizedURL) }
-
-        let document = await service.diffDocument(for: change)
-        guard gitChanges.contains(change) else { return }
-        gitLineChangeMarkers[normalizedURL] = GitLineChangeProjection.markers(from: document.rows)
-        lineChangeHunks[normalizedURL] = Dictionary(
-            uniqueKeysWithValues: document.hunks.map { ($0.id, $0) }
-        )
     }
 
     package func showLineChange(_ marker: GitLineChangeMarker, for fileURL: URL) async {

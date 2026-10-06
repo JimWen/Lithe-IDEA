@@ -349,23 +349,114 @@ struct GitModuleTests {
         #expect(feature.pendingDiscardHunk == nil)
     }
 
+    @Test
+    func sameStatusRefreshInvalidatesLineMarkersAndHunkActions() async throws {
+        let (feature, state) = makeLineChangeFeature(status: " M")
+        defer { feature.reset() }
+        await feature.refreshGit()
+        await feature.loadLineChanges(for: state.change.url)
+        let oldMarker = try #require(feature.gitLineChangeMarkers[state.change.url]?.first)
+        state.document = Self.updatedLineDiff
+
+        await feature.refreshGit()
+
+        // Saving a file can change every hunk without changing its M status.
+        #expect(feature.gitLineChangeMarkers[state.change.url] == nil)
+        feature.requestDiscardLineChange(oldMarker, for: state.change.url)
+        #expect(feature.pendingDiscardHunk == nil)
+        #expect(state.downstreamRefreshCount == 1)
+        await feature.loadLineChanges(for: state.change.url)
+        #expect(feature.gitLineChangeMarkers[state.change.url] == Self.updatedLineMarkers)
+        #expect(state.diffReads.count == 2)
+    }
+
+    @Test
+    func refreshDuringLineDiffRetriesWithoutPublishingObsoleteMarkers() async {
+        let controller = GitLineDiffController(results: [Self.initialLineDiff, Self.updatedLineDiff])
+        let (feature, state) = makeLineChangeFeature(status: " M", diffProvider: { controller.next() })
+        defer { controller.releaseAll(); feature.reset() }
+        await feature.refreshGit()
+        let load = Task { @MainActor in await feature.loadLineChanges(for: state.change.url) }
+        defer { load.cancel() }
+        #expect(await controller.waitUntilCallStarts(0))
+
+        await feature.refreshGit()
+        controller.releaseCall(0)
+        let retried = await controller.waitUntilCallStarts(1)
+        #expect(retried)
+        #expect(feature.gitLineChangeMarkers[state.change.url] == nil)
+        controller.releaseAll()
+        await load.value
+
+        #expect(!controller.didTimeOut)
+        #expect(feature.gitLineChangeMarkers[state.change.url] == Self.updatedLineMarkers)
+    }
+
+    @Test
+    func resetLineDiffCannotPublishOrRemoveNewerRequestOwnership() async {
+        let controller = GitLineDiffController(results: [Self.initialLineDiff, Self.updatedLineDiff])
+        let (feature, state) = makeLineChangeFeature(status: " M", diffProvider: { controller.next() })
+        defer { controller.releaseAll(); feature.reset() }
+        await feature.refreshGit()
+        let obsolete = Task { @MainActor in await feature.loadLineChanges(for: state.change.url) }
+        defer { obsolete.cancel() }
+        #expect(await controller.waitUntilCallStarts(0))
+        feature.reset()
+        await feature.refreshGit()
+        let current = Task { @MainActor in await feature.loadLineChanges(for: state.change.url) }
+        defer { current.cancel() }
+        #expect(await controller.waitUntilCallStarts(1))
+
+        controller.releaseCall(0)
+        await obsolete.value
+        #expect(feature.gitLineChangeMarkers[state.change.url] == nil)
+        // The old request's cleanup must not let a third read bypass the still
+        // pending current owner of this URL.
+        await feature.loadLineChanges(for: state.change.url)
+        #expect(controller.callCount == 2)
+        #expect(feature.gitLineChangeMarkers[state.change.url] == nil)
+        controller.releaseAll()
+        await current.value
+        #expect(!controller.didTimeOut)
+        #expect(feature.gitLineChangeMarkers[state.change.url] == Self.updatedLineMarkers)
+    }
+
+    private static var initialLineDiff: DiffDocument {
+        DiffDocument(patch: "new file patch", rows: [
+            DiffRow(oldLine: nil, newLine: 1, left: nil, right: "first added line", kind: .addition, hunkID: "h1"),
+            DiffRow(oldLine: nil, newLine: 2, left: nil, right: "second added line", kind: .addition, hunkID: "h1")
+        ], hunks: [DiffHunk(id: "h1", header: "@@ -0,0 +1,2 @@", patch: "new file patch")])
+    }
+
+    private static var updatedLineDiff: DiffDocument {
+        DiffDocument(patch: "updated patch", rows: [
+            DiffRow(oldLine: 1, newLine: 1, left: "baseline", right: "baseline", kind: .context),
+            DiffRow(oldLine: nil, newLine: 2, left: nil, right: "new long line", kind: .addition, hunkID: "h2"),
+            DiffRow(oldLine: nil, newLine: 3, left: nil, right: "adjacent line", kind: .addition, hunkID: "h2")
+        ], hunks: [DiffHunk(id: "h2", header: "@@ -1 +1,3 @@", patch: "updated patch")])
+    }
+
+    private static var updatedLineMarkers: [GitLineChangeMarker] {
+        [GitLineChangeMarker(line: 1, kind: .added, hunkID: "h2"),
+         GitLineChangeMarker(line: 2, kind: .added, hunkID: "h2")]
+    }
+
     private static func lineChange(status: String) -> GitChange {
         let flags = Array(status)
         return GitChange(repositoryRoot: URL(fileURLWithPath: "/workspace"), path: "main.rs",
                          originalPath: nil, indexStatus: flags[0], workTreeStatus: flags[1])
     }
 
-    private func makeLineChangeFeature(status: String) -> (GitFeatureModel, GitLineChangeTestState) {
-        let state = GitLineChangeTestState(change: Self.lineChange(status: status))
+    private func makeLineChangeFeature(
+        status: String,
+        diffProvider: (@Sendable () -> DiffDocument?)? = nil
+    ) -> (GitFeatureModel, GitLineChangeTestState) {
+        let state = GitLineChangeTestState(change: Self.lineChange(status: status), document: Self.initialLineDiff)
         let root = state.change.repositoryRoot
-        let document = DiffDocument(patch: "new file patch", rows: [
-            DiffRow(oldLine: nil, newLine: 1, left: nil, right: "first added line", kind: .addition, hunkID: "h1"),
-            DiffRow(oldLine: nil, newLine: 2, left: nil, right: "second added line", kind: .addition, hunkID: "h1")
-        ], hunks: [DiffHunk(id: "h1", header: "@@ -0,0 +1,2 @@", patch: "new file patch")])
         let feature = GitFeatureModel(service: GitService(operations: TestGitOperations(
             diffDocumentHandler: { _, staged, untracked in
                 state.recordDiffRead(staged: staged, untracked: untracked)
-                return document
+                return diffProvider?() ?? state.document
             },
             applyPatchHandler: { _, _, mode in
                 state.recordPatch(mode)
@@ -375,7 +466,7 @@ struct GitModuleTests {
             GitSnapshot(repositoryRoot: root, branch: "main", changes: [state.change])
         }, repositoryRootsProvider: { _ in [root] })
         feature.configure(workspaceURLProvider: { root }, isGitLogVisibleProvider: { false },
-                          notify: { _ in }, onStateRefreshed: {})
+                          notify: { _ in }, onStateRefreshed: { state.recordDownstreamRefresh() })
         return (feature, state)
     }
 
@@ -3376,21 +3467,66 @@ private final class GitLineChangeTestState: @unchecked Sendable {
 
     private let lock = NSLock()
     private var currentChange: GitChange
+    private var currentDocument: DiffDocument
+    private var refreshCount = 0
     private var reads: [DiffRead] = []
     private var patches: [String] = []
 
-    init(change: GitChange) { currentChange = change }
+    init(change: GitChange, document: DiffDocument) {
+        currentChange = change
+        currentDocument = document
+    }
 
     var change: GitChange {
         get { lock.withLock { currentChange } }
         set { lock.withLock { currentChange = newValue } }
     }
     var diffReads: [DiffRead] { lock.withLock { reads } }
+    var document: DiffDocument {
+        get { lock.withLock { currentDocument } }
+        set { lock.withLock { currentDocument = newValue } }
+    }
+    var downstreamRefreshCount: Int { lock.withLock { refreshCount } }
+    func recordDownstreamRefresh() { lock.withLock { refreshCount += 1 } }
     var patchModes: [String] { lock.withLock { patches } }
     func recordDiffRead(staged: Bool, untracked: Bool) {
         lock.withLock { reads.append(DiffRead(staged: staged, untracked: untracked)) }
     }
     func recordPatch(_ mode: String) { lock.withLock { patches.append(mode) } }
+}
+
+/// Holds synchronous diff reads at the existing GitService worker boundary;
+/// the test driver waits asynchronously and releases every read on teardown.
+private final class GitLineDiffController: @unchecked Sendable {
+    private let lock = NSLock()
+    private let results: [DiffDocument]
+    private let startedGates: [GitModuleTestGate]
+    private let releaseGates: [GitModuleTestGate]
+    private var calls = 0
+    private var timedOut = false
+
+    init(results: [DiffDocument]) {
+        self.results = results
+        startedGates = results.map { _ in GitModuleTestGate() }
+        releaseGates = results.map { _ in GitModuleTestGate() }
+    }
+    var callCount: Int { lock.withLock { calls } }
+    var didTimeOut: Bool { lock.withLock { timedOut } }
+    func next() -> DiffDocument? {
+        let index = lock.withLock { let index = calls; calls += 1; return index }
+        guard results.indices.contains(index) else { return nil }
+        startedGates[index].open()
+        guard releaseGates[index].waitSynchronously() else {
+            lock.withLock { timedOut = true }
+            return nil
+        }
+        return results[index]
+    }
+    func waitUntilCallStarts(_ index: Int) async -> Bool {
+        await startedGates[index].waitUntilOpen()
+    }
+    func releaseCall(_ index: Int) { releaseGates[index].open() }
+    func releaseAll() { releaseGates.forEach { $0.open() } }
 }
 
 private struct TestGitOperations: GitOperations {
