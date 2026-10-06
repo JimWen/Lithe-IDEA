@@ -18,6 +18,17 @@ enum LSPCapabilityPresentationState: Equatable, Sendable {
 }
 
 enum LSPControlCenterPresenter {
+    static func projectLanguageServers(
+        catalog: LanguageProviderCatalog,
+        files: [URL]
+    ) -> [LanguageProviderDescriptor] {
+        // Installed plugins declare support before their on-demand module adds
+        // launch metadata. Keep stopped/disabled providers available to enable.
+        catalog.descriptors
+            .filter { $0.capabilities.contains(.languageServer) }
+            .filter { descriptor in files.contains { descriptor.handles(fileURL: $0) } }
+    }
+
     static func serverStatus(
         isDisabled: Bool,
         sessionState: LanguageServerSessionState?

@@ -124,11 +124,10 @@ struct LSPControlCenterView: View {
     }
 
     private var projectLanguageServers: [LanguageProviderDescriptor] {
-        model.languageProviderCatalog.descriptors
-            .filter { $0.capabilities.contains(.languageServer) && $0.languageServerLaunch != nil }
-            .filter { descriptor in
-                model.projectFiles.contains { descriptor.handles(fileURL: $0) }
-            }
+        LSPControlCenterPresenter.projectLanguageServers(
+            catalog: model.languageProviderCatalog,
+            files: model.projectFiles
+        )
     }
 
     private func serverStatus(for descriptor: LanguageProviderDescriptor) -> LSPServerStatus {

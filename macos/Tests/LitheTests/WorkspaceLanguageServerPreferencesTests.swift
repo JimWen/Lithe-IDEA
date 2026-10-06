@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import LitheLanguageIntelligenceModule
+import LitheModuleAPI
 import Testing
 @testable import Lithe
 
@@ -8,6 +9,60 @@ import Testing
 @MainActor
 struct WorkspaceLanguageServerPreferencesTests {
     private let workspace = URL(fileURLWithPath: "/example/lsp-project", isDirectory: true)
+
+    @Test
+    func disabledPluginServerRemainsConfigurableAfterReopeningWorkspace() throws {
+        // Plugin launch metadata is attached only after activation. A persisted
+        // disabled server must remain visible so the user can activate it again.
+        let catalog = LanguageProviderCatalog.compatibilityFallback.applying(languageSupports: [
+            LanguageSupportDeclaration(
+                id: "go",
+                displayName: "Go",
+                fileExtensions: ["go"],
+                languageServerModuleID: .languageServerExtension("go")
+            )
+        ])
+        let store = LanguagePreferencesTestStore()
+        let feature = makeFeature(store: store, catalog: catalog)
+        feature.reloadCatalog(for: workspace)
+        feature.setEnabled(false, providerID: "go")
+
+        let reopened = makeFeature(store: store, catalog: catalog)
+        reopened.reloadCatalog(for: workspace)
+        let goDocument = document("main.go")
+        let providers = LSPControlCenterPresenter.projectLanguageServers(
+            catalog: reopened.catalog,
+            files: [goDocument.url, workspace.appendingPathComponent("README.md")]
+        )
+        #expect(providers.map(\.id) == ["go"])
+        let provider = try #require(providers.first)
+        #expect(provider.languageServerLaunch == nil)
+        #expect(LSPControlCenterPresenter.serverStatus(
+            isDisabled: reopened.isDisabled(provider.id), sessionState: nil
+        ) == .disabled)
+        var activatedURLs: [URL] = []
+        reopened.configure(
+            documentsProvider: { [goDocument] },
+            activateDocument: { [weak reopened] document in
+                #expect(reopened?.isDisabled("go") == false)
+                activatedURLs.append(document.url)
+                return true
+            },
+            notify: { _ in }
+        )
+        reopened.setEnabled(true, providerID: provider.id)
+        #expect(activatedURLs == [goDocument.url])
+    }
+
+    @Test
+    func syntaxOnlyPluginDoesNotExposeLanguageServerSettings() {
+        let catalog = LanguageProviderCatalog.compatibilityFallback.applying(languageSupports: [
+            LanguageSupportDeclaration(id: "go", displayName: "Go", fileExtensions: ["go"])
+        ])
+        #expect(LSPControlCenterPresenter.projectLanguageServers(
+            catalog: catalog, files: [workspace.appendingPathComponent("main.go")]
+        ).isEmpty)
+    }
 
     @Test
     func disabledLanguagesSurviveNewPreferenceAndFeatureInstances() throws {
@@ -116,8 +171,11 @@ struct WorkspaceLanguageServerPreferencesTests {
         EditorDocument(url: workspace.appendingPathComponent(name), text: "", modificationDate: nil)
     }
 
-    private func makeFeature(store: any KeyValueStore) -> LanguageToolingFeatureModel {
-        let source = LanguagePreferencesTestCatalogSource()
+    private func makeFeature(
+        store: any KeyValueStore,
+        catalog: LanguageProviderCatalog = .compatibilityFallback
+    ) -> LanguageToolingFeatureModel {
+        let source = LanguagePreferencesTestCatalogSource(catalog: catalog)
         return LanguageToolingFeatureModel(
             catalogSource: source,
             catalogSnapshot: source.load(workspaceURL: nil),
@@ -129,9 +187,11 @@ struct WorkspaceLanguageServerPreferencesTests {
 }
 
 private struct LanguagePreferencesTestCatalogSource: LanguageProviderCatalogSource {
+    let catalog: LanguageProviderCatalog
+
     func load(workspaceURL: URL?) -> LanguageProviderCatalogSnapshot {
         LanguageProviderCatalogSnapshot(
-            catalog: .compatibilityFallback,
+            catalog: catalog,
             schemaVersion: nil,
             origin: .builtin,
             issues: []
