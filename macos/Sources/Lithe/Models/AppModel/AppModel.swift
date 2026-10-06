@@ -1351,16 +1351,21 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
 
     @discardableResult
     func saveAllDocuments() async -> Bool {
-        await documentFeature.saveAllDocuments()
+        services.workspaceTextEditUndoController.breakNativeEditCoalescing()
+        return await documentFeature.saveAllDocuments()
     }
 
     func saveActiveDocument() {
+        if let activeDocument {
+            services.workspaceTextEditUndoController.breakNativeEditCoalescing(for: activeDocument)
+        }
         documentFeature.saveActiveDocument()
     }
 
     @discardableResult
     func saveDocument(_ document: EditorDocument) async throws -> Bool {
-        try await documentFeature.save(document)
+        services.workspaceTextEditUndoController.breakNativeEditCoalescing(for: document)
+        return try await documentFeature.save(document)
     }
 
     func workspaceRelativePath(for url: URL, root: URL) -> String? {
@@ -1385,6 +1390,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     }
 
     private func handleDocumentClosed(_ document: EditorDocument) {
+        services.workspaceTextEditUndoController.handleDocumentClosed(document)
         languageToolingSessionsIfActive?.closeDocument(document.url)
         if javaFeature.handles(fileURL: document.url) {
             javaFeature.close(document)

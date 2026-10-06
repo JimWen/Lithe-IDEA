@@ -7,6 +7,70 @@ import LitheCoreContracts
 /// task validates and commits the transition before publishing buffer changes.
 @MainActor
 final class WorkspaceTextEditUndoController: ObservableObject {
+    enum NativeTextEditKind: Sendable {
+        case typing
+        case backwardDelete
+        case forwardDelete
+        case atomic
+    }
+
+    struct NativeTextEdit: @unchecked Sendable {
+        let replacedRange: NSRange
+        let removedText: String
+        let insertedText: String
+        let beforeSelection: NSRange
+        let afterSelection: NSRange
+        let kind: NativeTextEditKind
+        let generation: UInt64
+        let restoreSelection: @MainActor @Sendable (NSRange) -> Void
+    }
+
+    private final class NativeTextEntry: @unchecked Sendable {
+        var replacedRange: NSRange
+        var removedText: String
+        var insertedText: String
+        let beforeSelection: NSRange
+        var afterSelection: NSRange
+        let kind: NativeTextEditKind
+        let generation: UInt64
+        let restoreSelection: @MainActor @Sendable (NSRange) -> Void
+        weak var document: EditorDocument?
+
+        init(document: EditorDocument, edit: NativeTextEdit) {
+            self.document = document
+            replacedRange = edit.replacedRange
+            removedText = edit.removedText
+            insertedText = edit.insertedText
+            beforeSelection = edit.beforeSelection
+            afterSelection = edit.afterSelection
+            kind = edit.kind
+            generation = edit.generation
+            restoreSelection = edit.restoreSelection
+        }
+    }
+
+    private struct NativeTextTransition: @unchecked Sendable {
+        let range: NSRange
+        let expectedText: String
+        let replacementText: String
+        let resultingSelection: NSRange
+        let inverseSelection: NSRange
+        let generation: UInt64
+        let restoreSelection: @MainActor @Sendable (NSRange) -> Void
+
+        var inverse: NativeTextTransition {
+            NativeTextTransition(
+                range: NSRange(location: range.location, length: replacementText.utf16.count),
+                expectedText: replacementText,
+                replacementText: expectedText,
+                resultingSelection: inverseSelection,
+                inverseSelection: resultingSelection,
+                generation: generation,
+                restoreSelection: restoreSelection
+            )
+        }
+    }
+
     private let undoManager: UndoManager
     private let coordinator: WorkspaceTextEditCoordinator
     private let operations: any WorkspaceTextEditFileOperations
@@ -15,11 +79,17 @@ final class WorkspaceTextEditUndoController: ObservableObject {
     private var didMutate: ([EditorDocument]) -> Void = { _ in }
     private var notifyFailure: (String) -> Void = { _ in }
     private var operationTask: Task<WorkspaceTextEditTransactionResult, Never>?
+    private var coalescingNativeEntry: NativeTextEntry?
+    private var nativeDocuments: [ObjectIdentifier: EditorDocument] = [:]
     @Published private(set) var isApplying = false
 
     var sharedUndoManager: UndoManager { undoManager }
-    var canUndo: Bool { !isApplying && undoManager.canUndo }
-    var canRedo: Bool { !isApplying && undoManager.canRedo }
+    var canUndo: Bool { canTraverseNativeHistory && undoManager.canUndo }
+    var canRedo: Bool { canTraverseNativeHistory && undoManager.canRedo }
+
+    private var canTraverseNativeHistory: Bool {
+        !isApplying && !nativeDocuments.values.contains(where: \.hasMutationLease)
+    }
 
     init(undoManager: UndoManager, coordinator: WorkspaceTextEditCoordinator,
          operations: any WorkspaceTextEditFileOperations) {
@@ -40,15 +110,58 @@ final class WorkspaceTextEditUndoController: ObservableObject {
 
     func reset() {
         operationTask?.cancel()
+        coalescingNativeEntry = nil
         undoManager.removeAllActions()
+        nativeDocuments.removeAll()
+    }
+
+    func recordNativeEdit(_ edit: NativeTextEdit, in document: EditorDocument) {
+        guard !isApplying,
+              !undoManager.isUndoing,
+              !undoManager.isRedoing,
+              edit.generation == document.nativeHistoryGeneration,
+              !edit.removedText.utf8.elementsEqual(edit.insertedText.utf8) else { return }
+        if merge(edit, into: coalescingNativeEntry, document: document) { return }
+        nativeDocuments[ObjectIdentifier(document)] = document
+        let entry = NativeTextEntry(document: document, edit: edit)
+        coalescingNativeEntry = edit.kind == .atomic ? nil : entry
+        registerNativeEntry(entry, document: document)
+    }
+
+    func breakNativeEditCoalescing(for document: EditorDocument? = nil) {
+        guard document == nil || coalescingNativeEntry?.document === document else { return }
+        coalescingNativeEntry = nil
+    }
+
+    func handleDocumentClosed(_ document: EditorDocument) {
+        breakNativeEditCoalescing(for: document)
+        undoManager.removeAllActions(withTarget: document)
+        nativeDocuments[ObjectIdentifier(document)] = nil
     }
 
     func waitForCurrentOperation() async -> WorkspaceTextEditTransactionResult? {
         await operationTask?.value
     }
 
+    @discardableResult
+    func undo() -> Bool {
+        guard canUndo else { return false }
+        breakNativeEditCoalescing()
+        undoManager.undo()
+        return true
+    }
+
+    @discardableResult
+    func redo() -> Bool {
+        guard canRedo else { return false }
+        breakNativeEditCoalescing()
+        undoManager.redo()
+        return true
+    }
+
     func apply(_ edits: [WorkspaceTextEdit], at workspaceURL: URL) async -> WorkspaceTextEditTransactionResult {
         guard !isApplying else { return rejected(edits) }
+        breakNativeEditCoalescing()
         isApplying = true
         let task = Task { @MainActor in
             let result = await self.perform(edits, at: workspaceURL)
@@ -86,6 +199,124 @@ final class WorkspaceTextEditUndoController: ObservableObject {
         }
         undoManager.setActionName("Replace Text")
         if ownsGroup { undoManager.endUndoGrouping() }
+    }
+
+    private func registerNativeTransition(_ transition: NativeTextTransition, document: EditorDocument) {
+        let ownsGroup = !undoManager.isUndoing && !undoManager.isRedoing
+        if ownsGroup { undoManager.beginUndoGrouping() }
+        undoManager.registerUndo(withTarget: document) { [weak self] target in
+            self?.replayNativeTransition(transition, document: target)
+        }
+        undoManager.setActionName("Edit Text")
+        if ownsGroup { undoManager.endUndoGrouping() }
+    }
+
+    private func registerNativeEntry(_ entry: NativeTextEntry, document: EditorDocument) {
+        let ownsGroup = !undoManager.isUndoing && !undoManager.isRedoing
+        if ownsGroup { undoManager.beginUndoGrouping() }
+        undoManager.registerUndo(withTarget: document) { [weak self, entry] target in
+            self?.replayNativeTransition(
+                NativeTextTransition(
+                    range: NSRange(
+                        location: entry.replacedRange.location,
+                        length: entry.insertedText.utf16.count
+                    ),
+                    expectedText: entry.insertedText,
+                    replacementText: entry.removedText,
+                    resultingSelection: entry.beforeSelection,
+                    inverseSelection: entry.afterSelection,
+                    generation: entry.generation,
+                    restoreSelection: entry.restoreSelection
+                ),
+                document: target
+            )
+        }
+        undoManager.setActionName("Edit Text")
+        if ownsGroup { undoManager.endUndoGrouping() }
+    }
+
+    private func replayNativeTransition(_ transition: NativeTextTransition, document: EditorDocument) {
+        breakNativeEditCoalescing()
+        guard !isApplying,
+              nativeDocuments[ObjectIdentifier(document)] === document,
+              !document.isReadOnly,
+              !document.hasExternalConflict,
+              !document.hasMutationLease,
+              transition.generation == document.nativeHistoryGeneration,
+              let replacementRange = validatedRange(
+                  transition.range,
+                  expectedText: transition.expectedText,
+                  in: document.text
+              ) else {
+            rejectNativeHistory(for: document)
+            return
+        }
+        let source = document.text as NSString
+        let nextText = source.replacingCharacters(in: replacementRange, with: transition.replacementText)
+        willMutate([document])
+        registerNativeTransition(transition.inverse, document: document)
+        transition.restoreSelection(transition.resultingSelection)
+        guard document.applyNativeHistoryText(nextText) else { return }
+        didMutate([document])
+    }
+
+    private func validatedRange(
+        _ range: NSRange,
+        expectedText: String,
+        in source: String
+    ) -> NSRange? {
+        let text = source as NSString
+        guard range.location != NSNotFound,
+              range.location >= 0,
+              range.length >= 0,
+              range.location <= text.length,
+              range.length <= text.length - range.location,
+              Range(range, in: source) != nil,
+              text.substring(with: range).utf8.elementsEqual(expectedText.utf8) else { return nil }
+        return range
+    }
+
+    private func rejectNativeHistory(for document: EditorDocument) {
+        undoManager.removeAllActions(withTarget: document)
+        notifyFailure("Could not undo or redo this edit because the document changed. Review the current text.")
+    }
+
+    private func merge(
+        _ edit: NativeTextEdit,
+        into entry: NativeTextEntry?,
+        document: EditorDocument
+    ) -> Bool {
+        guard let entry,
+              entry.document === document,
+              entry.generation == edit.generation,
+              entry.kind == edit.kind,
+              entry.afterSelection == edit.beforeSelection else { return false }
+        switch edit.kind {
+        case .typing:
+            guard entry.removedText.isEmpty,
+                  edit.removedText.isEmpty,
+                  edit.replacedRange.location == entry.replacedRange.location + entry.insertedText.utf16.count else {
+                return false
+            }
+            entry.insertedText += edit.insertedText
+        case .backwardDelete:
+            guard entry.insertedText.isEmpty,
+                  edit.insertedText.isEmpty,
+                  NSMaxRange(edit.replacedRange) == entry.replacedRange.location else { return false }
+            entry.replacedRange.location = edit.replacedRange.location
+            entry.replacedRange.length += edit.replacedRange.length
+            entry.removedText = edit.removedText + entry.removedText
+        case .forwardDelete:
+            guard entry.insertedText.isEmpty,
+                  edit.insertedText.isEmpty,
+                  edit.replacedRange.location == entry.replacedRange.location else { return false }
+            entry.replacedRange.length += edit.replacedRange.length
+            entry.removedText += edit.removedText
+        case .atomic:
+            return false
+        }
+        entry.afterSelection = edit.afterSelection
+        return true
     }
 
     private func perform(_ edits: [WorkspaceTextEdit], at workspaceURL: URL) async -> WorkspaceTextEditTransactionResult {

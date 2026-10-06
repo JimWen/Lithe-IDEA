@@ -646,6 +646,7 @@ enum EditorOverlayLayout {
 struct EditorViewportState: Equatable {
     var selectionLocation = 0
     var selectionLength = 0
+    var selectionRestorationRevision: UInt64 = 0
     var verticalScrollOffset: CGFloat = 0
 }
 
@@ -662,6 +663,15 @@ final class EditorViewportStore {
         var state = state(for: documentID)
         state.selectionLocation = selection.location
         state.selectionLength = selection.length
+        states[documentID] = state
+    }
+
+    func restoreSelection(_ selection: NSRange, for documentID: UUID) {
+        guard selection.location != NSNotFound else { return }
+        var state = state(for: documentID)
+        state.selectionLocation = selection.location
+        state.selectionLength = selection.length
+        state.selectionRestorationRevision &+= 1
         states[documentID] = state
     }
 
@@ -706,6 +716,7 @@ struct CodeEditorView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: EditorContainerView, coordinator: Coordinator) {
+        coordinator.detachStableNativeUndo()
         coordinator.persistViewport()
     }
 
@@ -746,6 +757,7 @@ struct CodeEditorView: NSViewRepresentable {
 
         let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
         textView.externalUndoManager = model.services.workspaceTextEditUndoController.sharedUndoManager
+        context.coordinator.attachStableNativeUndo(to: textView)
         textView.isExternalEditSuspended = { [weak model] in
             model?.services.workspaceTextEditUndoController.isApplying == true
         }
@@ -762,7 +774,6 @@ struct CodeEditorView: NSViewRepresentable {
         textView.rebuildLineIndex()
         textView.isRichText = false
         textView.importsGraphics = false
-        textView.allowsUndo = true
         // 软换行按 AppSettings 全局开关应用；超大文件超出行数阈值时退回
         // 不换行几何，避免拖分栏时整文件 rewrap 卡顿。makeNSView 的缓冲
         // 区就是本次待显示内容，无需 incoming 修正。
@@ -796,6 +807,7 @@ struct CodeEditorView: NSViewRepresentable {
         textView.setSelectedRange(
             NSRange(location: selectionLocation, length: selectionLength)
         )
+        context.coordinator.appliedSelectionRestorationRevision = viewportState.selectionRestorationRevision
         textView.isEditable = !document.isReadOnly
         // 注释符在动作触发时经 Rust Core 解析，文档改名后无需失效缓存
         textView.onLineEditingAction = { [weak coordinator = context.coordinator] action in
@@ -966,7 +978,7 @@ struct CodeEditorView: NSViewRepresentable {
         // 的内容判定——外部重载在 chrome 之后才替换缓冲区，若仍按旧缓冲
         // 区行数判定，大文件会先进入折行布局、绕过重排保护；反向缩回
         // 阈值内也会滞留旧的禁用状态。
-        let textChanged = textView.string != document.text
+        let textChanged = !textView.string.utf8.elementsEqual(document.text.utf8)
             && !textView.hasMarkedText()
             && !context.coordinator.isApplyingEditorChange
         let incomingSoftWrapLineCount = textChanged
@@ -985,16 +997,34 @@ struct CodeEditorView: NSViewRepresentable {
             gutter: container.gutter
         )
 
-        if textChanged {
+        let viewportState = viewportStore.state(for: document.id)
+        let needsSelectionRestoration = context.coordinator.appliedSelectionRestorationRevision
+            != viewportState.selectionRestorationRevision
+        if textChanged || needsSelectionRestoration {
             let selection = textView.selectedRange()
-            textView.string = document.text
-            (textView as? CodeTextView)?.rebuildLineIndex()
-            container.gutter?.refreshLineNumberLayout()
-            textView.setSelectedRange(NSRange(location: min(selection.location, document.text.utf16.count), length: 0))
-            context.coordinator.resetHighlightCache()
-            context.coordinator.highlight()
-            (textView as? CodeTextView)?.updateEditorDecorations()
-            container.gutter?.needsDisplay = true
+            context.coordinator.isApplyingEditorChange = true
+            if textChanged {
+                textView.string = document.text
+                (textView as? CodeTextView)?.rebuildLineIndex()
+                container.gutter?.refreshLineNumberLayout()
+                context.coordinator.resetHighlightCache()
+                context.coordinator.highlight()
+                (textView as? CodeTextView)?.updateEditorDecorations()
+                context.coordinator.scheduleFoldRefresh()
+                container.gutter?.needsDisplay = true
+            }
+            let textLength = (textView.string as NSString).length
+            let location = needsSelectionRestoration
+                ? min(viewportState.selectionLocation, textLength)
+                : min(selection.location, textLength)
+            let length = needsSelectionRestoration
+                ? min(viewportState.selectionLength, textLength - location)
+                : 0
+            textView.setSelectedRange(NSRange(location: location, length: length))
+            if needsSelectionRestoration {
+                context.coordinator.appliedSelectionRestorationRevision = viewportState.selectionRestorationRevision
+            }
+            context.coordinator.isApplyingEditorChange = false
         }
         if appearanceChanged {
             context.coordinator.resetHighlightCache()
@@ -1016,7 +1046,7 @@ struct CodeEditorView: NSViewRepresentable {
             let findVisible = chrome.isFindBarVisible
             let findQuery = chrome.findBarQuery
             let findOptions = chrome.findOptions
-            if context.coordinator.lastFindVisible != findVisible
+            if textChanged || context.coordinator.lastFindVisible != findVisible
                 || context.coordinator.lastFindQuery != findQuery
                 || context.coordinator.lastFindOptions != findOptions {
                 context.coordinator.lastFindVisible = findVisible
@@ -1065,7 +1095,29 @@ struct CodeEditorView: NSViewRepresentable {
         private var pendingHighlightRange: NSRange?
         private var pendingReplacedRange: NSRange?
         private var pendingReplacement: String?
+        private var pendingBeforeSelection: NSRange?
         private var pendingEditNeedsReconciliation = false
+        private var usesStableNativeUndo = false
+        private struct CapturedNativeEdit {
+            let range: NSRange
+            let removedText: String
+            let insertedText: String
+            let beforeSelection: NSRange
+            let generation: UInt64
+        }
+        private struct NativeCompositionState {
+            let source: String
+            let selection: NSRange
+            let generation: UInt64
+        }
+        private var isInsideNativeEditScope = false
+        private var nativeEditScopeForcesAtomic = false
+        private var nativeEditScopeSource: String?
+        private var nativeEditScopeSelection: NSRange?
+        private var nativeEditScopeGeneration: UInt64?
+        private var scopedNativeEdit: CapturedNativeEdit?
+        private var nativeCompositionState: NativeCompositionState?
+        private var selectionProducedByNativeEdit: NSRange?
         private var foldRefreshTask: Task<Void, Never>?
         private var javaMarkerRefreshTask: Task<Void, Never>?
         private var decorationRefreshTask: Task<Void, Never>?
@@ -1075,6 +1127,7 @@ struct CodeEditorView: NSViewRepresentable {
         private var highlightedRanges = HighlightedRangeCache()
         private var appliedFontSize: CGFloat?
         private var appliedTabWidth: Int?
+        var appliedSelectionRestorationRevision: UInt64 = 0
         fileprivate var appliedSoftWrap = false
         private var appliedLanguageFeatures: LanguageServerFeatureSet?
         private var appliedReadOnly: Bool?
@@ -1149,6 +1202,211 @@ struct CodeEditorView: NSViewRepresentable {
             if let viewportScrollObserver {
                 NotificationCenter.default.removeObserver(viewportScrollObserver)
             }
+        }
+
+        func attachStableNativeUndo(to textView: CodeTextView) {
+            usesStableNativeUndo = true
+            textView.enableStableNativeUndoBridge()
+            textView.allowsUndo = false
+            textView.canPerformSharedUndoRedo = { [weak self] isRedo in
+                guard let controller = self?.model?.services.workspaceTextEditUndoController else { return false }
+                return isRedo ? controller.canRedo : controller.canUndo
+            }
+            textView.onPerformSharedUndoRedo = { [weak self] isRedo in
+                guard let self,
+                      let controller = self.model?.services.workspaceTextEditUndoController else { return false }
+                // A responder command can arrive inside interpretKeyEvents.
+                // History traversal must never become a new native edit when
+                // that enclosing input scope finishes.
+                self.nativeEditScopeSource = nil
+                self.scopedNativeEdit = nil
+                let performed = isRedo ? controller.redo() : controller.undo()
+                if performed { self.synchronizeNativeUndoPresentation() }
+                return performed
+            }
+            textView.onNativeEditScopeBegan = { [weak self] in
+                self?.beginNativeEditScope()
+            }
+            textView.onNativeEditScopeForcedAtomic = { [weak self] in
+                self?.forceAtomicNativeEditScope()
+            }
+            textView.onNativeEditScopeEnded = { [weak self] in
+                self?.endNativeEditScope()
+            }
+            textView.onNativeCompositionBegan = { [weak self] in
+                self?.beginNativeComposition()
+            }
+            textView.onNativeCompositionEnded = { [weak self] in
+                self?.endNativeComposition()
+            }
+        }
+
+        func detachStableNativeUndo() {
+            guard usesStableNativeUndo else { return }
+            (textView as? CodeTextView)?.canPerformSharedUndoRedo = nil
+            (textView as? CodeTextView)?.onPerformSharedUndoRedo = nil
+            (textView as? CodeTextView)?.onNativeEditScopeBegan = nil
+            (textView as? CodeTextView)?.onNativeEditScopeForcedAtomic = nil
+            (textView as? CodeTextView)?.onNativeEditScopeEnded = nil
+            (textView as? CodeTextView)?.onNativeCompositionBegan = nil
+            (textView as? CodeTextView)?.onNativeCompositionEnded = nil
+            if let document {
+                model?.services.workspaceTextEditUndoController.breakNativeEditCoalescing(for: document)
+            }
+            usesStableNativeUndo = false
+        }
+
+        private func synchronizeNativeUndoPresentation() {
+            guard usesStableNativeUndo,
+                  let textView = textView as? CodeTextView,
+                  let document else { return }
+            let viewportState = viewportStore.state(for: document.id)
+            isApplyingEditorChange = true
+            if !textView.string.utf8.elementsEqual(document.text.utf8) {
+                textView.string = document.text
+                textView.rebuildLineIndex()
+                if let model { applySoftWrapIfNeeded(enabled: model.settings.editorSoftWrapEnabled) }
+                gutter?.refreshLineNumberLayout()
+                resetHighlightCache()
+                highlight()
+                textView.updateEditorDecorations()
+                textView.syncFindState(isVisible: lastFindVisible, query: lastFindQuery, options: lastFindOptions)
+                scheduleFoldRefresh()
+            }
+            let textLength = (textView.string as NSString).length
+            let location = min(viewportState.selectionLocation, textLength)
+            let length = min(viewportState.selectionLength, textLength - location)
+            textView.setSelectedRange(NSRange(location: location, length: length))
+            appliedSelectionRestorationRevision = viewportState.selectionRestorationRevision
+            isApplyingEditorChange = false
+            textView.updateCaretDecorations()
+            gutter?.needsDisplay = true
+            scheduleCaretUpdate()
+        }
+
+        private func beginNativeEditScope() {
+            guard usesStableNativeUndo,
+                  !isInsideNativeEditScope,
+                  let document,
+                  let textView else { return }
+            isInsideNativeEditScope = true
+            nativeEditScopeForcesAtomic = false
+            nativeEditScopeSource = document.text
+            nativeEditScopeSelection = textView.selectedRange()
+            nativeEditScopeGeneration = document.nativeHistoryGeneration
+            scopedNativeEdit = nil
+        }
+
+        private func forceAtomicNativeEditScope() {
+            guard usesStableNativeUndo else { return }
+            nativeEditScopeForcesAtomic = true
+            if let document {
+                model?.services.workspaceTextEditUndoController.breakNativeEditCoalescing(for: document)
+            }
+        }
+
+        private func endNativeEditScope() {
+            guard usesStableNativeUndo, isInsideNativeEditScope else { return }
+            defer {
+                isInsideNativeEditScope = false
+                nativeEditScopeForcesAtomic = false
+                nativeEditScopeSource = nil
+                nativeEditScopeSelection = nil
+                nativeEditScopeGeneration = nil
+                scopedNativeEdit = nil
+            }
+            guard nativeCompositionState == nil else { return }
+            var completedEdit = scopedNativeEdit
+            if completedEdit == nil,
+               let source = nativeEditScopeSource,
+               let selection = nativeEditScopeSelection,
+               let generation = nativeEditScopeGeneration,
+               let textView {
+                completedEdit = reconciledNativeEdit(
+                    previousSource: source,
+                    currentSource: textView.string,
+                    beforeSelection: selection,
+                    generation: generation
+                )
+            }
+            if let completedEdit, let textView {
+                recordNativeEdit(
+                    completedEdit,
+                    afterSelection: textView.selectedRange(),
+                    forcedKind: nativeEditScopeForcesAtomic ? .atomic : nil
+                )
+            } else if let document {
+                model?.services.workspaceTextEditUndoController.breakNativeEditCoalescing(for: document)
+            }
+        }
+
+        private func beginNativeComposition() {
+            guard usesStableNativeUndo,
+                  nativeCompositionState == nil,
+                  let document,
+                  let textView else { return }
+            model?.services.workspaceTextEditUndoController.breakNativeEditCoalescing(for: document)
+            nativeCompositionState = NativeCompositionState(
+                source: document.text,
+                selection: textView.selectedRange(),
+                generation: document.nativeHistoryGeneration
+            )
+        }
+
+        private func endNativeComposition() {
+            guard usesStableNativeUndo,
+                  let composition = nativeCompositionState,
+                  let textView else { return }
+            nativeCompositionState = nil
+            let edit = reconciledNativeEdit(
+                previousSource: composition.source,
+                currentSource: textView.string,
+                beforeSelection: composition.selection,
+                generation: composition.generation
+            )
+            if isInsideNativeEditScope {
+                // IME may commit from inside keyDown/paste. Transfer its full
+                // baseline to that outer scope so it records exactly once and
+                // includes any remaining edits and the final caret position.
+                nativeEditScopeSource = composition.source
+                nativeEditScopeSelection = composition.selection
+                nativeEditScopeGeneration = composition.generation
+                nativeEditScopeForcesAtomic = true
+                scopedNativeEdit = edit
+                return
+            }
+            guard let edit else { return }
+            recordNativeEdit(edit, afterSelection: textView.selectedRange(), forcedKind: .atomic)
+        }
+
+        private func recordNativeEdit(
+            _ edit: CapturedNativeEdit,
+            afterSelection: NSRange,
+            forcedKind: WorkspaceTextEditUndoController.NativeTextEditKind?
+        ) {
+            guard let document, let model else { return }
+            let kind = forcedKind ?? nativeEditKind(
+                range: edit.range,
+                removedText: edit.removedText,
+                insertedText: edit.insertedText,
+                beforeSelection: edit.beforeSelection
+            )
+            model.services.workspaceTextEditUndoController.recordNativeEdit(
+                WorkspaceTextEditUndoController.NativeTextEdit(
+                    replacedRange: edit.range,
+                    removedText: edit.removedText,
+                    insertedText: edit.insertedText,
+                    beforeSelection: edit.beforeSelection,
+                    afterSelection: afterSelection,
+                    kind: kind,
+                    generation: edit.generation,
+                    restoreSelection: { [viewportStore, documentID = document.id] selection in
+                        viewportStore.restoreSelection(selection, for: documentID)
+                    }
+                ),
+                in: document
+            )
+            selectionProducedByNativeEdit = afterSelection
         }
 
         /// 经 Rust Core 的行级编辑端口解析编辑结果；注释符在触发时按当前
@@ -1429,6 +1687,9 @@ struct CodeEditorView: NSViewRepresentable {
             pendingEditNeedsReconciliation = pendingEditNeedsReconciliation
                 || pendingReplacement != nil || textView.hasMarkedText()
             let inserted = replacementString ?? ""
+            if pendingBeforeSelection == nil {
+                pendingBeforeSelection = textView.selectedRange()
+            }
             pendingReplacement = inserted
             pendingReplacedRange = affectedCharRange
             pendingHighlightRange = NSRange(location: affectedCharRange.location, length: (inserted as NSString).length)
@@ -1439,12 +1700,35 @@ struct CodeEditorView: NSViewRepresentable {
             let signpost = LitheSignpost.begin("editor.input")
             defer { LitheSignpost.end("editor.input", signpost) }
             guard let textView else { return }
+            guard !isApplyingEditorChange else { return }
             guard document?.isReadOnly != true, document?.hasMutationLease != true else { return }
             let codeTextView = textView as? CodeTextView
             let previousSource = document?.text
             if pendingEditNeedsReconciliation, let previousSource {
                 reconcilePendingEdit(previousSource: previousSource, currentSource: textView.string)
             }
+            let nativeEdit: CapturedNativeEdit? = {
+                guard usesStableNativeUndo,
+                      let document,
+                      let previousSource,
+                      let range = pendingReplacedRange,
+                      let insertedText = pendingReplacement,
+                      let beforeSelection = pendingBeforeSelection,
+                      range.location != NSNotFound,
+                      range.location >= 0,
+                      range.length >= 0 else { return nil }
+                let source = previousSource as NSString
+                guard range.location <= source.length,
+                      range.length <= source.length - range.location,
+                      Range(range, in: previousSource) != nil else { return nil }
+                return CapturedNativeEdit(
+                    range: range,
+                    removedText: source.substring(with: range),
+                    insertedText: insertedText,
+                    beforeSelection: beforeSelection,
+                    generation: document.nativeHistoryGeneration
+                )
+            }()
             let replacesWholeText = pendingReplacedRange == nil || pendingReplacement == nil
                 || (pendingReplacedRange?.location == 0 && pendingReplacedRange?.length == previousSource?.utf16.count)
             if replacesWholeText {
@@ -1485,6 +1769,28 @@ struct CodeEditorView: NSViewRepresentable {
             if let document {
                 scheduleDocumentChange(document)
             }
+            if nativeCompositionState == nil, let nativeEdit {
+                if isInsideNativeEditScope {
+                    if scopedNativeEdit == nil {
+                        scopedNativeEdit = nativeEdit
+                    } else if let source = nativeEditScopeSource,
+                              let selection = nativeEditScopeSelection,
+                              let generation = nativeEditScopeGeneration {
+                        scopedNativeEdit = reconciledNativeEdit(
+                            previousSource: source,
+                            currentSource: textView.string,
+                            beforeSelection: selection,
+                            generation: generation
+                        )
+                    }
+                } else {
+                    recordNativeEdit(
+                        nativeEdit,
+                        afterSelection: textView.selectedRange(),
+                        forcedKind: .atomic
+                    )
+                }
+            }
             let findReplacedRange = pendingReplacedRange
             let findInsertedLength = pendingHighlightRange?.length ?? 0
             highlight(
@@ -1494,6 +1800,7 @@ struct CodeEditorView: NSViewRepresentable {
             pendingHighlightRange = nil
             pendingReplacedRange = nil
             pendingReplacement = nil
+            pendingBeforeSelection = nil
             pendingEditNeedsReconciliation = false
             if let codeTextView,
                let findReplacedRange,
@@ -1515,6 +1822,61 @@ struct CodeEditorView: NSViewRepresentable {
             gutter?.needsDisplay = true
             isApplyingEditorChange = false
             scheduleCaretUpdate()
+        }
+
+        private func nativeEditKind(
+            range: NSRange,
+            removedText: String,
+            insertedText: String,
+            beforeSelection: NSRange
+        ) -> WorkspaceTextEditUndoController.NativeTextEditKind {
+            if removedText.isEmpty,
+               beforeSelection.length == 0,
+               insertedText.count == 1,
+               !insertedText.contains("\n"),
+               !insertedText.contains("\r") {
+                return .typing
+            }
+            if insertedText.isEmpty, !removedText.isEmpty, beforeSelection.length == 0 {
+                return range.location < beforeSelection.location ? .backwardDelete : .forwardDelete
+            }
+            return .atomic
+        }
+
+        private func reconciledNativeEdit(
+            previousSource: String,
+            currentSource: String,
+            beforeSelection: NSRange,
+            generation: UInt64
+        ) -> CapturedNativeEdit? {
+            guard !previousSource.utf8.elementsEqual(currentSource.utf8) else { return nil }
+            let previous = previousSource.unicodeScalars
+            let current = currentSource.unicodeScalars
+            var previousStart = previous.startIndex
+            var currentStart = current.startIndex
+            while previousStart != previous.endIndex, currentStart != current.endIndex,
+                  previous[previousStart] == current[currentStart] {
+                previous.formIndex(after: &previousStart)
+                current.formIndex(after: &currentStart)
+            }
+            var previousEnd = previous.endIndex
+            var currentEnd = current.endIndex
+            while previousEnd != previousStart, currentEnd != currentStart {
+                let previousLast = previous.index(before: previousEnd)
+                let currentLast = current.index(before: currentEnd)
+                guard previous[previousLast] == current[currentLast] else { break }
+                previousEnd = previousLast
+                currentEnd = currentLast
+            }
+            let range = NSRange(previousStart..<previousEnd, in: previousSource)
+            guard range.location != NSNotFound else { return nil }
+            return CapturedNativeEdit(
+                range: range,
+                removedText: String(previousSource[previousStart..<previousEnd]),
+                insertedText: String(currentSource[currentStart..<currentEnd]),
+                beforeSelection: beforeSelection,
+                generation: generation
+            )
         }
 
         private func reconcilePendingEdit(previousSource: String, currentSource: String) {
@@ -1551,10 +1913,23 @@ struct CodeEditorView: NSViewRepresentable {
             // full pass here is what dropped the frame rate into the 30s.
             guard !isApplyingEditorChange else { return }
             if !isRestoringViewport, let document, let textView {
+                let selection = textView.selectedRange()
                 viewportStore.updateSelection(
-                    textView.selectedRange(),
+                    selection,
                     for: document.id
                 )
+                if usesStableNativeUndo,
+                   !isInsideNativeEditScope,
+                   nativeCompositionState == nil {
+                    if selectionProducedByNativeEdit == selection {
+                        selectionProducedByNativeEdit = nil
+                    } else {
+                        selectionProducedByNativeEdit = nil
+                        model?.services.workspaceTextEditUndoController.breakNativeEditCoalescing(
+                            for: document
+                        )
+                    }
+                }
             }
             (textView as? CodeTextView)?.updateCaretDecorations()
             textView?.needsDisplay = true
@@ -2377,31 +2752,35 @@ struct TextLineIndex {
 final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     var externalUndoManager: UndoManager?
     var isExternalEditSuspended: (() -> Bool)?
-    override var undoManager: UndoManager? { externalUndoManager ?? super.undoManager }
+    var canPerformSharedUndoRedo: ((Bool) -> Bool)?
+    var onPerformSharedUndoRedo: ((Bool) -> Bool)?
+    var onNativeEditScopeBegan: (() -> Void)?
+    var onNativeEditScopeForcedAtomic: (() -> Void)?
+    var onNativeEditScopeEnded: (() -> Void)?
+    var onNativeCompositionBegan: (() -> Void)?
+    var onNativeCompositionEnded: (() -> Void)?
+    private var usesStableNativeUndoBridge = false
+    private var nativeEditScopeDepth = 0
+    private var isCommittingMarkedTextViaInsert = false
+    override var undoManager: UndoManager? {
+        usesStableNativeUndoBridge ? nil : (externalUndoManager ?? super.undoManager)
+    }
+
+    func enableStableNativeUndoBridge() {
+        usesStableNativeUndoBridge = true
+    }
 
     override func keyDown(with event: NSEvent) {
         guard isExternalEditSuspended?() != true else { return }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if modifiers == .command, event.charactersIgnoringModifiers == "z" {
-            if let externalUndoManager, externalUndoManager.canUndo {
-                externalUndoManager.undo()
-                return
-            }
-            if super.undoManager?.canUndo == true {
-                super.undoManager?.undo()
-                return
-            }
+            if performUndoRedo(isRedo: false) { return }
         }
         if modifiers == [.command, .shift], event.charactersIgnoringModifiers == "z" {
-            if let externalUndoManager, externalUndoManager.canRedo {
-                externalUndoManager.redo()
-                return
-            }
-            if super.undoManager?.canRedo == true {
-                super.undoManager?.redo()
-                return
-            }
+            if performUndoRedo(isRedo: true) { return }
         }
+        beginNativeEditScope(forceAtomic: false)
+        defer { endNativeEditScope() }
         // AppKit routes arrow chords through keyDown rather than only through
         // performKeyEquivalent. Keep the shared undo and suspension checks above.
         if isEditable, handleLineEditingShortcut(
@@ -2410,6 +2789,59 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
             keyCode: event.keyCode
         ) { return }
         super.keyDown(with: event)
+    }
+
+    override func doCommand(by selector: Selector) {
+        if usesStableNativeUndoBridge, selector == NSSelectorFromString("undo:") {
+            _ = performUndoRedo(isRedo: false)
+            return
+        }
+        if usesStableNativeUndoBridge, selector == NSSelectorFromString("redo:") {
+            _ = performUndoRedo(isRedo: true)
+            return
+        }
+        super.doCommand(by: selector)
+    }
+
+    private func canPerformUndoRedo(isRedo: Bool) -> Bool {
+        if let canPerformSharedUndoRedo { return canPerformSharedUndoRedo(isRedo) }
+        if usesStableNativeUndoBridge { return false }
+        if let externalUndoManager {
+            return isRedo ? externalUndoManager.canRedo : externalUndoManager.canUndo
+        }
+        guard let manager = super.undoManager else { return false }
+        return isRedo ? manager.canRedo : manager.canUndo
+    }
+
+    /// Returns whether the command was consumed. A stable shared-history bridge
+    /// consumes Cmd-Z while a short-lived mutation lease is active so AppKit
+    /// cannot pop and lose the action before the buffer is available again.
+    private func performUndoRedo(isRedo: Bool) -> Bool {
+        if let onPerformSharedUndoRedo {
+            _ = onPerformSharedUndoRedo(isRedo)
+            return true
+        }
+        if usesStableNativeUndoBridge { return true }
+        guard canPerformUndoRedo(isRedo: isRedo) else { return false }
+        let manager = externalUndoManager ?? super.undoManager
+        if isRedo {
+            manager?.redo()
+        } else {
+            manager?.undo()
+        }
+        return true
+    }
+
+    private func beginNativeEditScope(forceAtomic: Bool) {
+        if nativeEditScopeDepth == 0 { onNativeEditScopeBegan?() }
+        nativeEditScopeDepth += 1
+        if forceAtomic { onNativeEditScopeForcedAtomic?() }
+    }
+
+    private func endNativeEditScope() {
+        guard nativeEditScopeDepth > 0 else { return }
+        nativeEditScopeDepth -= 1
+        if nativeEditScopeDepth == 0 { onNativeEditScopeEnded?() }
     }
 
     override var isOpaque: Bool { false }
@@ -2538,11 +2970,57 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     override func paste(_ sender: Any?) {
+        beginNativeEditScope(forceAtomic: true)
+        defer { endNativeEditScope() }
         if onPasteImage?() == true { return }
         super.paste(sender)
     }
 
+    override func cut(_ sender: Any?) {
+        beginNativeEditScope(forceAtomic: true)
+        defer { endNativeEditScope() }
+        super.cut(sender)
+    }
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        let wasComposing = hasMarkedText()
+        if wasComposing { isCommittingMarkedTextViaInsert = true }
+        beginNativeEditScope(forceAtomic: nativeEditScopeDepth == 0)
+        defer {
+            endNativeEditScope()
+            if wasComposing {
+                isCommittingMarkedTextViaInsert = false
+                if !hasMarkedText() { onNativeCompositionEnded?() }
+            }
+        }
+        super.insertText(insertString, replacementRange: replacementRange)
+    }
+
+    override func setMarkedText(
+        _ string: Any,
+        selectedRange: NSRange,
+        replacementRange: NSRange
+    ) {
+        let wasComposing = hasMarkedText()
+        let beginsComposition = !wasComposing
+        if beginsComposition { onNativeCompositionBegan?() }
+        super.setMarkedText(
+            string,
+            selectedRange: selectedRange,
+            replacementRange: replacementRange
+        )
+        if (beginsComposition || wasComposing), !hasMarkedText() { onNativeCompositionEnded?() }
+    }
+
+    override func unmarkText() {
+        let wasComposing = hasMarkedText()
+        super.unmarkText()
+        if wasComposing, !isCommittingMarkedTextViaInsert { onNativeCompositionEnded?() }
+    }
+
     override func insertNewline(_ sender: Any?) {
+        beginNativeEditScope(forceAtomic: true)
+        defer { endNativeEditScope() }
         super.insertNewline(sender)
         guard isEditable else { return }
         // Resolve the extra line fragment before revealing a trailing newline.
@@ -2625,14 +3103,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         let character = event.charactersIgnoringModifiers
         if modifiers.contains(.command), event.keyCode == 6 {
             guard isExternalEditSuspended?() != true else { return true }
-            if modifiers.contains(.shift) {
-                guard externalUndoManager?.canRedo == true || super.undoManager?.canRedo == true else { return false }
-                (externalUndoManager?.canRedo == true ? externalUndoManager : super.undoManager)?.redo()
-            } else {
-                guard externalUndoManager?.canUndo == true || super.undoManager?.canUndo == true else { return false }
-                (externalUndoManager?.canUndo == true ? externalUndoManager : super.undoManager)?.undo()
-            }
-            return true
+            return performUndoRedo(isRedo: modifiers.contains(.shift))
         }
         if languageServerFeatures.contains(.completion),
            (modifiers == .control && character == " "
@@ -2706,6 +3177,8 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     /// and fold refresh.
     private func performLineEditingOperation(_ result: EditorLineEditResult) -> Bool {
         guard isEditable, isExternalEditSuspended?() != true else { return false }
+        beginNativeEditScope(forceAtomic: true)
+        defer { endNativeEditScope() }
         guard shouldChangeText(in: result.replacedRange, replacementString: result.text) else { return false }
         textStorage?.replaceCharacters(in: result.replacedRange, with: result.text)
         didChangeText()
@@ -2988,6 +3461,8 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         guard isEditable,
               !findMatchRanges.isEmpty,
               currentFindMatchIndex < findMatchRanges.count else { return }
+        beginNativeEditScope(forceAtomic: true)
+        defer { endNativeEditScope() }
         let matchRange = findMatchRanges[currentFindMatchIndex]
         let expanded = findMatcher.replacement(
             for: string as NSString,
@@ -3004,6 +3479,8 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     /// didChangeText 一步完成，形成单个撤销步骤；之后整篇重算匹配。
     func replaceAllFindMatches(replacement: String) {
         guard isEditable, !findMatchRanges.isEmpty else { return }
+        beginNativeEditScope(forceAtomic: true)
+        defer { endNativeEditScope() }
         let source = string as NSString
         let fullRange = NSRange(location: 0, length: source.length)
         let rebuilt = rebuiltTextByReplacingMatches(with: replacement, in: source)
@@ -4125,11 +4602,11 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         if !items.isEmpty { items.append(.separator) }
         let selectionLength = selectedRange().length
         items += [
-            .action("Undo", systemImage: "arrow.uturn.backward", isEnabled: undoManager?.canUndo == true, action: {
-                self.undoManager?.undo()
+            .action("Undo", systemImage: "arrow.uturn.backward", isEnabled: canPerformUndoRedo(isRedo: false), action: {
+                _ = self.performUndoRedo(isRedo: false)
             }),
-            .action("Redo", systemImage: "arrow.uturn.forward", isEnabled: undoManager?.canRedo == true, action: {
-                self.undoManager?.redo()
+            .action("Redo", systemImage: "arrow.uturn.forward", isEnabled: canPerformUndoRedo(isRedo: true), action: {
+                _ = self.performUndoRedo(isRedo: true)
             }),
             .separator,
             .action("Cut", systemImage: "scissors", isEnabled: isEditable && selectionLength > 0, action: {

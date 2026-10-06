@@ -59,12 +59,12 @@ final class MenuPresentationCoordinator: ObservableObject {
 
     func undoWorkspaceEdit() {
         guard canUndoWorkspaceEdit else { return }
-        host?.model.services.workspaceTextEditUndoController.sharedUndoManager.undo()
+        host?.model.services.workspaceTextEditUndoController.undo()
     }
 
     func redoWorkspaceEdit() {
         guard canRedoWorkspaceEdit else { return }
-        host?.model.services.workspaceTextEditUndoController.sharedUndoManager.redo()
+        host?.model.services.workspaceTextEditUndoController.redo()
     }
 
     init(

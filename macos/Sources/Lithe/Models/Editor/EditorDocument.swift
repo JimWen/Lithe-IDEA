@@ -36,12 +36,15 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         get { storedText }
         set {
             guard !hasMutationLease else { return }
+            guard !storedText.utf8.elementsEqual(newValue.utf8) else { return }
             pendingLanguageServerBaseText = nil
+            nativeHistoryGeneration &+= 1
             replaceText(newValue, publish: true)
         }
     }
     @Published private(set) var savedText: String
     private var pendingLanguageServerBaseText: String?
+    private(set) var nativeHistoryGeneration: UInt64 = 0
     private(set) var lifecycleState: DocumentLifecycleState
     private(set) var lastKnownModificationDate: Date?
     private var activeMutationLease: MutationLease?
@@ -119,6 +122,18 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         guard activeMutationLease == lease else { return }
         pendingLanguageServerBaseText = nil
         replaceText(text, publish: true)
+    }
+
+    /// Replays one validated native editor history entry directly into the
+    /// live buffer. A save already in flight owns its captured snapshot, so a
+    /// synchronous Undo/Redo may advance the current revision without taking
+    /// the multi-file mutation lease or changing the native-history generation.
+    @discardableResult
+    func applyNativeHistoryText(_ text: String) -> Bool {
+        guard !isReadOnly, !hasMutationLease else { return false }
+        pendingLanguageServerBaseText = nil
+        replaceText(text, publish: true)
+        return true
     }
 
     /// Keep the live NSTextView buffer in sync without waking SwiftUI on every
@@ -261,6 +276,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     func replaceWithDiskContent(_ contents: String) {
         guard !hasMutationLease else { return }
         pendingLanguageServerBaseText = nil
+        nativeHistoryGeneration &+= 1
         storedText = contents
         savedText = contents
         hasAcknowledgedDiskContent = false
