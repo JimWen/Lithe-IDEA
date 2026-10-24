@@ -18,6 +18,8 @@ public final class TerminalSession: ObservableObject, Identifiable {
     @Published public private(set) var lastError: String?
     @Published public private(set) var displayDiagnostics: [String] = []
     @Published public private(set) var virtualEnvironmentState: TerminalVirtualEnvironmentState = .inactive
+    /// Called once when a launched process exits naturally; explicit stop is silent.
+    public var onEnded: ((TerminalSession) -> Void)?
     public var onLink: ((String, [String: String]) -> Void)?
     /// Receives decoded child-process output without taking ownership of the
     /// terminal surface.
@@ -27,13 +29,14 @@ public final class TerminalSession: ObservableObject, Identifiable {
     private var selectedShellPath: String?
     private var shellRequest: (configuration: TerminalShellConfiguration, context: TerminalLaunchContext)?
     private var shellLaunch: TerminalShellLaunch?
-    private var launchGeneration = UUID()
+    /// Identifies the current launch so queued host cleanup cannot close a restart.
+    public private(set) var launchGeneration = UUID()
     private var outputDecoder = StreamingUTF8Decoder()
 
     public init(transport: any TerminalTransport) {
         self.transport = transport
         transport.onTermination = { [weak self] exitCode in
-            guard let self else { return }
+            guard let self, startedAt != nil, endedAt == nil else { return }
             finishDecodedOutput()
             isRunning = false; isReady = false; lastExitCode = exitCode; endedAt = Date()
             if !isManagedProcess, exitCode != 0 {
@@ -42,6 +45,8 @@ public final class TerminalSession: ObservableObject, Identifiable {
                 lastError = exitCode.map { "The terminal exited with code \($0). Check the shell program and arguments." }
                     ?? "The terminal process ended unexpectedly."
             }
+            virtualEnvironmentState = .inactive
+            onEnded?(self)
         }
         transport.onOutput = { [weak self] data in
             guard let self, !data.isEmpty else { return }
@@ -198,11 +203,11 @@ public final class TerminalSession: ObservableObject, Identifiable {
     public func focus() { transport.focus() }
     public func stop() {
         launchGeneration = UUID()
+        if startedAt != nil { endedAt = Date() }
         transport.stop()
         finishDecodedOutput()
         isRunning = false; isReady = false
         virtualEnvironmentState = .inactive
-        if startedAt != nil { endedAt = Date() }
     }
 
     private func finishDecodedOutput() {

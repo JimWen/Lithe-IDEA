@@ -5,6 +5,49 @@ import Testing
 @MainActor
 struct TerminalModuleTests {
     @Test
+    func shellExitNotifiesHostExactlyOnce() {
+        let transport = TestTransport()
+        let feature = TerminalFeatureModel(terminalFactory: { transport })
+        defer { feature.stopAllSessions() }
+        let session = feature.createSession(in: URL(fileURLWithPath: "/workspace"), shellPath: "/bin/zsh")
+        var endedSessions: [TerminalSession] = []
+        session.onEnded = { endedSessions.append($0) }
+
+        transport.onTermination?(0)
+        transport.onTermination?(0) // Duplicate transport notification must be harmless.
+
+        #expect(endedSessions.count == 1)
+        #expect(endedSessions.first === session)
+        #expect(!session.isRunning)
+        #expect(session.lastExitCode == 0)
+        feature.stopAllSessions()
+        #expect(endedSessions.count == 1)
+    }
+
+    @Test
+    func launchFailureAndRestartFailureKeepHostUnnotified() {
+        let transport = TestTransport()
+        let session = TerminalSession(transport: transport)
+        var endedCount = 0
+        session.onEnded = { _ in endedCount += 1 }
+
+        transport.startError = CocoaError(.fileNoSuchFile)
+        session.start(in: URL(fileURLWithPath: "/workspace"), shellPath: "/bin/zsh")
+        #expect(session.lastError != nil)
+        #expect(endedCount == 0)
+
+        transport.startError = nil
+        session.start(in: URL(fileURLWithPath: "/workspace"), shellPath: "/bin/zsh")
+        #expect(session.isRunning)
+        transport.startError = CocoaError(.fileNoSuchFile)
+        session.restart()
+        #expect(session.lastError != nil)
+        #expect(endedCount == 0)
+        session.stop()
+        #expect(endedCount == 0)
+    }
+
+    @Test
     func shellWindowTitlesDoNotReplaceTheCompactLocalTabLabel() {
         let transport = TestTransport()
         let feature = TerminalFeatureModel(terminalFactory: { transport })
@@ -184,6 +227,7 @@ private final class TestTransport: TerminalTransport {
         _ launch: TerminalProcessLaunch,
         environment: [String: String]
     ) throws -> Int32 {
+        if let startError { throw startError }
         processLaunches.append(launch)
         processEnvironments.append(environment)
         isRunning = true

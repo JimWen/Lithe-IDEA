@@ -8,6 +8,104 @@ import Testing
 @MainActor
 struct TerminalPlacementFeatureModelTests {
     @Test
+    func shellExitClosesTabAndHidesPanelForLastToolTerminal() async throws {
+        let context = makeTerminalCloseContext()
+        let model = context.model
+        let feature = try #require(model.terminalFeature)
+        defer { feature.stopAllSessions() }
+        try await settleTerminalCallbacks()
+        model.terminalPlacementFeature.moveToTool(context.session.id)
+        model.isTerminalVisible = true
+        model.configureInteractiveTerminalSession(context.session)
+
+        context.transport.onTermination?(0)
+        try await settleTerminalCallbacks()
+
+        #expect(model.terminalSessions.isEmpty)
+        #expect(!model.isTerminalVisible)
+        #expect(!context.session.isRunning)
+        #expect(context.transport.stopCount == 1)
+    }
+
+    @Test
+    func shellExitKeepsPanelAndSurvivingToolTerminalsRunning() async throws {
+        let context = makeTerminalCloseContext()
+        let model = context.model
+        let feature = try #require(model.terminalFeature)
+        defer { feature.stopAllSessions() }
+        let survivor = feature.createSession(
+            in: URL(fileURLWithPath: "/tmp/lithe-terminal-close-tests"), shellPath: "/bin/zsh"
+        )
+        model.terminalPlacementFeature.registerSession(survivor.id)
+        model.terminalPlacementFeature.moveToTool(context.session.id)
+        model.terminalPlacementFeature.moveToTool(survivor.id)
+        try await settleTerminalCallbacks()
+        model.isTerminalVisible = true
+        model.configureInteractiveTerminalSession(context.session)
+
+        context.transport.onTermination?(0)
+        try await settleTerminalCallbacks()
+
+        #expect(model.isTerminalVisible)
+        #expect(model.toolTerminalSessions.map(\.id) == [survivor.id])
+        #expect(survivor.isRunning)
+    }
+
+    @Test
+    func shellExitClosesEditorAreaTerminalTab() async throws {
+        let context = makeTerminalCloseContext()
+        let model = context.model
+        let feature = try #require(model.terminalFeature)
+        defer { feature.stopAllSessions() }
+        try await settleTerminalCallbacks()
+        model.configureInteractiveTerminalSession(context.session)
+
+        context.transport.onTermination?(0)
+        try await settleTerminalCallbacks()
+
+        #expect(model.terminalSessions.isEmpty)
+        #expect(model.terminalPlacementFeature.editorSessionIDs.isEmpty)
+        #expect(model.terminalPlacementFeature.toolSessionIDs.isEmpty)
+    }
+
+    @Test
+    func restartAfterShellExitKeepsTheRestartedSession() async throws {
+        let context = makeTerminalCloseContext()
+        let model = context.model
+        let feature = try #require(model.terminalFeature)
+        defer { feature.stopAllSessions() }
+        model.terminalPlacementFeature.moveToTool(context.session.id)
+        try await settleTerminalCallbacks()
+        model.isTerminalVisible = true
+        model.configureInteractiveTerminalSession(context.session)
+
+        context.transport.onTermination?(0)
+        context.session.restart()
+        try await settleTerminalCallbacks()
+
+        #expect(model.toolTerminalSessions.map(\.id) == [context.session.id])
+        #expect(context.session.isRunning)
+        #expect(model.isTerminalVisible)
+    }
+
+    @Test
+    func unsuccessfulShellExitKeepsDiagnosticsVisible() async throws {
+        let context = makeTerminalCloseContext()
+        defer { context.model.terminalFeature?.stopAllSessions() }
+        context.model.configureInteractiveTerminalSession(context.session)
+        context.transport.onTermination?(127)
+        try await settleTerminalCallbacks()
+        #expect(context.model.terminalSessions.contains { $0.id == context.session.id })
+        #expect(context.session.lastError != nil)
+    }
+
+    private func settleTerminalCallbacks() async throws {
+        let finished = TestGate()
+        DispatchQueue.main.async { finished.open() }
+        try #require(await finished.waitUntilOpen())
+    }
+
+    @Test
     func reordersTerminalToolTabs() {
         let model = TerminalPlacementFeatureModel()
         let first = UUID()
@@ -119,7 +217,11 @@ struct TerminalPlacementFeatureModelTests {
         ).services
         let model = AppModel(settings: settings, services: services)
         let transport = PlacementTestTerminalTransport()
-        let feature = TerminalFeatureModel(terminalFactory: { transport })
+        var createdInitialTransport = false
+        let feature = TerminalFeatureModel(terminalFactory: {
+            if !createdInitialTransport { createdInitialTransport = true; return transport }
+            return PlacementTestTerminalTransport()
+        })
         model.cacheModuleCapability(
             TerminalModuleCapability(feature: feature),
             id: .terminalWorkspace,
