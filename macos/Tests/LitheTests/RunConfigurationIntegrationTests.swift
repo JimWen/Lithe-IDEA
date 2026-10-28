@@ -1168,14 +1168,18 @@ struct RunConfigurationIntegrationTests {
         #expect(request.keepsStandardInputOpen == false)
 
         let announcement = Data("日志🙂\nDAP server listening at: 127.0.0.1:43127\n".utf8)
+        defer { transport.stop() }
         process.onError?(Data(announcement.prefix(1)))
+        await Self.drainMainActorTasks()
+        // Independent stdout must not consume stderr's incomplete UTF-8 scalar.
+        process.onOutput?(Data("stdout diagnostic\n".utf8))
         await Self.drainMainActorTasks()
         process.onError?(Data(announcement.dropFirst()))
         await Self.drainMainActorTasks()
         #expect(endpoint?.0 == "127.0.0.1")
         #expect(endpoint?.1 == 43127)
         let decodedErrorOutput = errorOutput.reduce(into: Data()) { $0.append($1) }
-        #expect(String(decoding: decodedErrorOutput, as: UTF8.self) == "日志🙂\nDAP server listening at: 127.0.0.1:43127\n")
+        #expect(String(decoding: decodedErrorOutput, as: UTF8.self) == "stdout diagnostic\n日志🙂\nDAP server listening at: 127.0.0.1:43127\n")
         #expect(socket.startCount == 1)
         #expect(socket.sent.isEmpty)
 

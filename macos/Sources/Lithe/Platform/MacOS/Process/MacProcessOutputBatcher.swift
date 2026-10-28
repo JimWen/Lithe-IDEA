@@ -10,10 +10,7 @@ final class MacProcessOutputBatcher: @unchecked Sendable {
     static let defaultFlushDelay: TimeInterval = 0.1
     static let defaultHighWaterMarkBytes = 1_048_576
 
-    private let queue = DispatchQueue(
-        label: "com.openres.Lithe.process-output-batcher",
-        qos: .userInitiated
-    )
+    private let queue: DispatchQueue
     private let queueKey = DispatchSpecificKey<UInt8>()
     private let flushDelay: TimeInterval
     private let highWaterMarkBytes: Int
@@ -28,8 +25,10 @@ final class MacProcessOutputBatcher: @unchecked Sendable {
     init(
         flushDelay: TimeInterval = MacProcessOutputBatcher.defaultFlushDelay,
         highWaterMarkBytes: Int = MacProcessOutputBatcher.defaultHighWaterMarkBytes,
+        queue: DispatchQueue = DispatchQueue(label: "com.openres.Lithe.process-output-batcher", qos: .userInitiated),
         deliver: @escaping @Sendable (String) -> Void
     ) {
+        self.queue = queue
         self.flushDelay = flushDelay
         self.highWaterMarkBytes = max(1, highWaterMarkBytes)
         self.deliver = deliver
@@ -38,8 +37,10 @@ final class MacProcessOutputBatcher: @unchecked Sendable {
 
     func append(_ chunk: String) {
         guard !chunk.isEmpty else { return }
-        queue.async { [weak self] in
-            guard let self, acceptsOutput else { return }
+        // Admit bytes synchronously: a slow consumer backpressures pipe reads
+        // instead of retaining uncounted chunks in DispatchQueue closures.
+        syncOnQueue {
+            guard acceptsOutput else { return }
             pendingChunks.append(chunk)
             pendingByteCount += chunk.utf8.count
             if pendingByteCount >= highWaterMarkBytes {

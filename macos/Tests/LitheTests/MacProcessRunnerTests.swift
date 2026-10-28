@@ -7,6 +7,64 @@ import Testing
 @Suite("macOS process runner")
 struct MacProcessRunnerTests {
     @Test
+    func streamingRejectsNestedLaunchFromTeardown() async throws {
+        let session = MacStreamingProcess()
+        let finished = TestGate()
+        let rejected = ProcessOutputRecorder()
+        let output = ProcessOutputRecorder()
+        defer {
+            session.onStateChange = nil
+            session.stop()
+        }
+        session.onOutput = { output.append($0) }
+        session.onTermination = { _ in finished.open() }
+        session.onStateChange = { event in
+            guard event.state == .stopping else { return }
+            do {
+                try session.start(ProcessRequest(executablePath: "/bin/sh", arguments: ["-c", "printf orphan"], timeoutMilliseconds: 1000))
+                rejected.append("nested launch accepted")
+            } catch let error as POSIXError {
+                rejected.append(error.code == .EBUSY ? "busy" : "unexpected error")
+            } catch { Issue.record(error) }
+        }
+        try session.start(ProcessRequest(executablePath: "/bin/cat", keepsStandardInputOpen: true, timeoutMilliseconds: 2000))
+        try session.start(ProcessRequest(executablePath: "/bin/sh", arguments: ["-c", "printf replacement"], timeoutMilliseconds: 1000))
+        try #require(await finished.waitUntilOpen())
+        #expect(rejected.values == ["busy"])
+        #expect(output.values.joined() == "replacement")
+        #expect(!session.isRunning)
+    }
+
+
+    @Test(arguments: [0, 7])
+    func finalDrainIsBoundedWithAnOpenWriter(byteCount: Int) async throws {
+        let pipe = Pipe()
+        defer {
+            try? pipe.fileHandleForWriting.close()
+            try? pipe.fileHandleForReading.close()
+        }
+        try pipe.fileHandleForWriting.write(contentsOf: Data(repeating: 65, count: byteCount))
+        let completed = TestGate()
+        let recorder = ProcessOutputRecorder()
+        // Exercise the synchronous native pipe boundary on its own worker.
+        // Closing the writer releases a regressed EOF wait even after failure.
+        DispatchQueue.global().async {
+            defer { completed.open() }
+            do {
+                let bytes = try MacStreamingProcess.drainAvailableOutput(from: pipe.fileHandleForReading, maximumBytes: 4)
+                recorder.append(String(decoding: bytes, as: UTF8.self))
+            } catch { Issue.record(error) }
+        }
+        let finishedBeforeEOF = await completed.waitUntilOpen()
+        try pipe.fileHandleForWriting.close()
+        try #require(await completed.waitUntilOpen())
+        #expect(finishedBeforeEOF)
+        #expect(recorder.values == [String(repeating: "A", count: min(byteCount, 4))])
+        let remaining = try MacStreamingProcess.drainAvailableOutput(from: pipe.fileHandleForReading)
+        #expect(remaining.count == max(0, byteCount - 4))
+    }
+
+    @Test
     func streamingUTF8DecoderPreservesSplitScalarsAndFlushesATruncatedTail() {
         var decoder = StreamingUTF8Decoder()
         var output = ""
@@ -389,6 +447,9 @@ struct MacProcessOutputBatcherTests {
 
         batcher.append("abc")
         batcher.append("def")
+        // Admission at the high-water mark completes delivery before accepting
+        // another burst; pending output cannot hide in asynchronous closures.
+        #expect(recorder.values == ["abcdef"])
         batcher.append("ghi")
         batcher.flush()
 

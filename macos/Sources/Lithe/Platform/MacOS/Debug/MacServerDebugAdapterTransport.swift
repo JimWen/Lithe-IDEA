@@ -108,8 +108,10 @@ class MacServerDebugAdapterTransport: DebugAdapterTransport, DebugAdapterChildTr
     private let socketFactory: @MainActor (String, UInt16) -> any DebugAdapterSocketConnection
     private var socket: (any DebugAdapterSocketConnection)?
     private var pendingWrites: [Data] = []
-    private var announcementBuffer = ""
-    private var announcementDecoder = StreamingUTF8Decoder()
+    private var stdoutAnnouncement = ""
+    private var stderrAnnouncement = ""
+    private var stdoutDecoder = StreamingUTF8Decoder()
+    private var stderrDecoder = StreamingUTF8Decoder()
     private var isSocketReady = false
     private var didTerminate = false
     private var activeEndpoint: Endpoint?
@@ -131,10 +133,10 @@ class MacServerDebugAdapterTransport: DebugAdapterTransport, DebugAdapterChildTr
         self.endpointParser = endpointParser
         self.socketFactory = socketFactory
         process.onOutput = { [weak self] data in
-            Task { @MainActor [weak self] in self?.consumeAnnouncement(data) }
+            Task { @MainActor [weak self] in self?.consumeAnnouncement(data, isStandardError: false) }
         }
         process.onError = { [weak self] data in
-            Task { @MainActor [weak self] in self?.consumeAnnouncement(data) }
+            Task { @MainActor [weak self] in self?.consumeAnnouncement(data, isStandardError: true) }
         }
         process.onTermination = { [weak self] code in
             Task { @MainActor [weak self] in self?.terminate(Int(code)) }
@@ -148,8 +150,10 @@ class MacServerDebugAdapterTransport: DebugAdapterTransport, DebugAdapterChildTr
         didTerminate = false
         isSocketReady = false
         pendingWrites = []
-        announcementBuffer = ""
-        announcementDecoder.reset()
+        stdoutAnnouncement = ""
+        stderrAnnouncement = ""
+        stdoutDecoder.reset()
+        stderrDecoder.reset()
         activeEndpoint = nil
         let launch = try launchResolver(rootURL.standardizedFileURL)
         try process.start(ProcessRequest(
@@ -180,12 +184,16 @@ class MacServerDebugAdapterTransport: DebugAdapterTransport, DebugAdapterChildTr
         finishAnnouncementOutput()
     }
 
-    private func consumeAnnouncement(_ data: Data) {
-        let text = announcementDecoder.decode(data)
+    private func consumeAnnouncement(_ data: Data, isStandardError: Bool) {
+        let text = isStandardError ? stderrDecoder.decode(data) : stdoutDecoder.decode(data)
         guard !text.isEmpty else { return }
-        announcementBuffer += text
         onErrorOutput?(Data(text.utf8))
-        guard socket == nil, let endpoint = endpointParser(announcementBuffer) else { return }
+        guard socket == nil else { return }
+        // The two pipes have independent UTF-8 and endpoint-fragment boundaries.
+        let announcement: String
+        if isStandardError { stderrAnnouncement += text; announcement = stderrAnnouncement }
+        else { stdoutAnnouncement += text; announcement = stdoutAnnouncement }
+        guard let endpoint = endpointParser(announcement) else { return }
         activeEndpoint = endpoint
         let socket = socketFactory(endpoint.host, endpoint.port)
         self.socket = socket
@@ -225,9 +233,8 @@ class MacServerDebugAdapterTransport: DebugAdapterTransport, DebugAdapterChildTr
     }
 
     private func finishAnnouncementOutput() {
-        let output = announcementDecoder.finish()
+        let output = stdoutDecoder.finish() + stderrDecoder.finish()
         if !output.isEmpty {
-            announcementBuffer += output
             onErrorOutput?(Data(output.utf8))
         }
     }

@@ -11,13 +11,15 @@ final class MacStreamingProcess: StreamingProcess, @unchecked Sendable {
     var onTermination: (@Sendable (Int32) -> Void)?
     var onStateChange: (@Sendable (ProcessLifecycleEvent) -> Void)?
 
+    private var isStarting = false
     private var process: MacManagedProcess?
     private var inputPipe: Pipe?
     private var outputPipe: Pipe?
     private var outputBatcher: MacProcessOutputBatcher?
-    /// Serializes pipe reads with the final EOF drain so termination cannot
-    /// close a batch while a readability callback still owns output bytes.
-    private let outputReadLock = NSLock()
+    /// Reads, decoding, batch admission and teardown share one queue. Delivery
+    /// may reenter stop(), so never hold a separate lock across its callback.
+    private let outputQueue = DispatchQueue(label: "com.openres.Lithe.process-output", qos: .userInitiated)
+    private let outputQueueKey = DispatchSpecificKey<UInt8>()
     private var outputDecoder = StreamingUTF8Decoder()
     private var timeoutTask: Task<Void, Never>?
     private var activeOperationID: String?
@@ -34,9 +36,18 @@ final class MacStreamingProcess: StreamingProcess, @unchecked Sendable {
         self.processRegistry = processRegistry
         self.category = category
         self.moduleID = moduleID
+        outputQueue.setSpecific(key: outputQueueKey, value: 1)
     }
 
     func start(_ request: ProcessRequest) throws {
+        // Teardown delivers pending output. Reject a nested launch from that
+        // callback rather than overwrite its process and lose cleanup ownership.
+        guard withOutputQueue({
+            guard !isStarting else { return false }
+            isStarting = true
+            return true
+        }) else { throw POSIXError(.EBUSY) }
+        defer { withOutputQueue { isStarting = false } }
         stop()
         activeOperationID = request.operationID
         onStateChange?(ProcessLifecycleEvent(
@@ -47,7 +58,7 @@ final class MacStreamingProcess: StreamingProcess, @unchecked Sendable {
         ))
 
         let outputPipe = Pipe()
-        let outputBatcher = MacProcessOutputBatcher { [weak self] output in
+        let outputBatcher = MacProcessOutputBatcher(queue: outputQueue) { [weak self] output in
             self?.onOutput?(output)
         }
         let inputPipe = (request.standardInput != nil || request.keepsStandardInputOpen)
@@ -74,7 +85,7 @@ final class MacStreamingProcess: StreamingProcess, @unchecked Sendable {
 
         outputPipe.fileHandleForReading.readabilityHandler = { [weak self, weak process] handle in
             guard let self, let process else { return }
-            self.outputReadLock.withLock {
+            self.withOutputQueue {
                 guard self.process === process else { return }
                 let data = handle.availableData
                 guard !data.isEmpty else { return }
@@ -85,41 +96,38 @@ final class MacStreamingProcess: StreamingProcess, @unchecked Sendable {
             }
         }
         process.terminationHandler = { [weak self] terminatedProcess in
-            guard let self, self.process === terminatedProcess else { return }
-            let shouldFinish = self.outputReadLock.withLock {
-                guard self.process === terminatedProcess else { return false }
-                guard let handle = self.outputPipe?.fileHandleForReading else { return true }
-                handle.readabilityHandler = nil
-                if let remaining = try? handle.readToEnd(), !remaining.isEmpty {
-                    let output = self.outputDecoder.decode(remaining)
-                    if !output.isEmpty {
-                        outputBatcher.append(output)
+            guard let self else { return }
+            self.withOutputQueue {
+                guard self.process === terminatedProcess else { return }
+                var output = ""
+                if let handle = self.outputPipe?.fileHandleForReading {
+                    handle.readabilityHandler = nil
+                    do {
+                        output = self.outputDecoder.decode(try Self.drainAvailableOutput(from: handle))
+                    } catch {
+                        NSLog("Lithe process output drain failed: %@", error.localizedDescription)
                     }
                 }
-                let finalOutput = self.outputDecoder.finish()
-                if !finalOutput.isEmpty {
-                    outputBatcher.append(finalOutput)
-                }
-                return true
+                output += self.outputDecoder.finish()
+                outputBatcher.append(output)
+                outputBatcher.finish()
+                // Delivery can synchronously stop or restart this owner.
+                guard self.process === terminatedProcess else { return }
+                self.process = nil
+                self.closePipes()
+                self.outputBatcher = nil
+                self.timeoutTask?.cancel()
+                self.timeoutTask = nil
+                self.activeOperationID = nil
+                self.unregisterProcess()
+                self.onStateChange?(ProcessLifecycleEvent(
+                    operationID: request.operationID,
+                    state: .finished,
+                    exitCode: terminatedProcess.terminationStatus,
+                    message: nil
+                ))
+                self.onTermination?(terminatedProcess.terminationStatus)
             }
-            guard shouldFinish else { return }
-            outputBatcher.finish()
-            guard self.process === terminatedProcess else { return }
-            self.process = nil
-            self.inputPipe = nil
-            self.outputPipe = nil
-            self.outputBatcher = nil
-            self.timeoutTask?.cancel()
-            self.timeoutTask = nil
-            self.activeOperationID = nil
-            self.unregisterProcess()
-            self.onStateChange?(ProcessLifecycleEvent(
-                operationID: request.operationID,
-                state: .finished,
-                exitCode: terminatedProcess.terminationStatus,
-                message: nil
-            ))
-            self.onTermination?(terminatedProcess.terminationStatus)
         }
 
         self.process = process
@@ -138,7 +146,7 @@ final class MacStreamingProcess: StreamingProcess, @unchecked Sendable {
             try? inputPipe?.fileHandleForReading.close()
             try? outputPipe.fileHandleForWriting.close()
         } catch {
-            outputReadLock.withLock {
+            withOutputQueue {
                 outputDecoder.reset()
             }
             outputBatcher.finish()
@@ -169,6 +177,33 @@ final class MacStreamingProcess: StreamingProcess, @unchecked Sendable {
         ))
     }
 
+    /// Captures only bytes already available after process exit. An escaped
+    /// writer must not keep EOF or a continuously readable pipe alive forever.
+    static func drainAvailableOutput(from handle: FileHandle, maximumBytes: Int = 1_048_576) throws -> Data {
+        let descriptor = handle.fileDescriptor
+        let flags = Darwin.fcntl(descriptor, F_GETFL)
+        guard flags != -1, Darwin.fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) != -1 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { _ = Darwin.fcntl(descriptor, F_SETFL, flags) }
+        var result = Data()
+        var buffer = [UInt8](repeating: 0, count: 16_384)
+        // Bound interrupted reads too, not only successfully captured bytes.
+        for _ in 0..<128 where result.count < maximumBytes {
+            let count = Darwin.read(descriptor, &buffer, min(buffer.count, maximumBytes - result.count))
+            if count > 0 { result.append(contentsOf: buffer.prefix(count)); continue }
+            if count == 0 || errno == EAGAIN || errno == EWOULDBLOCK { break }
+            if errno == EINTR { continue }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return result
+    }
+
+    private func withOutputQueue<T>(_ body: () throws -> T) rethrows -> T {
+        if DispatchQueue.getSpecific(key: outputQueueKey) != nil { return try body() }
+        return try outputQueue.sync(execute: body)
+    }
+
     func send(_ input: Data) throws {
         try inputPipe?.fileHandleForWriting.write(contentsOf: input)
     }
@@ -183,33 +218,31 @@ final class MacStreamingProcess: StreamingProcess, @unchecked Sendable {
     }
 
     private func stopProcessGroup() -> Task<Bool, Never>? {
-        timeoutTask?.cancel()
-        timeoutTask = nil
-        let batcherToFinish = outputReadLock.withLock {
+        withOutputQueue {
+            timeoutTask?.cancel()
+            timeoutTask = nil
             outputPipe?.fileHandleForReading.readabilityHandler = nil
             let finalOutput = outputDecoder.finish()
-            if !finalOutput.isEmpty {
-                outputBatcher?.append(finalOutput)
+            let batcher = outputBatcher
+            let stoppedProcess = process
+            let operationID = activeOperationID
+            // Detach old resources before delivery can reenter start/stop.
+            process = nil
+            outputBatcher = nil
+            activeOperationID = nil
+            closePipes()
+            unregisterProcess()
+            let terminationTask = stoppedProcess?.isRunning == true ? stoppedProcess?.terminate() : nil
+            if terminationTask != nil {
+                onStateChange?(ProcessLifecycleEvent(
+                    operationID: operationID, state: .stopping,
+                    exitCode: nil, message: "Process stopped"
+                ))
             }
-            return self.outputBatcher
+            batcher?.append(finalOutput)
+            batcher?.finish()
+            return terminationTask
         }
-        batcherToFinish?.finish()
-        var terminationTask: Task<Bool, Never>?
-        if let process, process.isRunning {
-            onStateChange?(ProcessLifecycleEvent(
-                operationID: activeOperationID,
-                state: .stopping,
-                exitCode: nil,
-                message: "Process stopped"
-            ))
-            terminationTask = process.terminate()
-        }
-        closePipes()
-        unregisterProcess()
-        process = nil
-        outputBatcher = nil
-        activeOperationID = nil
-        return terminationTask
     }
 
     private func closePipes() {

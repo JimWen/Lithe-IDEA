@@ -127,6 +127,13 @@ struct ANSIOutputColorTests {
 
 @Suite("Output text updates")
 struct OutputTextUpdateTests {
+    @Test(arguments: ["\u{8}", "\u{7F}"])
+    func slidingTrimRerendersCrossBoundaryDeletion(control: String) {
+        let retained = String(repeating: "retained line\n", count: 400)
+        #expect(OutputTextUpdate.plan(previous: "X" + control + retained,
+            next: control + retained + "new tail\n", previousHadANSI: false) == .replace)
+    }
+
     @Test
     func appendsOnlyTheNewCompleteLines() {
         #expect(

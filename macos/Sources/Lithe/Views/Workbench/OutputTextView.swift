@@ -382,6 +382,10 @@ enum OutputTextUpdate: Equatable {
     /// suffix of `previous`, followed by newly appended output. KMP keeps the
     /// overlap search linear even when a log contains highly repetitive text.
     private static func slidingWindowUpdate(previous: String, next: String) -> Self? {
+        // Backspace/DEL can erase a character before the retained boundary.
+        // Parsing the expired prefix alone cannot measure that visible deletion.
+        guard !previous.contains("\u{8}"), !previous.contains("\u{7F}"),
+              !next.contains("\u{8}"), !next.contains("\u{7F}") else { return nil }
         let previousByteCount = previous.utf8.count
         let nextBytes = Array(next.utf8)
         guard previousByteCount >= minimumSlidingOverlapBytes,
