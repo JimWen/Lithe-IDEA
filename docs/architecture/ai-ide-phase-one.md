@@ -377,7 +377,7 @@ v0.5.0，本次不改变 fork 的 `0.1.0` 版本身份，不发布标签或 rele
 独立审查发现并补充验证的边界包括：无 EOF 管道的有界收尾、慢输出消费者的排队上限、
 stdout/stderr 独立解码与公告解析、退格/DEL 跨滑动裁剪边界，以及仓库切换后的旧 Diff 忙碌状态。
 输出收尾还补充了同步启动重入保护：启动中明确拒绝嵌套启动，防止覆盖子进程所有权。
-五项回归均已先复现失败再修复；系统安装验收仍待完成，不能以历史结果替代。
+五项回归均已先复现失败再修复；本批系统安装与实机结果见下文。
 已完成本批共享 Rust 528 条计时记录（全部通过、无硬预算超限），Git 真实仓库/状态 151 条和
 Diff 收尾修复后 Git 模块 138 条均通过。Swift 6.2.4、真实 Rust Core 链接且显式启用运行/Git/LSP 集成的完整回归通过：
 1607 条计时记录、188 个 suite、68.344 秒，无跳过或硬预算超限。输出/终端相关 167 条
@@ -387,6 +387,37 @@ Git 执行/认证辅助进程和控制台集成检查通过。服务、模块、
 原生 Bundle、Run/LSP/capture 和 shutdown 检查通过。完整 Swift 有 17 项性能预警，Rust 有
 32 项性能预警，均未超过各自硬预算。80 个本次修改文档的本地链接及锚点检查通过。
 本地 cherry-pick 为 `e31ea4b2`、`03355f87`、`e14399e1`、`766b8619`、`c16c1201`，
-输出审查修复为 `e7414f11`。系统安装与真实 UI 验收结果仍待下文补记。
+输出审查修复为 `e7414f11`。
 原始日志、计划、取舍记录和 UI 项目位于 `.artifacts/upstream-lightweight-20261028/`，
 计时报告位于 `.artifacts/test-stability/lightweight-*.{json,html,junit.xml}`。
+
+### 构建、安装与本批实机验收
+
+Swift 6.2.4 ARM64 Release 已从干净提交 `fdebe2b7c5c3d7d469acf89cacc0a1fa8d4c25b6`
+构建并原子替换 `/Applications/Lithe.app`，版本保持 `0.1.0`（build 3）。应用约 104 MB；
+213 项资源与源码一致，322 个安装文件/符号链接与构建产物一致，ARM64 架构及严格签名检查通过。
+程序 SHA-256 为 `925bfab5c6f417854f4383c70ec539b3ea3d0576ea4adf38794047dbb1f86412`。
+安装凭据为上述目录的 `installation.json`，旧版保留在 `installed-previous.app` 供回滚。
+首次 Release 构建在未修改的 SwiftTerm Clang 模块导入中触发编译器崩溃；保留日志与缓存，
+隔离旧 ModuleCache 后使用同一编译器、源码和优化设置重试成功，未引入编译规避开关。
+
+通过系统安装版、隔离测试项目和 CUA 实际完成以下操作：
+
+- 打开同路径同时存在 staged deletion 与 untracked replacement 的项目，未发生崩溃。
+  Git 仓库选择器仅列出 workspace、go、rust，排除了 `.build/checkouts` 中的真实仓库；
+  依次切换后的历史 HEAD 分别为 `bf4450f`、`18d45da`、`429fd7e`，与磁盘一致。
+- 终端输出 `TERMINAL_OK 日志🙂` 正常；当前 shell 标准键位下 Control-R 到达历史搜索，
+  未被应用运行快捷键截获。第二个终端执行 `exit` 只关闭该标签；最后一个终端成功
+  Control-D 后面板自动收起。退出码 130 的会话保留诊断和 Retry，重试后正常退出可关闭。
+- 原生 Run 分别执行 Go、Rust 和 Python，均显示 Finished，保留完整 Unicode 输出。
+  Python 逐字节写出的 `PYTHON_OK 日志🙂` 及 200 行日志全部出现，末行 `log 199` 保留，
+  无替换字符。Python 模块原为 Disabled，临时启用完成验证后已恢复；本机未安装
+  basedpyright-langserver，Python LSP 本次未验收，也未新增安装依赖。
+- Go/Rust 源文件实际完成 Unicode 粘贴编辑、保存、跨标签 Undo/Redo 和再次保存；
+  AX 内容与磁盘 UTF-8 字节匹配。最后通过 Undo 恢复两个 fixture，与各自 Git HEAD
+  逐字节一致。此项只证明基础编辑历史冒烟，不替代 B6a2 语义动作验收。
+
+本次 UI 依据来自 CUA 返回的 AX 状态与终端截图，结论记录在 `ui/results.json`；
+不声称保存了本地截图文件。退出后 Lithe、gopls、rust-analyzer 及其 proc-macro helper
+均已结束，未遗留本批应用或测试进程，见 `ui/cleanup.json`。源码和系统安装均保留。
+本次验收补记仅修改文档，安装版产品输入与最终提交一致。

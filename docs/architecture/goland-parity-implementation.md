@@ -28,7 +28,7 @@ Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已
 | B4a4 | [Terminal 启动配置](goland-parity-b4a4-terminal-startup-done.md) | 已完成 |
 | B4a5 | [Terminal 显示与输入](goland-parity-b4a5-terminal-display-done.md) | 已完成 |
 | B4a6 | [Terminal 虚拟环境](goland-parity-b4a6-terminal-venv-done.md) | 已完成 |
-| B6 | [语义编辑事务与重构](goland-parity-b6-refactor.md) | B6a1a 已验收；2026-10-06 原生编辑器门禁通过，B6a2 首个文本切片 Rust/Swift 自动验证通过，安装与实机验收待完成；复用既有文本事务/Undo，完整资源事务仍待实施，见[当前裁定](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
+| B6 | [语义编辑事务与重构](goland-parity-b6-refactor.md) | B6a1a 已验收；B6a2 首个文本切片 Rust/Swift 自动验证通过，2026-10-28 已安装并完成基础编辑历史冒烟，语义动作实机验收待完成；复用既有文本事务/Undo，完整资源事务仍待实施，见[当前裁定](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
 | B7a | [Go Tools / Cargo](goland-parity-b7a-go-cargo.md) | 部分完成 |
 | B7a2a / B7a2b | [进程清理、工具捕获与插件资源](goland-parity-b7a2b-project-tool-capture-done.md) | 已完成 |
 | B7a2c | [项目元数据读取与刷新](goland-parity-b7a2c-project-metadata-refresh.md) | c1/c2 完成，c3 随 B7a3 完成 |
@@ -289,7 +289,7 @@ E1 的五项尚未确定批次编号与排期，不得在未经用户确认前�
 | B3 | B3a、B3b1a 通过；其余逐批细化 | B3b 范围、预览、Apply、排除与文本事务/Undo 已接入；B3c/B3d 待实施 | B3b1a 历史：Rust 331、Swift 985、原生链接 7 项及 ARM64 包通过；后续事务回归见功能文档 | 输入/键盘、Find 预览与 Unicode 已验收；后续安装版实际替换、排除与撤销见[集成验收](ai-ide-phase-one.md) | 历史未提交审查保留；当前范围以[事务记录](goland-parity-b3b-replacement.md#buffer-transaction-integration)为准 | B3a `010d4d57`；B3b1a `b0dac7e2`；后续集成与原生 Undo 修复见当前记录 |
 | B4 | B4a0–B4a6 通过 | Terminal 启动、显示/输入、venv 完成；其他设置待实施 | 1032 项完整测试、42+3 个 shell 场景、边界、ARM64 包通过 | 真实设置、Python prefix、Restart、环境缺失/恢复、迟到确认焦点及清理通过 | B4a0–B4a6 通过 | 启动 `db44d036`；字体 `4f74218a`；输入 `266c0c52`；venv `3724ea20` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
-| B6 | B6a1a 通过；后续依 2026-10-06 修订 | B6a2 首个有序文本编辑切片已实现；其余方法、反向请求、资源事务与重构待实施 | 历史：B6a2 Rust 523、Swift 1574 项通过；Rust Core/bridge、边界/契约/stability 通过 | B6a1a 已验收；B6a2 文本切片安装与实机验收仍待完成 | 首个文本切片静态复核无剩余阻断项；不代表 B6a2 整体完成 | `40c08360`；[当前裁定与验证记录](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
+| B6 | B6a1a 通过；后续依 2026-10-06 修订 | B6a2 首个有序文本编辑切片已实现；其余方法、反向请求、资源事务与重构待实施 | 历史：B6a2 Rust 523、Swift 1574 项通过；本次完整回归见[集成记录](ai-ide-phase-one.md) | B6a1a 已验收；B6a2 文本切片于 2026-10-28 安装，基础编辑历史冒烟通过，语义动作实机验收仍待完成 | 首个文本切片静态复核无剩余阻断项；不代表 B6a2 整体完成 | `40c08360`；[当前裁定与验证记录](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
 | B7 | B7a1/B7a2a–b/c1 通过；其余按子方案推进 | Cargo 只读刷新与右栏、双击运行和缺配置生成续跑已实现；Go Tools 与独立任务已完成（见 B7a3）；gutter/Structure/TODO 待实施 | 2026-09-08：Rust 354、Swift 1124、边界/契约/stability 通过 | Cargo 12 种真实对照运行；GUI 切换/刷新恢复/12 文件零写入通过；ARM64 已替换系统安装并复验 | c2 独立代码审查及修复复核通过 | 基线 `3d97c080`，本轮修复与验收记录一同提交；[Cargo 验收摘要](goland-parity-b7a2c2-cargo-tool-window-done.md#cargo-acceptance) |
 | B7a3 | 方案与代码复核通过 | Go 元数据隔离、工具窗口、独立任务和 G/R 图标完成 | Swift 1176 全量及最终 27+18 项回归、Rust/边界/契约/stability 通过 | 实际编辑修复、并发停止隔离、零写刷新、Go/Cargo 菜单运行及深浅色图标通过 | 通过 | [Go Tools 验收摘要](goland-parity-b7a3-go-tools-done.md#go-tools-acceptance)；`211395cc` 干净检出 1168 项通过，系统安装与 Go/Cargo 点击复验通过 |
 | B7b | 剩余细案待重审（[运行入口 gutter](goland-parity-b7b-run-gutter.md)），前置 B6a2 符号协议预交付 | 已有 Go/Rust runnable gutter 保留；剩余范围待实施 | 原有验证见上游集成记录；本批无新结果 | 本批待复验 | 待实施后审查 | — |
