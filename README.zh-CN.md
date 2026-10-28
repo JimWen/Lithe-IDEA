@@ -7,6 +7,8 @@
 
   <p>
     <a href="./README.md"><strong>English</strong></a> ·
+    <a href="#当前重点">当前重点</a> ·
+    <a href="#后续-todo">TODO</a> ·
     <a href="#核心功能">核心功能</a> ·
     <a href="#产品截图">产品截图</a> ·
     <a href="#下载与安装">下载</a> ·
@@ -38,17 +40,40 @@
   </p>
 </div>
 
+> **分支状态 · 2026-10-28：** 本 macOS 分支暂缓主动迭代，代码与架构方案保存在 `dev/aiide` 分支。下方 TODO 留作未来恢复开发时的待办，暂不承诺排期。此状态仅适用于本 fork，不代表上游项目的维护状态。
+
 ## 为什么做 Lithe
 
 Codex、Claude Code 等 AI 编程工具已经可以承担大量编码工作，但开发者仍然需要 IDE 来理解生成的代码、跳转符号、运行调试项目并审查每一次修改。只为完成这些工作而常驻一套占用数 GB 内存的开发环境，显得越来越沉重。
 
 ## Lithe 是什么
 
-本分支保留 Lithe 的 macOS 项目浏览、代码编辑与导航、搜索、运行调试、Git Diff、本地历史和数据库等核心工作流。默认包不包含 JDK/JDTLS、Java Debug/Test；Maven、Spring、Windows 和 Linux.do 集成已移除。Go、Rust、Python 及其他已有语言能力保持现状。已合并远端 main 至 `4bb921dc`（v0.4.4 更新链），将多仓库 Git、编辑器增量同步、诊断导出和原生交互改进适配到当前 macOS 模块架构；合并结果排除 Windows、Java/Maven/MyBatis 与相关框架增量。
+本分支保留 Lithe 的 macOS 项目浏览、代码编辑与导航、搜索、运行调试、Git Diff、本地历史和数据库等核心工作流。默认包不包含 JDK/JDTLS、Java Debug/Test；Maven、Spring、Windows 和 Linux.do 集成已移除。Go、Rust、Python 及其他已有语言能力保持现状。已按版本顺序合入上游至 **v0.5.0**，保留原始提交历史，并将适用的 Git、运行、搜索、保存保护和 HTML/SVG 预览改进适配到原生 macOS 架构。继续排除 Windows、Java 生态与框架增量、Linux.do，以及 Monaco 编辑器迁移。详见[集成与验收记录](./docs/architecture/ai-ide-phase-one.md)。
 
 打开普通项目后，Lithe 应用本身的基础内存占用通常约为 **300～400 MB**。语言服务器、终端、构建工具、调试器和数据库组件均按需启动；实际占用会随项目和启用的服务变化。
 
 > **AI 负责编写代码，Lithe 负责帮你看懂、跑通并审查修改。**
+
+## 当前重点
+
+- **原生 macOS 编辑体验：** 保留 SwiftUI/AppKit 与 `NSTextView`、原生项目窗口、终端归属，以及已有 Go/Rust/Python 能力，优先保证编辑正确性和资源占用可控。
+- **跨文件修改安全：** 搜索替换和语言操作沿用文档新鲜度检查、修改租约、文件与匹配项排除、共享 Undo/Redo，以及磁盘失败补偿。
+- **语言能力与日常工作流：** 以现有 LSP 导航、重命名、格式化、代码动作、Go Tools/Cargo、Git 审查和运行调试为基础；完整补全交互与语言提示仍待完善。
+- **明确暂停位置：** 产品代码停在 `40c08360`。B6a2 首个有序文本编辑切片已有 Rust/Swift 自动验证历史记录，但安装与实机验收尚未完成。此前的原生编辑器验收单独记录，不能替代本切片的验收。
+
+详细范围与证据见[工作台总方案](./docs/architecture/goland-parity-implementation.md)、[重构当前状态](./docs/architecture/goland-parity-b6-refactor.md#b6-current-implementation-rulings)和[语言能力方案](./docs/architecture/syntax-and-completion.md)。历史通过记录不代表本次文档收尾重新运行过产品验证。
+
+## 后续 TODO
+
+以下均为未完成项；恢复开发时先复核源码与依赖，再选择具体批次。
+
+- [ ] **补齐最近切片验收：** 构建并安装 B6a2 文本编辑切片，实测重命名、格式化、代码动作、补全及 Undo/Redo，补齐真实 `codeAction/resolve` 行为验证。[B6](./docs/architecture/goland-parity-b6-refactor.md#b6-current-implementation-rulings)
+- [ ] **完成语义编辑与重构：** 补齐 prepareRename、选区/符号协议和真实选区 Code Action；完成服务端反向 `workspace/applyEdit`、资源事务、预览/冲突处理及 Refactor This，复用已有事务与撤销归属。[B6](./docs/architecture/goland-parity-b6-refactor.md)
+- [ ] **接通 LSP 编辑器交互：** 参数提示、内联提示、语义着色、符号出现点高亮，以及 Structure/面包屑。L4a 不依赖语法引擎，但细案和插入顺序仍待复核。[L4a](./docs/architecture/syntax-and-completion.md#l4a-split)
+- [ ] **落地语法与补全引擎：** 增量文档状态、Go/Rust/Python 离线高亮、自动补全与过滤/文档/snippet，再补离线符号与折叠；遵循 B6b2 → L0/L1 依赖及 L2/L3/L4b 计划。[L0–L2](./docs/architecture/syntax-l0-l2-engine.md)
+- [ ] **补齐工作台体验：** 统一 Find/Replace 与最近项、剩余运行入口 gutter 交互、TODO 工具窗口，以及 Git 图最终对照；Project/Commit/PR 继续暂缓。[工作台总方案](./docs/architecture/goland-parity-implementation.md)
+- [ ] **完善语言包与格式化：** grammar/query 资源、安装/升级/回滚、常规文件格式、格式化事务和保存即格式化。[L5–L8](./docs/architecture/syntax-and-completion.md)
+- [ ] **评估编辑器扩展能力：** 跨语言 Problems、多光标/列选择、调用/类型层级、书签与覆盖率。E1 目前只是缺口清单，尚非已批准的实施方案。[E1](./docs/architecture/goland-parity-implementation.md#e1-editor-navigation-gaps)
 
 ## 核心功能
 
@@ -69,7 +94,7 @@ Codex、Claude Code 等 AI 编程工具已经可以承担大量编码工作，�
 15. 支持按语言独立开关语言服务，可根据电脑配置自由启用或停用。
 16. 支持类似 IDEA 的多行编辑器标签，同时展示更多打开的文件。
 17. 新增数据库连接工作台，支持多种数据库类型、连接管理、SQL 历史、表浏览和数据库操作。
-18. 持续修复问题并优化用户体验。
+18. 保留本分支已有的原生编辑器与工作流修复；后续迭代按上述状态暂缓。
 
 ## 产品截图
 
@@ -165,6 +190,7 @@ flowchart LR
     MacApp -->|"JSON C ABI"| Core
 ```
 
+<a id="如何开发"></a>
 <details>
 <summary><strong>如何开发</strong></summary>
 

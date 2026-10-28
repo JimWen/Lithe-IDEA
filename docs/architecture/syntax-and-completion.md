@@ -1,6 +1,6 @@
 # 语法高亮、离线补全与语言插件：实施方案
 
-状态：**尚未实现**。2026-09-06 独立设计基线复核为历史结论，见 [审查记录](goland-parity-implementation.md#plan-review)。2026-09-08 已完成 [L0–L2 第二版方案复核](syntax-l0-l2-engine.md#l0-l2-plan-review)：首轮 6 项 P1、3 项 P2 均在方案层闭环，候选身份、错误确认、取消、模块接线与资源契约已同步修订。本文是语言能力实施依据，不能用方案中的接口、预算或验收项证明产品已支持对应功能。
+状态：**尚未实现**。2026-09-06 独立设计基线复核为历史结论，见 [审查记录](goland-parity-implementation.md#plan-review)。2026-09-08 已完成 [L0–L2 第二版方案复核](syntax-l0-l2-engine.md#l0-l2-plan-review)：首轮 6 项 P1、3 项 P2 均在方案层闭环，候选身份、错误确认、取消、模块接线与资源契约已同步修订。2026-09-21 [体验对齐复核](goland-parity-implementation.md#experience-parity-review-2026-09-21) 按 GoLand / RustRover / PyCharm 逐项核查源码，据此把原 L4 拆为 L4a（LSP 直通能力，P0）与 L4b（语法产物消费，P3），见 [拆分依据](#l4a-split)；L0–L3 的内容与依赖不变。本文是语言能力实施依据，不能用方案中的接口、预算或验收项证明产品已支持对应功能。
 
 目标是在当前原生编辑器和 Rust Core 上，逐批对齐 GoLand 的编辑、高亮、补全、提示与常规文件体验，并让语言包扩展这些能力。本文保留“**不启动 LSP 也可用的语法层**”定位；跨文件类型分析、精确成员、导入、重构仍由完整 LSP 链路提供。Tree-sitter 不替代类型系统或 formatter。
 
@@ -197,7 +197,7 @@ Rust dispatcher 在解码 envelope/command 后把 syntax 命令分流到 domain-
 <a id="resolved-syntax-resources"></a>
 `ResolvedSyntaxResourcesV1` 固定包含 ownerPackageID、ownerModuleID（纯数据包可为 null）、languageID、grammarID、grammarABI、grammarSourceRevision、grammarDigest、runtimeContractVersion，以及八个槽位各自的 UTF-8 内容 SHA-256（缺省为 null）和 editor/keywords/snippets/formatter 声明的 digest。平台从已校验安装资源生成观测值，Rust 以固定字段顺序、JSON 数组、明确 null、UTF-8/无额外空白编码，使用现有 sha2 生成 `resourceRevision = "sha256:" + 小写十六进制摘要`；不纳入机器路径。grammarDigest 绑定固定 parser/scanner 构建输入，worker 还必须匹配其 executable digest/协议握手。ABI 只校验接口，不替代 grammar 内容身份。
 
-资源集整体不可变；内容、owner 或引擎语义版本变更即生成不同 resourceRevision。启用 epoch 单独由宿主递增，资源更新/禁用/回滚关闭旧 generation 再显式 open 新 generation；即使回滚到同一 digest，旧 generation 的回包仍不能生效。L1/L2 用内部 bundled 资源清单，L5 的 manifest v2 与资源 schema 1 适配这份既定身份，不提前宣称安装能力可用。L4 的新槽位资源只改变内容身份，无须新增编辑器语言分支。
+资源集整体不可变；内容、owner 或引擎语义版本变更即生成不同 resourceRevision。启用 epoch 单独由宿主递增，资源更新/禁用/回滚关闭旧 generation 再显式 open 新 generation；即使回滚到同一 digest，旧 generation 的回包仍不能生效。L1/L2 用内部 bundled 资源清单，L5 的 manifest v2 与资源 schema 1 适配这份既定身份，不提前宣称安装能力可用。L4b 的新槽位资源只改变内容身份，无须新增编辑器语言分支。
 
 以下为**内部预算初值，需以实测校正**，不是现有性能数据：
 
@@ -323,12 +323,12 @@ Go 复用 gopls，Rust 复用 rust-analyzer，Python 延续当前默认 provider
 
 `queries` 的八个槽位（highlights/locals/outline/injections/brackets/indents/overrides/runnables）与 `editor` 字段在资源 schema 1 一次定义。除 `highlights` 外全部可缺省，**缺省语义是该能力不可用，而不是回退到猜测规则**：无 `outline` 不产出语法 Structure（已就绪 LSP symbols 独立可用）；无 `indents` 不新增语法缩进，无 `brackets` 保持编辑器现有配对行为，无 `overrides` 时注释/字符串抑制沿用 5.2 的默认判定，无 `runnables` 时该语言不产出语法级运行候选。`injections` 缺省时不做嵌套语言解析，其预算见 4.3。
 
-批次归属：`highlights` 属 L2，`locals`/`outline` 属 L4，`injections` 随 6.2 的 Markdown/HTML 验收在 L6 落地，`indents`/`brackets`/`overrides`/`runnables` 属 L8。L4 的符号/折叠范围用 outline query 消费同一 Tree，不在高亮 query 中猜结构。声明存在不等于能力已交付。运行候选与上下文抑制以 query 表达而非在 Rust 内按语言分支实现，否则每新增一门语言都要改引擎代码，与“新增语言即新增声明与资源”的目标冲突。
+批次归属：`highlights` 属 L2，`locals`/`outline` 属 L4b，`injections` 随 6.2 的 Markdown/HTML 验收在 L6 落地，`indents`/`brackets`/`overrides`/`runnables` 属 L8。L4b 的符号/折叠范围用 outline query 消费同一 Tree，不在高亮 query 中猜结构。L4a 不消费任何 query 槽位，它的符号与提示全部来自语言服务器；两者并存时以 L4b 为离线回退，不叠加输出。声明存在不等于能力已交付。运行候选与上下文抑制以 query 表达而非在 Rust 内按语言分支实现，否则每新增一门语言都要改引擎代码，与“新增语言即新增声明与资源”的目标冲突。
 
 包索引记录 revision、grammar ABI、大小、SHA-256、来源 revision/许可证。query 与固定 grammar 成对验证，不能把 Zed/Helix predicates/captures 默认视为全部兼容。
 
 <a id="syntax-query-validation"></a>
-L2 支持且执行 Tree-sitter 0.25.10 的 text predicates：eq?/not-eq?/any-eq?/any-not-eq?、match?/not-match?/any-match?/any-not-match?、any-of?/not-any-of?；参数遵循固定 binding 的验证规则。启用前逐 pattern 检查 general_predicates、property_predicates、property_settings：L2 暂不支持任何自定义 predicate/property，包含 #is? local、#set! priority 的资源均拒绝，不能因 Query::new 成功便忽略语义。选用/修订上游 query 时去掉不支持的规则必须同时给出语义等价语料；需 locals 的资源留 L4，再提升内部 runtimeContractVersion。
+L2 支持且执行 Tree-sitter 0.25.10 的 text predicates：eq?/not-eq?/any-eq?/any-not-eq?、match?/not-match?/any-match?/any-not-match?、any-of?/not-any-of?；参数遵循固定 binding 的验证规则。启用前逐 pattern 检查 general_predicates、property_predicates、property_settings：L2 暂不支持任何自定义 predicate/property，包含 #is? local、#set! priority 的资源均拒绝，不能因 Query::new 成功便忽略语义。选用/修订上游 query 时去掉不支持的规则必须同时给出语义等价语料；需 locals 的资源留 L4b，再提升内部 runtimeContractVersion。
 
 未知 capture 可以诊断后忽略；未知 predicate/property 会拒绝整份资源并保留上一可用资源。重叠顺序在内部已校验捕获表中明定为（资源层优先级、capture 优先级、节点深度、pattern index、capture index）的全序，再切分 span；不偷偷支持资源 #set! 优先级。测试需有“编译成功但不允许的 predicate/property”负例，以及同语料满足/不满足 text predicate 的结果对照。包更新在所有受支持槽位编译及语义校验通过后才原子启用；尚未交付的槽位可以校验并保留声明，但能力保持不可用。
 
@@ -416,17 +416,42 @@ Tree-sitter 不负责风格格式化。复用 LSP formatting/workspace edit，�
 | L1 / P1 | syntax v1、accepted/parsed 状态机、有序 delta 合并、坐标/缓存/预算、单语言原型 | A→B→C、提交前后取消/ack 重试、resync/close、增量/全量等价、UTF-8/16/CRLF、淘汰 | 连续输入/撤销/跨行无光标错位；解析/RSS/体积基线 |
 | L2 / P1 | Go/Rust/Python grammar/query、投影、主题；保留已有路径 | 重叠 capture、跨视口、树形不变文本编辑、IME | 三语言离线打开/编辑/滚动/切主题；无双重全量着色 |
 | L3 / P2 | 自动 popup、文档/排序/resolve、snippet/undo；依赖 L0/L1 | 可控迟到/取消、isIncomplete、选中保持、insert/replace、附加 edits | 成员/导入/参数视频，键鼠接受、一次 Undo、屏幕边界 |
-| L4 / P3 | locals/hover/signature/symbols/folding、semantic/inlay，接 Structure/入口 | 遮蔽/嵌套/错语法、过期语义、折叠边界 | 三语言 Structure/参数/类型提示，点击准确、关闭无任务 |
+| L4a / P0 | LSP 直通能力：`signatureHelp`、`inlayHint`、`semanticTokens`、`documentSymbol`→Structure/面包屑、`documentHighlight`；只依赖现有 LSP runtime，不依赖 L1/L2 语法引擎 | 服务器无该 capability 时降级、过期响应丢弃、取消/切文件、UTF-16 位置、hint 与折叠/装饰不互相覆盖 | 三语言参数提示与类型提示随输入更新；Structure 点击定位准确；关闭文档无残留任务 |
+| L4b / P3 | 语法产物消费：locals/outline、离线 hover/symbols/folding，与 L4a 的 LSP 结果合并去重；依赖 L1/L2 | 遮蔽/嵌套/错语法、过期语义、折叠边界、LSP 缺席时的离线回退 | 三语言停掉语言服务器仍有 Structure 与折叠；与 L4a 同时可用时无重复条目 |
 | L5 / P3 | manifest/resource schema、设置/识别、安装/回滚；依赖插件机制 | v1/v2、路径/散列/query、禁用清理、惰性识别 | 安装已内置 grammar 的资源包，无编辑器改动，坏包局部失败 |
 | L6 | 常规格式矩阵、JS/TS、格式化事务；依赖 L2/L5 | 各格式保真、识别/注入预算、格式化取消/过期/undo | 每行固定样例、编辑/高亮截图；可用 formatter 的前后 diff |
-| L7 | 6.3 的原生 syntax worker、Lua grammar/本地导航与独立 StyLua adapter、本地执行授权；依赖 L1/L4/L5 及 L6 格式化事务 | wire/ABI、签名/receipt、取消/篡改/升级、符号导航、格式化版本/Undo、进程清理 | 不重编宿主完成 Lua 安装、高亮/补全/Structure/definition/格式化；升级重新授权，卸载无进程/receipt |
-| L8 | 3.1 预留槽位的语法驱动编辑行为：`indents` 自动缩进、`brackets` 配对与包围/展开选区、`overrides` 上下文抑制、`runnables` 运行候选；依赖 L2/L4/L5 | 缺省槽位不改变现有行为、缩进不破坏 Make recipe 与已有缩进设置、配对不吞选区/IME 输入、包围与展开可一次 Undo、运行候选与真实 Run/Test provider 一致 | 三语言回车缩进、括号配对与包围操作、注释与字符串内不弹代码补全、gutter 运行入口点击可运行；无声明语言行为不变 |
+| L7 | 6.3 的原生 syntax worker、Lua grammar/本地导航与独立 StyLua adapter、本地执行授权；依赖 L1/L4b/L5 及 L6 格式化事务 | wire/ABI、签名/receipt、取消/篡改/升级、符号导航、格式化版本/Undo、进程清理 | 不重编宿主完成 Lua 安装、高亮/补全/Structure/definition/格式化；升级重新授权，卸载无进程/receipt |
+| L8 | 3.1 预留槽位的语法驱动编辑行为：`indents` 自动缩进、`brackets` 配对与包围/展开选区、`overrides` 上下文抑制、`runnables` 运行候选；依赖 L2/L4b/L5 | 缺省槽位不改变现有行为、缩进不破坏 Make recipe 与已有缩进设置、配对不吞选区/IME 输入、包围与展开可一次 Undo、运行候选与真实 Run/Test provider 一致 | 三语言回车缩进、括号配对与包围操作、注释与字符串内不弹代码补全、gutter 运行入口点击可运行；无声明语言行为不变 |
 
 L0/L1 分别提交，L2/L6 可按语言再拆；L3 不只换 UI，L5 不只加 manifest，L7 必须实际安装。L8 与 L7 无相互依赖，可按资源就绪顺序单独提交，但**不能只提交 6.1 的槽位声明**：每项能力需连同 query 资源、引擎消费与验收一起交付，未交付项在设置与 UI 中保持不可用而不是静默无效果。每批提交说明附实际测试、截图和缺口，不推送；尚未交付的后续批次保持未完成。
 
 L0/L1 会共改 dispatcher、Swift bridge、契约和文档事件，默认按
 [L0–L2 细案 §3](syntax-l0-l2-engine.md#3-分批依赖与提交边界) 串行；不再按原四文件清单
 宣称可以并发。L1a 用已有 Java grammar 原型，L1c 仍执行原生输入/Undo/IME/关闭验收。
+
+<a id="l4a-split"></a>
+
+**L4a 与 L4b 的拆分依据（2026-09-21 体验对齐复核）**：原 L4 把「locals/outline」与
+「hover/signature/symbols/folding、semantic/inlay」打包在同一批，使得只需要语言服务器
+就能交付的能力被整体压到 P3，排在 L1/L2 之后。核查确认这组能力分属两条独立链路：
+
+- `signatureHelp`、`inlayHint`、`semanticTokens`、`documentSymbol`、`documentHighlight`
+  是纯 LSP 请求，gopls / rust-analyzer / pyright 均原生支持，只需扩展
+  `rust/lithe-core/src/lsp/interface/client.rs` 的方法白名单与对应 UI，**不依赖文档 Tree**。
+  这部分独立为 L4a，优先级提到 P0。
+- locals/outline 必须消费 L1 的文档 Tree 与 L2 的 query 资源，依赖关系不变，
+  保留为 L4b / P3。
+
+拆分**不改变** L3 的依赖：L3 的补全会话仍硬依赖 L0/L1 的候选身份与 accepted/parsed
+版本保护，不因 L4a 提前而可以脱离 L1 交付。L7/L8 依赖的是 outline/locals，因此依赖
+目标由 L4 收窄为 L4b。
+
+L4a 的文件交叠与串行约束：
+- `client.rs` 方法白名单由 B6a2、B7b1 与 L4a 三批共改，三者串行，不并发修改；
+- `CodeEditorView.swift` 由 L2c、B7b2 与 L4a 共改，串行；L4a 的行内 hint 绘制复用
+  已有 code vision 装饰通道，不新增第二条绘制路径；
+- L4a 与 L4b 同时可用时，Structure 与折叠以 LSP 结果为准、语法产物为离线回退，
+  按稳定身份去重，不叠加两份条目。
 
 ## 9. 验证与完成审计
 

@@ -7,6 +7,8 @@
 
   <p>
     <a href="./README.zh-CN.md"><strong>简体中文</strong></a> ·
+    <a href="#current-focus">Current focus</a> ·
+    <a href="#future-todo">TODO</a> ·
     <a href="#core-features">Core features</a> ·
     <a href="#product-tour">Product tour</a> ·
     <a href="#download-and-install">Download</a> ·
@@ -38,17 +40,40 @@
   </p>
 </div>
 
+> **Fork status — 2026-10-28:** Active development of this macOS fork is paused for now. The code and architecture plans are preserved on the `dev/aiide` branch. The TODO list below is a backlog for a possible return, with no committed schedule. This status applies to this fork, not to the upstream project.
+
 ## Why Lithe
 
 Codex, Claude Code, and other AI coding tools can now handle much of the implementation work. Developers still need an IDE to understand the generated code, follow symbols, run and debug the project, and review every diff. Keeping a heavyweight development environment open for those tasks can mean several gigabytes of resident memory.
 
 ## Meet Lithe
 
-This fork keeps Lithe’s macOS workbench for browsing, editing, navigation, search, run and debug, Git diff review, local history, and databases. The default package omits JDK/JDTLS and Java Debug/Test resources. Maven, Spring, Windows, and Linux.do integration have been removed; Go, Rust, Python, and other existing language integrations remain available. Upstream main through `4bb921dc` (the v0.4.4 update chain) is merged, adapting multi-repository Git, incremental editor synchronization, diagnostics export, and native interactions to this fork’s macOS module architecture. The merge excludes Windows, Java/Maven/MyBatis, and related framework changes.
+This fork keeps Lithe’s macOS workbench for browsing, editing, navigation, search, run and debug, Git diff review, local history, and databases. The default package omits JDK/JDTLS and Java Debug/Test resources. Maven, Spring, Windows, and Linux.do integration have been removed; Go, Rust, Python, and other existing language integrations remain available. Upstream releases through **v0.5.0** have been merged in order with their original history preserved. Useful Git, run, search, save-protection, and HTML/SVG preview improvements are adapted to the native macOS architecture. Windows, Java ecosystem/framework increments, Linux.do, and the Monaco editor migration remain excluded. See the [integration and acceptance record](./docs/architecture/ai-ide-phase-one.md).
 
 The Lithe application typically uses about **300–400 MB of baseline memory** after opening a regular project. Language servers, terminals, build tools, debuggers, and database helpers start on demand. Actual usage varies with the project and active services.
 
 > **AI writes the code. Lithe helps you understand it, run it, and review it.**
+
+## Current focus
+
+- **Native macOS editing:** Keep SwiftUI/AppKit and `NSTextView`, native project windows, terminal ownership, and existing Go/Rust/Python integrations. Prioritize correct editing and predictable resource use.
+- **Safe changes across files:** Preserve document freshness checks, mutation leases, selected-file/occurrence exclusions, shared Undo/Redo, and disk compensation across search replacement and language actions.
+- **Language tooling and daily workflows:** Build on existing LSP navigation, rename, formatting, code actions, Go Tools/Cargo, Git review, and run/debug support. Rich completion and language hints remain unfinished.
+- **An explicit handoff point:** Product code is at `40c08360`. The first B6a2 ordered text-edit slice has historical Rust/Swift automated validation, but its installed-app/UI acceptance is pending. Earlier native-editor acceptance is recorded separately; it does not certify this latest slice.
+
+The [workbench plan](./docs/architecture/goland-parity-implementation.md), [refactoring status](./docs/architecture/goland-parity-b6-refactor.md#b6-current-implementation-rulings), and [language plan](./docs/architecture/syntax-and-completion.md) retain the detailed scope and evidence. Historical results are not a fresh validation of this documentation checkpoint.
+
+## Future TODO
+
+All items below remain open. If development resumes, recheck the current source and dependencies before choosing a batch.
+
+- [ ] **Close the latest acceptance gap:** Build and install the B6a2 text-edit slice; exercise rename, formatting, code actions, completion and Undo/Redo in the installed app, including real `codeAction/resolve` behavior. [B6](./docs/architecture/goland-parity-b6-refactor.md#b6-current-implementation-rulings)
+- [ ] **Finish semantic editing and refactoring:** Add the remaining prepare-rename, selection/symbol and selected-range code-action paths; finish server-initiated `workspace/applyEdit`, resource transactions, preview/conflict handling and Refactor This. Reuse the existing transaction and Undo owners. [B6](./docs/architecture/goland-parity-b6-refactor.md)
+- [ ] **Connect LSP features to the editor:** Parameter help, inlay hints, semantic tokens, symbol highlights, and Structure/breadcrumbs. L4a does not depend on the syntax engine; its design and placement still need review. [L4a](./docs/architecture/syntax-and-completion.md#l4a-split)
+- [ ] **Build the syntax and completion engine:** Incremental document state, offline Go/Rust/Python highlighting, automatic completion with filtering, documentation and snippets, then offline symbols/folding. Follow the B6b2 → L0/L1 dependencies and L2/L3/L4b plans. [L0–L2](./docs/architecture/syntax-l0-l2-engine.md)
+- [ ] **Complete workbench gaps:** Unified Find/Replace and recent items, remaining runnable-gutter interactions, a TODO tool window, and final Git graph comparison. Project/Commit/PR work remains deferred. [Workbench plan](./docs/architecture/goland-parity-implementation.md)
+- [ ] **Extend language packages and formatting:** Grammar/query resources, package install/upgrade/rollback, common file formats, formatting transactions and format-on-save. [L5–L8](./docs/architecture/syntax-and-completion.md)
+- [ ] **Review additional editor features:** A cross-language Problems panel, multiple cursors/column selection, call/type hierarchies, bookmarks and coverage. E1 is a recorded gap list, not an approved implementation plan. [E1](./docs/architecture/goland-parity-implementation.md#e1-editor-navigation-gaps)
 
 ## Core features
 
@@ -69,7 +94,7 @@ The Lithe application typically uses about **300–400 MB of baseline memory** a
 15. Per-language service switches so language servers can be enabled or disabled independently to match the machine's resources.
 16. Multi-line editor tabs for keeping more files visible in the same workspace.
 17. Database connection workspace with multiple database types, connection management, SQL history, table browsing, and database operations.
-18. Ongoing bug fixes and user experience improvements.
+18. Native editor and workflow fixes preserved in this fork; further iteration is paused as noted above.
 
 ## Product tour
 
@@ -165,6 +190,7 @@ flowchart LR
     MacApp -->|"JSON C ABI"| Core
 ```
 
+<a id="develop-lithe"></a>
 <details>
 <summary><strong>Develop Lithe</strong></summary>
 

@@ -9,6 +9,9 @@
 修改公共决策时同步两文，不保留相互冲突的规则。
 
 L3–L8 后续细案仍需逐批细化和审查，本轮不宣称这些批次已经有独立细案或已经交付。
+2026-09-21 [体验对齐复核](goland-parity-implementation.md#experience-parity-review-2026-09-21)
+把原 L4 拆为 L4a（LSP 直通能力，不依赖本文交付物）与 L4b（消费文档 Tree 与 query 槽位），
+见 [拆分依据](syntax-and-completion.md#l4a-split)。本文 L0–L2 的范围、依赖与验收门槛不变。
 
 ## 1. 交付范围
 
@@ -18,12 +21,14 @@ L3–L8 后续细案仍需逐批细化和审查，本轮不宣称这些批次已
 | syntax v1、accepted/parsed 双版本、增量 ledger、坐标、缓存与预算 | L1 |
 | Go / Rust / Python grammar/query、离线高亮与主题投影 | L2 |
 | 自动 popup、文档/排序/snippet 会话 | L3，后续 |
-| locals/outline、Structure/hover/signature、semantic tokens | L4，后续 |
+| LSP 直通的 signature/inlay/semantic tokens、documentSymbol→Structure、documentHighlight | L4a，不依赖本文交付物 |
+| locals/outline 与离线 hover/symbols/folding | L4b，后续 |
 | 安装资源包、常规格式、新 grammar worker、语法编辑行为 | L5–L8，后续 |
 
 L2 的可观察终点：不启动语言服务器，Go/Rust/Python 打开即有语法着色，连续编辑不会留下旧色，
 切主题不重新解析。补全界面仍为现有手动 NSMenu；L0 会修其回调、身份及接受路径，
-不把“不更换外观”理解为禁止接线改动。完整 GoLand 风格补全体验仍由 L3/L4 交付。
+不把“不更换外观”理解为禁止接线改动。完整 GoLand 风格补全体验仍由 L3 交付；参数提示、
+类型提示与 Structure 由 L4a 独立交付，不排在本文三批之后，其余语法产物消费留 L4b。
 
 ## 2. 现状与可复用边界
 
@@ -212,7 +217,7 @@ L2 仅支持列出的 text predicates，拒绝所有 general/property predicates
 
 内部资源身份先按 [ResolvedSyntaxResourcesV1](syntax-and-completion.md#resolved-syntax-resources)
 固定；缓存键为 (resourceRevision, queryKind)，八槽位从 L1 起明确，L2 只消费 highlights。
-L4 消费 locals/outline，L5 才发布安装 schema；不同 owner/grammar 内容的相同包内版本不会共用缓存。
+L4b 消费 locals/outline，L5 才发布安装 schema；不同 owner/grammar 内容的相同包内版本不会共用缓存。
 资源的 content digest 与启用 epoch 分离，禁用/回滚隔离旧结果。
 
 ### 6.2 逐文件与投影
@@ -346,7 +351,8 @@ Go/Rust/Python 分别对照 GoLand/RustRover/PyCharm，性能同时记录。
 | --- | --- |
 | B6 | L0 依赖 B6b2，复用事务快路径/Undo；L1 接同一文档变更事件，不另建计数器/事务 |
 | B7b | L2c 编辑器接线串行；L8 runnables 接其 DocumentRunnableProviding，不重做 gutter |
-| L4 | 复用文档 Tree/cache，locals/outline 槽位有明确归属 |
+| L4b | 复用文档 Tree/cache，locals/outline 槽位有明确归属 |
+| L4a | 不依赖本文交付物，仅扩展 `client.rs` 方法白名单与编辑器装饰；与 L2c 共改 `CodeEditorView.swift`，两批串行 |
 | B5/L5 | 八槽位及内部资源 identity 已定；manifest v2/资源 schema 1 实施时适配，旧 v1 仍显式兼容 |
 | L6 | 注入/常规格式/formatter 各有真实语料，配置 adapter 不因“全 Tree-sitter”删除 |
 | L7 | 新 grammar 进独立受信任 worker；复用 syntax 身份、context/cancel/retry 和 conformance，不复制运行时 |
@@ -374,7 +380,7 @@ StyLua、授权/升级/禁用/卸载与进程清理。
 | R5 / P1 | port 位于可执行 target，模块不可依赖；执行器/生命周期缺项 | §5.3：CoreContracts port、平台 adapter/注入、独立受限 executor、统一文档事件与双视图/休眠/关闭所有权 |
 | R6 / P1 | add-only Java 投影不能清空结果颜色，旧 adapter 会双重绘制 | §6.2/§6.3：snapshot coveredRanges、foreground 所有权、完整身份、唯一来源/IME；§8.3 清色/主题/装饰共存 |
 | R7 / P2 | Query::new 接受未知 predicates/properties，编译不能证明语义 | §6.1：固定 text 白名单、拒绝 general/property、负例与语料；[总方案资源准入](syntax-and-completion.md#syntax-query-validation) |
-| R8 / P2 | revision 无包命名空间，outline 在槽位清单缺失 | §6.1/§9：owner/grammar/content digest、八槽位与 L4 outline、启用 epoch、新 generation、回滚隔离；[资源身份](syntax-and-completion.md#resolved-syntax-resources) |
+| R8 / P2 | revision 无包命名空间，outline 在槽位清单缺失 | §6.1/§9：owner/grammar/content digest、八槽位与 L4b outline、启用 epoch、新 generation、回滚隔离；[资源身份](syntax-and-completion.md#resolved-syntax-resources) |
 | R9 / P2 | 未要求 syntax timing，取消了 L1c 原生验收，原型无 grammar | §5.1/§5.4/§7/§8：Java 原型、Rust/Swift HTML/JUnit、gate deadline/清理、真实 Core、L1c 输入/Undo/IME 验收 |
 
 复核仍以当前源码的缺口为依据：

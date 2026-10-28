@@ -22,7 +22,7 @@
 不在本文范围：
 
 - 运行入口 gutter 与右键配置 → [B7b 运行入口](goland-parity-b7b-run-gutter.md)。
-- Structure / TODO 工具窗口 → 依赖 L4，另批。
+- Structure / TODO 工具窗口 → 在线路径依赖 L4a、离线回退依赖 L4b，另批。
 - Go 语义重构 → [B6](goland-parity-b6-refactor.md)。
 - 实际格式化写回（`gofmt -w` 类）→ 依赖 B6b1 的编辑事务；本批只做**格式检查**并明确标注
   「检查，非格式化」，不得把检查结果标成格式化已交付。

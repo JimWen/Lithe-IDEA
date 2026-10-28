@@ -1,8 +1,12 @@
 # GoLand 工作台与可扩展语言能力实施方案
 
+**2026-10-28 暂停说明：** 按用户要求暂缓本 fork 的后续迭代，保留当前源码、既有验收记录和未完成方案。产品源码基线为 `40c08360`；下方优先级与依赖作为恢复开发时的参考，不表示正在实施或已承诺排期。B6a2 首个文本切片仍待安装与实机验收，其他未完成范围不因本次归档而标记完成。恢复入口见 [README 当前重点与 TODO](../../README.zh-CN.md#后续-todo)。
+
 状态：B1 命令入口、B3a 搜索正确性、B3b1a Unicode 修复和 B4a0–B4a6 Terminal
 已完成。Project 按用户 2026-09-06 要求暂停。B7a1、B7a2a/b/c1 已完成；
-Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已完成（B7a2c2）；其余功能按第 6 节状态表继续推进。
+Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已完成（B7a2c2）；其余功能保留在第 6 节状态表，恢复迭代后再复核推进。
+2026-09-21 按 GoLand / RustRover / PyCharm 完成一次跨批次体验对齐复核，结论、新增缺口与
+优先级调整见 [体验对齐复核](#experience-parity-review-2026-09-21)；该复核未改变任何批次的实现状态。
 基线 `c09f2cc4`，目标分支 `dev/aiide`。总体方案复核见
 [审查记录](#plan-review)。
 
@@ -18,8 +22,8 @@ Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已
 | --- | --- | --- |
 | B1 | [菜单、命令与工具窗口](goland-parity-b1-commands-done.md) | 已完成 |
 | B2 | [Project](goland-parity-b2-project.md) | 暂停；Commit / PR 范围见本总方案 |
-| B3 | [搜索与替换](goland-parity-b3-search.md) | B3a 完成，其他待实施 |
-| B3b | [替换事务](goland-parity-b3b-replacement.md) | B3b1a 完成；B3b1 与 occurrence 选择有未提交实现，审查尚不放行；事务/Undo 依赖 B6b1/B6b2，见[提交前审查](goland-parity-b3b-replacement.md#b3b-uncommitted-review) |
+| B3 | [搜索与替换](goland-parity-b3-search.md) | B3a、B3b1a 完成；B3b 当前事务已接入，B3c/B3d 待实施 |
+| B3b | [替换事务](goland-parity-b3b-replacement.md) | 显式范围、实际 Apply、文件/occurrence 排除、缓冲区/磁盘事务、租约及共享 Undo/Redo 已接入；历史未提交审查不能代替[当前事务实施记录](goland-parity-b3b-replacement.md#buffer-transaction-integration) |
 | B4a | [Terminal 设置与生命周期](goland-parity-b4a-terminal-done.md) | 已完成 |
 | B4a4 | [Terminal 启动配置](goland-parity-b4a4-terminal-startup-done.md) | 已完成 |
 | B4a5 | [Terminal 显示与输入](goland-parity-b4a5-terminal-display-done.md) | 已完成 |
@@ -33,6 +37,8 @@ Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已
 | B7a3 | [Go Tools 工具窗口与独立工具任务](goland-parity-b7a3-go-tools-done.md) | 已完成：自动回归、真实编辑/运行/点击和 G/R 深浅色截图通过 |
 | B7b | [运行入口 gutter 与右键配置](goland-parity-b7b-run-gutter.md) | 剩余协议/交互方案待重审；保留已有 Go/Rust runnable gutter；前置为 B6a2 符号协议预交付 |
 | L0–L2 | [语法引擎、增量协议与三语言高亮](syntax-l0-l2-engine.md) | 2026-09-08 第二版方案复核通过，首轮 9 项闭环；未实施；L0 硬前置 B6b2 |
+| L4a | [LSP 直通能力（signature / inlay / semantic tokens / Structure）](syntax-and-completion.md#l4a-split) | 2026-09-21 复核从原 L4 拆出并提到 P0；细案待写、未实施；不依赖 L1/L2 |
+| E1 | [编辑器与导航基础能力](#e1-editor-navigation-gaps) | 2026-09-21 复核新识别；批次号待用户确认，方案未写、未实施 |
 
 B4 其他设置、B5 资源插件和 G1 Git 对照范围见本文；语言引擎以
 [L0–L8 分批方案](syntax-and-completion.md) 为准。
@@ -63,7 +69,7 @@ B4 其他设置、B5 资源插件和 G1 Git 对照范围见本文；语言引擎
 | 用户要求 | 当前缺口 | 完成批次 | 必需证明 |
 | --- | --- | --- | --- |
 | 1 左栏提示与快捷键 | 多数 help 只有标题，部分动作未注册命令 | B1、B4 | 鼠标提示显示实际生效键位；改键后提示、菜单和执行同步 |
-| 2 Project/Commit/Pull/Structure/TODO | Project 假下拉；Commit 命名不一致；PR 全局关闭；Structure/TODO 缺失 | B2、B7、L4 | 每个工具能打开/关闭、保留状态、真实导航或完成动作；各自菜单验收 |
+| 2 Project/Commit/Pull/Structure/TODO | Project 假下拉；Commit 命名不一致；PR 全局关闭；Structure/TODO 缺失 | B2、B7、L4a/L4b | 每个工具能打开/关闭、保留状态、真实导航或完成动作；各自菜单验收 |
 | 3 最近项目菜单 | 实测自动消失 | B1 | 后台状态更新时稳定展开，鼠标和键盘可选，同名/失效/多项目正确 |
 | 4 View 菜单 | Tool Windows 在 Window 内，View 缺少已有能力入口 | B1、B4 | 可执行工具窗、编辑器显示与布局操作；菜单状态随真实设置同步 |
 | 5 双 Shift / Find / Replace | 空搜索最近项缺失；scope 与未保存文本不一致；查找/替换分离 | B3 | 键盘、IME、最近项、搜索域、预览和替换/撤销完整工作 |
@@ -75,6 +81,16 @@ B4 其他设置、B5 资源插件和 G1 Git 对照范围见本文；语言引擎
 | 语言 1 Tree-sitter 编辑/高亮/补全/推荐 | Java 专属语法路径、正则兜底、补全菜单 | L0–L6 | 增量与全量一致、可见区高亮、完整补全/提示交互、LSP 语义能力 |
 | 语言 2 插件语言与常规格式 | manifest 缺语法资源；任意新 grammar 不能仅加 JSON | B5、L2、L7 | 安装宿主未内置语言的插件，真实高亮/格式化/补全，禁用/升级/卸载正确 |
 | 补充 底部 Git / 分支图 | c09f2cc4 有首轮样式，尚需完成后的 GoLand 复验 | G1 | 相同仓库与窗口尺寸下打开/选中/筛选/滚动/缩放对照；线条简洁且拓扑不断裂 |
+| 复核 参数提示与类型提示 | `signatureHelp` 全库无实现；`.inlayHint` 仅在 `LanguageToolingContracts.swift` 有能力位，无请求方与消费者 | L4a | 三语言函数调用出现参数提示并随光标切换；Rust/Python 类型提示、Go 参数名提示随输入更新且可关闭 |
+| 复核 Structure 与面包屑 | 无 `documentSymbol` 消费者，无 Structure 工具窗口与编辑器面包屑 | L4a（LSP）/ L4b（离线回退） | 三语言 Structure 打开、过滤、点击定位；停掉语言服务器仍可用离线结果 |
+| 复核 光标符号高亮 | `documentHighlight` 无实现 | L4a | 光标停在标识符上高亮同文件读/写出现点，移开清除，不与查找高亮互相覆盖 |
+| 复核 语言动作键位与内联 UI | 语言动作仅在右键菜单注册（`CodeEditorView.swift:4165`）；Rename 走 `NSAlert`（同文件 `:4205`） | B1（键位注册）/ B6（内联 Rename） | JB 默认键位可直接触发跳转/用法/重命名/格式化/code actions；Rename 为编辑器内联，一次 Undo |
+| 复核 统一 Problems 面板 | 仅 Java 专属 `JavaProblemsView.swift`，`Views/Diagnostics/` 只有导出 sheet | E1 | 跨语言聚合 LSP 诊断与项目级 lint 输出，可跳转、可过滤、可取消 |
+| 复核 保存即格式化 | 仅菜单 `Format Document`；无 `formatOnSave`、无 `onTypeFormatting` | B4（设置项）/ L6（格式化事务） | 按语言开关生效，保存路径与手动格式化共用同一事务与 Undo |
+| 复核 编辑器基础操作 | 无多光标/列选择；展开选区已属 L8 `brackets` | E1（多光标）/ L8（展开选区） | 多光标与列选择在 IME、撤销、查找替换下行为正确 |
+| 复核 调用/类型层级 | 无 `prepareCallHierarchy` / `prepareTypeHierarchy` 消费者 | E1 | 三语言调用层级可展开上下游并跳转，取消与过期结果不串档 |
+| 复核 最近文件与书签 | 无 Recent Files / Recent Locations；无书签；`NavigationHistoryFeatureModel.swift` 仅 109 行做前进后退 | B3（最近文件）/ E1（书签） | Cmd+E 列出最近文件并键盘选择；书签可增删、持久化、跨会话恢复 |
+| 复核 测试覆盖率 | 全库无 coverage 实现 | E1 | `go test -cover` / `cargo-llvm-cov` / `coverage.py` 结果在行号槽着色并可汇总 |
 
 “Pull”暂按 GoLand 左侧 **Pull Requests** 工具窗口理解，已向用户发出澄清；Git Pull 保留独立操作，不将两个概念混为一个按钮。
 
@@ -124,7 +140,7 @@ Commands 观察稳定、可等值比较的命令状态，不订阅整个 AppMode
 - Commit 统一目的地名称和图标，匹配 GoLand 当前 staging 设置；补齐 changelist/default list、文件包含/排除、amend、提交消息、diff 和失败状态。staging 与 changelist 的映射必须显式，不能用重命名 Changes 掩盖行为差异。
 - Pull Requests 接入现有 GitHub 模块，先修凭据存储、签名策略与认证/网络错误，再开放入口；列表、筛选、详情、文件 diff、讨论/review、checkout 与已有 merge 操作逐项验收。账户缺失显示登录入口，不能显示空白“成功”。
 - 外部发表评论、review、merge 等验收使用协议 fixture 和明确授权的测试仓库；用户这次要求实现功能不等于授权向其真实仓库发送消息。
-- TODO 的可交付版本放 B7/L4，不能先增加无实际内容的占位按钮。
+- TODO 的可交付版本放 B7/L4a（在线）与 L4b（离线回退），不能先增加无实际内容的占位按钮。
 
 ### B3：Search Everywhere 与统一 Find/Replace
 
@@ -191,7 +207,7 @@ Go 覆盖任意文件名的 package main/main、tests/examples/benchmarks、buil
 gutter 根据真实行坐标与折叠/换行布局绘制；鼠标点击和右键提供 Run、Debug、Edit Configuration；args/env/cwd/工具链选择保存到已有 project/local override，不在 View 拼进程参数。
 配置编辑器只保存用户确认的变更，临时运行与持久化配置分开；切项目或 detector 返回过期版本不能更新另一窗口的图标/目标。
 
-Structure 优先 LSP document symbols，离线使用 L4 语法结构；提供嵌套树、图标、可见性/继承等 provider 有效筛选、排序、speed search、定位编辑器和状态保持。
+Structure 优先 LSP document symbols（L4a），离线使用 L4b 语法结构；提供嵌套树、图标、可见性/继承等 provider 有效筛选、排序、speed search、定位编辑器和状态保持。
 TODO 复用工作区遍历与语言注释捕获，支持 TODO/FIXME 自定义 pattern、Project/Current File scope、分组、计数、上下文预览与导航，遵守 ignore；不得扫描二进制或把字符串中偶然的 TODO 当注释任务。
 
 Go Tools 与 Cargo 通过现有 rightSidebar contribution 注册，按 workspace 能力出现、固定位置、可隐藏/恢复；所有执行通过 Execution 模块。
@@ -203,6 +219,26 @@ Go 核心 build/test/fmt/vet/mod 与工具链/包信息；Cargo 核心 build/tes
 以 [syntax-and-completion.md](syntax-and-completion.md) 的独立批次为准：离线语法与 LSP 两层、共享增量树、角色映射、语法结构、完整补全 popup/snippet/参数提示、格式化以及插件 worker。
 B5 的资源注册与 L7 共用 manifest；B6 的语义编辑事务与 LSP UI 共用；B7 的 Structure、runnable 与 TODO 复用语法/LSP 产物。
 最终必须安装一个宿主未内置 grammar 的语言包并获得真实高亮/导航/补全与格式化，不能把重新编译宿主当作插件安装。
+
+2026-09-21 复核后，原 L4 拆为 L4a 与 L4b（[拆分依据](syntax-and-completion.md#l4a-split)）。
+L4a 只扩展 `rust/lithe-core/src/lsp/interface/client.rs` 的方法白名单与编辑器装饰，
+交付 `signatureHelp`、`inlayHint`、`semanticTokens`、`documentSymbol`→Structure/面包屑、
+`documentHighlight`，不依赖 L1/L2 的文档 Tree，因此不排在语法引擎之后。
+L4b 保留 locals/outline 与离线 hover/symbols/folding，依赖 L1/L2 不变。
+B7 的 Structure/TODO 依赖目标随之由 L4 收窄为 L4a（在线）与 L4b（离线回退）。
+L3 的依赖不变，仍硬依赖 L0/L1，不因 L4a 提前而可以脱离 L1 交付。
+
+<a id="e1-editor-navigation-gaps"></a>
+
+### E1：编辑器与导航基础能力（批次号待确认）
+
+2026-09-21 复核新识别、且现有 B1–B7 与 L0–L8 均未覆盖的缺口，暂以 E1 归拢：
+统一 Problems 工具窗口、多光标与列选择、调用/类型层级、书签、测试覆盖率。
+这些项彼此独立，可各自拆分提交，但都不属于语言引擎范围，不应塞进 L 系列批次。
+
+本节只记录范围与现状证据，**不构成已批准的方案**：批次编号、拆分粒度与排期需用户确认后
+再写细案并走既有的方案审查流程。其中多光标与列选择在当前 `NSTextView` 单选区模型下成本最高，
+需先评估是否与 L0/L1 的编辑事务、IME 策略和 Undo 合并冲突，不得以破坏既有 IME 与 Undo 行为为代价交付。
 
 ### G1：底部 Git 与分支图最终对照
 
@@ -224,14 +260,18 @@ B5 的资源注册与 L7 共用 manifest；B6 的语义编辑事务与 LSP UI �
 ② Go 执行      B7a3 已完成并安装（211395cc，后续 B6a1a 安装继续包含）
 ③ 运行入口     B6a2 符号协议预交付 → B7b 方案重审 → B7b1 → B7b2 → B7b3
 后续语言引擎   B6b2 → L0 → L1a → L1b → L1c → L2a → L2b → L2c（方案通过、未实施）
+④ LSP 直通     L4a 细案 → L4a（不依赖 L1/L2，可与语言引擎并行排期）
 ```
 
 B6c/B6d 和 L0–L8 保留各自完整计划；不将它们全部列为这三个目标的新增硬前置。
-B7b1 的 Rust `experimental/runnables` 与 B6a2 共改 `client.rs` 的方法白名单，两批串行。
+B7b1 的 Rust `experimental/runnables`、B6a2 与 L4a 共改 `client.rs` 的方法白名单，三批串行。
 L0 与 L1 共改 dispatcher、Swift bridge、契约和文档事件，默认串行；L0 复用 B6b2 的事务/Undo。
-L2c 与 B7b2 都改 `CodeEditorView.swift`，也需串行。[L0–L2 审查项](syntax-l0-l2-engine.md#l0-l2-plan-review)
+L2c、B7b2 与 L4a 都改 `CodeEditorView.swift`，也需串行；L4a 的行内 hint 复用已有 code vision
+装饰通道，不新增第二条绘制路径。L4a 虽不依赖 L1/L2 的交付物，但受上述两处文件交叠约束，
+排期时按拥有文件串行，不与 L2c 或 B7b 并发实施。[L0–L2 审查项](syntax-l0-l2-engine.md#l0-l2-plan-review)
 已在方案层闭环，实际实现仍按其分批验证门槛推进。
-Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/L7；不能以依赖尚未实现为理由永久缩减目标。
+Structure/TODO 在线路径依赖 L4a、离线回退依赖 L4b，语义重构依赖 B6/LSP，资源语言包依赖 B5/L7；不能以依赖尚未实现为理由永久缩减目标。
+E1 的五项尚未确定批次编号与排期，不得在未经用户确认前当作已排期工作推进。
 源文件交叠时不得并发修改；多个 agent 可审查独立方案，实施阶段按拥有文件划分。
 
 每批提交前：
@@ -246,14 +286,16 @@ Structure/TODO 依赖 L4，语义重构依赖 B6/LSP，资源语言包依赖 B5/
 | --- | --- | --- | --- | --- | --- | --- |
 | B1 | 方案复核通过 | B1a/B1b/B1c 完成，跳过 | 976 项测试、边界、ARM64 包通过 | 最近项稳定并可选；工具窗、改键及提示、主题、标签、设置入口通过 | 通过 | `8b8f21be`、`cb892c85` |
 | B2 | 设计基线复核通过，逐批细化 | Project 按用户要求暂停；其他待实施 | — | — | — | — |
-| B3 | B3a、B3b1a 通过；其余逐批细化 | B3a、Unicode matcher/候选修复完成；B3b1/occurrence 未提交实现待修，事务与 B3c/B3d 待实施 | B3b1a 历史：Rust 331、Swift 985、原生链接 7 项及 ARM64 包通过；B3b1 阶段测试见功能文档 | 输入/键盘和 Find 预览已验收；Unicode 查找与替换预览通过；新 scope/Apply 未验收 | B3a、B3b1a 通过；B3b1 尚不放行 | B3a `010d4d57`；B3b1a `b0dac7e2`，构建依赖 `00a9f9c1`；[未提交实现审查](goland-parity-b3b-replacement.md#b3b-uncommitted-review) |
+| B3 | B3a、B3b1a 通过；其余逐批细化 | B3b 范围、预览、Apply、排除与文本事务/Undo 已接入；B3c/B3d 待实施 | B3b1a 历史：Rust 331、Swift 985、原生链接 7 项及 ARM64 包通过；后续事务回归见功能文档 | 输入/键盘、Find 预览与 Unicode 已验收；后续安装版实际替换、排除与撤销见[集成验收](ai-ide-phase-one.md) | 历史未提交审查保留；当前范围以[事务记录](goland-parity-b3b-replacement.md#buffer-transaction-integration)为准 | B3a `010d4d57`；B3b1a `b0dac7e2`；后续集成与原生 Undo 修复见当前记录 |
 | B4 | B4a0–B4a6 通过 | Terminal 启动、显示/输入、venv 完成；其他设置待实施 | 1032 项完整测试、42+3 个 shell 场景、边界、ARM64 包通过 | 真实设置、Python prefix、Restart、环境缺失/恢复、迟到确认焦点及清理通过 | B4a0–B4a6 通过 | 启动 `db44d036`；字体 `4f74218a`；输入 `266c0c52`；venv `3724ea20` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
-| B6 | 第四版前置修订；B6a1a 代码复核通过，其余逐批审查 | B6a1a 能力纠正与插件 LSP 配置接线完成 | Rust 368；Swift 工作区 1181、独立候选 1173；边界/契约/stability 通过 | gopls 首次发现、停启、Rename、Organize Imports、Go Test 通过 | B6a1a 通过，其余未实施 | [B6a1a 验收摘要](goland-parity-b6-refactor.md#b6a1a-acceptance)；`94af8e89` 已替换系统安装，安装版 Rename 与编辑产物 Go Test 复验通过 |
+| B6 | B6a1a 通过；后续依 2026-10-06 修订 | B6a2 首个有序文本编辑切片已实现；其余方法、反向请求、资源事务与重构待实施 | 历史：B6a2 Rust 523、Swift 1574 项通过；Rust Core/bridge、边界/契约/stability 通过 | B6a1a 已验收；B6a2 文本切片安装与实机验收仍待完成 | 首个文本切片静态复核无剩余阻断项；不代表 B6a2 整体完成 | `40c08360`；[当前裁定与验证记录](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
 | B7 | B7a1/B7a2a–b/c1 通过；其余按子方案推进 | Cargo 只读刷新与右栏、双击运行和缺配置生成续跑已实现；Go Tools 与独立任务已完成（见 B7a3）；gutter/Structure/TODO 待实施 | 2026-09-08：Rust 354、Swift 1124、边界/契约/stability 通过 | Cargo 12 种真实对照运行；GUI 切换/刷新恢复/12 文件零写入通过；ARM64 已替换系统安装并复验 | c2 独立代码审查及修复复核通过 | 基线 `3d97c080`，本轮修复与验收记录一同提交；[Cargo 验收摘要](goland-parity-b7a2c2-cargo-tool-window-done.md#cargo-acceptance) |
 | B7a3 | 方案与代码复核通过 | Go 元数据隔离、工具窗口、独立任务和 G/R 图标完成 | Swift 1176 全量及最终 27+18 项回归、Rust/边界/契约/stability 通过 | 实际编辑修复、并发停止隔离、零写刷新、Go/Cargo 菜单运行及深浅色图标通过 | 通过 | [Go Tools 验收摘要](goland-parity-b7a3-go-tools-done.md#go-tools-acceptance)；`211395cc` 干净检出 1168 项通过，系统安装与 Go/Cargo 点击复验通过 |
 | B7b | 剩余细案待重审（[运行入口 gutter](goland-parity-b7b-run-gutter.md)），前置 B6a2 符号协议预交付 | 已有 Go/Rust runnable gutter 保留；剩余范围待实施 | 原有验证见上游集成记录；本批无新结果 | 本批待复验 | 待实施后审查 | — |
 | L0–L8 | 2026-09-08 L0–L2 第二版方案通过（[首轮 9 项闭环](syntax-l0-l2-engine.md#l0-l2-plan-review)），L3–L8 逐批细化 | 未开始 | 历史方案检查：79 处本地链接/锚点、5 个 wire 示例、八槽位、命令语法与 diff 通过；无产品测试 | 11.png 已核对（历史）；本轮无 GUI | 未开始 | 源码基线 `e14309d4`，历史文档验证 HEAD `7e0887a1`；细案与待实现 wire 同步保留 |
+| L4a | 2026-09-21 复核确认可独立于 L1/L2 交付；细案未写、未审查 | 未开始 | 未开始 | 未开始 | 未开始 | — |
+| E1 | 范围与现状证据已记录，批次号与排期待用户确认；方案未写 | 未开始 | 未开始 | 未开始 | 未开始 | — |
 | G1 | 设计基线复核通过 | 已有首轮基线 | 待最终复验 | 待 GoLand 对照 | 未开始 | — |
 
 整体完成需要上表每一项的证据，不能用 B1 或局部测试替代完整目标。
@@ -290,3 +332,84 @@ B6a1a 已交付，其余逐批审查，见 [B6 当前状态](goland-parity-b6-re
 B1 还须区分可唤醒的 Git / Commit 入口与要求 ready repository 的 Git 写操作，
 避免因模块休眠将入口永久置灰。后续各批仍执行本文规定的接口审查、实现、测试、
 真实点击与独立代码审查；不因总体方案曾复核通过而自动放行新的细案。
+
+<a id="experience-parity-review-2026-09-21"></a>
+
+## 2026-09-21 体验对齐复核
+
+按用户要求，对照 GoLand / RustRover / PyCharm 对当前实现做一次跨批次体验核查，
+产出优先级结论与新增缺口。
+
+**方法与效力边界**：本次复核是**源码静态核查**，基线 `5f9325be`，范围为
+`macos/Sources`（568 个 Swift 文件 / 143,396 行）、`rust/lithe-core` 与 `Plugins/mac`。
+未构建、未运行产品，未做 GUI 对照，也未打开参考 IDE 重新取证；第 2 节记录的 GoLand
+2025.2.4 与 RustRover 2026.2.1 证据仍是历史结论。本节**不是任何批次的实现、代码审查
+或运行验收**，只更新范围与优先级判断。
+
+### 1. 已具备、不再列为缺口的能力
+
+避免后续批次重复投入，以下经核查确认已有实质实现：
+
+| 能力 | 证据 |
+| --- | --- |
+| 调试 | `LitheDebugModule` 约 7,800 行；DAP 覆盖 `setBreakpoints`、`setFunctionBreakpoints`、`setExceptionBreakpoints`、`setDataBreakpoints`、`evaluate`、`setVariable`、`exceptionInfo`、`gotoTargets` |
+| LSP 客户端底座 | `rust/lithe-core/src/lsp/interface/client.rs` 已支持 completion、hover、definition/declaration/implementation/typeDefinition、references、codeAction、rename、formatting、codeLens、foldingRange、`workspace/symbol` |
+| 符号重命名 | `AppModel+Development.swift:2050` 走 LSP `rename`，非仅文件改名 |
+| 代码折叠 | `CodeEditorView.swift` 的 `toggleFold` / `updateFoldRegions` / `collapsedFoldSummaryMaxX` |
+| Search Everywhere | `SearchEverywhereView.swift:5` 已分 All / Classes / Files / Symbols / Actions / Text |
+| 编辑器装饰 | 诊断、断点、runnable marker、Git 行内变更、code vision 与 blame 均已接入 |
+| Run / Test | `RunService.swift`（1,246 行）、`LanguageTestService.swift`、Cargo 与 Go 专属工具窗口 |
+
+### 2. Top 10 优先级结论
+
+排序依据为「日常使用频次 × 体验落差 ÷ 实现成本」。批次列中带「待确认」的项见
+[E1](#e1-editor-navigation-gaps)。
+
+| # | 项目 | 关键证据 | 批次 | 成本 |
+| --- | --- | --- | --- | --- |
+| 1 | 补全交互重做 | `CodeEditorView.swift:4226` 一次性弹最多 200 条 `NSMenu`，无自动触发、无增量过滤、无排序、无文档面板 | L0 + L3 | 高 |
+| 2 | Inlay Hints | `.inlayHint` 仅有能力位定义，无请求方与消费者 | L4a | 低 |
+| 3 | Signature Help | 全库无实现 | L4a | 低 |
+| 4 | 三语言语义高亮 | Go/Rust/Python 均落到 `GenericSyntaxHighlightingAdapter` 的通用正则 | L1 + L2 | 高 |
+| 5 | Structure 面板与面包屑 | 无 `documentSymbol` 消费者 | L4a / L4b | 中 |
+| 6 | 键位与内联 UI | 语言动作仅在右键菜单注册（`CodeEditorView.swift:4165`）；Rename 走 `NSAlert`（`:4205`） | B1 / B6 | 低 |
+| 7 | 重构套件 | 仅 rename；缺 extract / inline / change signature / safe delete | B6 | 中 |
+| 8 | Problems 面板与保存即格式化 | 仅 Java 专属 problems view；格式化只有菜单项 | E1（待确认）/ B4 / L6 | 中 |
+| 9 | 光标符号高亮、展开选区、多光标 | 三者均无实现 | L4a / L8 / E1（待确认） | 中 |
+| 10 | 调用层级、最近文件、书签 | 三者均无实现；`NavigationHistoryFeatureModel.swift` 仅 109 行 | E1（待确认）/ B3 | 中 |
+
+候补项（未进 Top 10，已记入第 3 节映射表或 E1）：测试覆盖率、Live Template 与
+Postfix Completion、Python Packages 面板与 Console、`Cargo.toml` 依赖版本内联提示、
+Scratch 文件。
+
+### 3. 核心结论：问题在接线层而非能力层
+
+`client.rs` 已覆盖多数常用 LSP 请求，但这些能力在编辑器里**只有右键菜单一个入口**，
+补全是平铺 `NSMenu`、Rename 是模态 `NSAlert`。GoLand / RustRover / PyCharm 的体验本质是
+「键盘驱动 + 内联 UI + 随输入收窄」，落差主要产生在这一层，而不是缺少后端能力。
+因此第 6 项（键位与内联 UI）成本最低但感知增益最高，应优先于多数新增功能。
+
+### 4. 优先级调整：原 L4 拆分为 L4a / L4b
+
+复核最初的判断是「L3/L4 应整体提到 L1/L2 之前」。核对依赖后**此判断不成立并已修正**：
+`syntax-and-completion.md` 第 8 节明确 L3 硬依赖 L0/L1 的候选身份与 accepted/parsed
+版本保护，且 locals/outline 必须消费 L1 的文档 Tree 与 L2 的 query 资源，两者都不能
+脱离语法引擎提前交付。
+
+实际可提前的只有原 L4 中不依赖文档 Tree 的那一半。据此把原 L4 拆为：
+
+- **L4a / P0**：`signatureHelp`、`inlayHint`、`semanticTokens`、`documentSymbol`→Structure、
+  `documentHighlight`。只扩展 `client.rs` 方法白名单与编辑器装饰，可独立排期。
+- **L4b / P3**：locals/outline 与离线 hover/symbols/folding，依赖 L1/L2 不变。
+
+L0–L3 的内容、依赖与验收门槛**均未改动**。拆分依据与文件交叠约束见
+[L4a 拆分说明](syntax-and-completion.md#l4a-split)；L4a 与 B6a2、B7b1 共改 `client.rs`，
+与 L2c、B7b2 共改 `CodeEditorView.swift`，按拥有文件串行。
+
+### 5. 待用户确认事项
+
+1. E1 的批次编号、拆分粒度与排期（本节只记录范围与证据，未排期）。
+2. L4a 相对于 B6b2 → L0 → L1 主链的插入位置：可在 B6a2 之后立即插入，也可整体后置；
+   两种排法都不改变 L0–L3 的依赖。
+3. 在 L1/L2 落地前，是否先用 L4a 的 `semanticTokens` 作为三语言着色的过渡方案；
+   若采用，需明确它与 L2 投影的切换边界，避免出现第 6.2 节禁止的双重着色路径。
