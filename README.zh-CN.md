@@ -40,7 +40,7 @@
   </p>
 </div>
 
-> **分支状态 · 2026-10-28：** 本 macOS 分支暂缓主动迭代，代码与架构方案保存在 `dev/aiide` 分支。下方 TODO 留作未来恢复开发时的待办，暂不承诺排期。此状态仅适用于本 fork，不代表上游项目的维护状态。
+> **分支状态 · 2026-10-28：** 本分支聚焦轻量 macOS IDE，以 Rust、Go、Python 为主。仅挑选上游有实际收益的修复，不追求版本功能全量同步，不增加成套兼容层和配置入口。较大的功能迭代继续暂缓，下方 TODO 暂无排期，代码保存在 `dev/aiide`。
 
 ## 为什么做 Lithe
 
@@ -48,7 +48,7 @@ Codex、Claude Code 等 AI 编程工具已经可以承担大量编码工作，�
 
 ## Lithe 是什么
 
-本分支保留 Lithe 的 macOS 项目浏览、代码编辑与导航、搜索、运行调试、Git Diff、本地历史和数据库等核心工作流。默认包不包含 JDK/JDTLS、Java Debug/Test；Maven、Spring、Windows 和 Linux.do 集成已移除。Go、Rust、Python 及其他已有语言能力保持现状。已按版本顺序合入上游至 **v0.5.0**，保留原始提交历史，并将适用的 Git、运行、搜索、保存保护和 HTML/SVG 预览改进适配到原生 macOS 架构。继续排除 Windows、Java 生态与框架增量、Linux.do，以及 Monaco 编辑器迁移。详见[集成与验收记录](./docs/architecture/ai-ide-phase-one.md)。
+本分支保留 Lithe 的 macOS 项目浏览、代码编辑与导航、搜索、运行调试、Git Diff、本地历史和数据库等核心工作流。默认包不包含 JDK/JDTLS、Java Debug/Test；Maven、Spring、Windows 和 Linux.do 集成已移除。Go、Rust、Python 及其他已有语言能力保持现状。已按版本顺序合入上游至 **v0.5.0**，保留原始提交历史，并将适用的 Git、运行、搜索、保存保护和 HTML/SVG 预览改进适配到原生 macOS 架构。本次从截至 **v0.6.5** 的上游历史中选择少量输出、Git 与终端修复进行 cherry-pick，不代表完整合入 v0.6.5。继续排除 Windows、Java 生态与框架增量、Linux.do，以及 Monaco 编辑器迁移。详见[集成与验收记录](./docs/architecture/ai-ide-phase-one.md)。
 
 打开普通项目后，Lithe 应用本身的基础内存占用通常约为 **300～400 MB**。语言服务器、终端、构建工具、调试器和数据库组件均按需启动；实际占用会随项目和启用的服务变化。
 
@@ -59,9 +59,9 @@ Codex、Claude Code 等 AI 编程工具已经可以承担大量编码工作，�
 - **原生 macOS 编辑体验：** 保留 SwiftUI/AppKit 与 `NSTextView`、原生项目窗口、终端归属，以及已有 Go/Rust/Python 能力，优先保证编辑正确性和资源占用可控。
 - **跨文件修改安全：** 搜索替换和语言操作沿用文档新鲜度检查、修改租约、文件与匹配项排除、共享 Undo/Redo，以及磁盘失败补偿。
 - **语言能力与日常工作流：** 以现有 LSP 导航、重命名、格式化、代码动作、Go Tools/Cargo、Git 审查和运行调试为基础；完整补全交互与语言提示仍待完善。
-- **明确暂停位置：** 产品代码停在 `40c08360`。B6a2 首个有序文本编辑切片已有 Rust/Swift 自动验证历史记录，但安装与实机验收尚未完成。此前的原生编辑器验收单独记录，不能替代本切片的验收。
+- **小步维护、默认可用：** 优先修复终端中文输出、Git 状态与仓库发现、Control 快捷键和 shell 退出行为；复用现有模块，不新增配置。B6a2 及其他较大方案的剩余验收仍按各自文档跟踪。
 
-详细范围与证据见[工作台总方案](./docs/architecture/goland-parity-implementation.md)、[重构当前状态](./docs/architecture/goland-parity-b6-refactor.md#b6-current-implementation-rulings)和[语言能力方案](./docs/architecture/syntax-and-completion.md)。历史通过记录不代表本次文档收尾重新运行过产品验证。
+详细范围与证据见[工作台总方案](./docs/architecture/goland-parity-implementation.md)、[重构当前状态](./docs/architecture/goland-parity-b6-refactor.md#b6-current-implementation-rulings)和[语言能力方案](./docs/architecture/syntax-and-completion.md)。本次挑选范围与实际验证结果统一记在[集成与验收记录](./docs/architecture/ai-ide-phase-one.md)，与历史结果区分。
 
 ## 后续 TODO
 
@@ -90,11 +90,11 @@ Codex、Claude Code 等 AI 编程工具已经可以承担大量编码工作，�
 11. 支持查看应用的本地内存占用情况。
 12. 支持通过 Homebrew 一键安装和更新。
 13. 支持在应用内一键更新并安装。
-14. 自动识别 Java 源文件、Gradle、npm、Cargo、Go、Python、Make、Docker Compose、Procfile 和 Shell 项目的可运行入口，并支持一键运行。
+14. 自动识别 Rust/Cargo、Go、Python 等项目的可运行入口，也保留 Make、Shell 等已有运行能力。
 15. 支持按语言独立开关语言服务，可根据电脑配置自由启用或停用。
 16. 支持类似 IDEA 的多行编辑器标签，同时展示更多打开的文件。
 17. 新增数据库连接工作台，支持多种数据库类型、连接管理、SQL 历史、表浏览和数据库操作。
-18. 保留本分支已有的原生编辑器与工作流修复；后续迭代按上述状态暂缓。
+18. 按需挑选上游通用修复，保持原生编辑器、轻量包体和简单配置。
 
 ## 产品截图
 

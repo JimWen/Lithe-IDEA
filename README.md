@@ -40,7 +40,7 @@
   </p>
 </div>
 
-> **Fork status — 2026-10-28:** Active development of this macOS fork is paused for now. The code and architecture plans are preserved on the `dev/aiide` branch. The TODO list below is a backlog for a possible return, with no committed schedule. This status applies to this fork, not to the upstream project.
+> **Fork status — 2026-10-28:** This fork focuses on a lightweight macOS IDE for Rust, Go, and Python. Maintenance selectively picks useful upstream fixes without importing entire compatibility stacks or adding settings. Larger feature work remains deferred; the TODO list has no committed schedule. Source is preserved on `dev/aiide`.
 
 ## Why Lithe
 
@@ -48,7 +48,7 @@ Codex, Claude Code, and other AI coding tools can now handle much of the impleme
 
 ## Meet Lithe
 
-This fork keeps Lithe’s macOS workbench for browsing, editing, navigation, search, run and debug, Git diff review, local history, and databases. The default package omits JDK/JDTLS and Java Debug/Test resources. Maven, Spring, Windows, and Linux.do integration have been removed; Go, Rust, Python, and other existing language integrations remain available. Upstream releases through **v0.5.0** have been merged in order with their original history preserved. Useful Git, run, search, save-protection, and HTML/SVG preview improvements are adapted to the native macOS architecture. Windows, Java ecosystem/framework increments, Linux.do, and the Monaco editor migration remain excluded. See the [integration and acceptance record](./docs/architecture/ai-ide-phase-one.md).
+This fork keeps Lithe’s macOS workbench for browsing, editing, navigation, search, run and debug, Git diff review, local history, and databases. The default package omits JDK/JDTLS and Java Debug/Test resources. Maven, Spring, Windows, and Linux.do integration have been removed; Go, Rust, Python, and other existing language integrations remain available. Upstream releases through **v0.5.0** have been merged in order with their original history preserved. Useful Git, run, search, save-protection, and HTML/SVG preview improvements are adapted to the native macOS architecture. This maintenance batch cherry-picks selected output, Git, and terminal fixes from upstream history through **v0.6.5**; it is not a full v0.6.5 integration. Windows, Java ecosystem/framework increments, Linux.do, and the Monaco editor migration remain excluded. See the [integration and acceptance record](./docs/architecture/ai-ide-phase-one.md).
 
 The Lithe application typically uses about **300–400 MB of baseline memory** after opening a regular project. Language servers, terminals, build tools, debuggers, and database helpers start on demand. Actual usage varies with the project and active services.
 
@@ -59,9 +59,9 @@ The Lithe application typically uses about **300–400 MB of baseline memory** a
 - **Native macOS editing:** Keep SwiftUI/AppKit and `NSTextView`, native project windows, terminal ownership, and existing Go/Rust/Python integrations. Prioritize correct editing and predictable resource use.
 - **Safe changes across files:** Preserve document freshness checks, mutation leases, selected-file/occurrence exclusions, shared Undo/Redo, and disk compensation across search replacement and language actions.
 - **Language tooling and daily workflows:** Build on existing LSP navigation, rename, formatting, code actions, Go Tools/Cargo, Git review, and run/debug support. Rich completion and language hints remain unfinished.
-- **An explicit handoff point:** Product code is at `40c08360`. The first B6a2 ordered text-edit slice has historical Rust/Swift automated validation, but its installed-app/UI acceptance is pending. Earlier native-editor acceptance is recorded separately; it does not certify this latest slice.
+- **Small, practical maintenance:** Improve Unicode output, Git status/discovery, terminal Control shortcuts and shell exit behavior using existing modules, with no new settings. Remaining B6a2 acceptance and larger plans stay tracked in their owning documents.
 
-The [workbench plan](./docs/architecture/goland-parity-implementation.md), [refactoring status](./docs/architecture/goland-parity-b6-refactor.md#b6-current-implementation-rulings), and [language plan](./docs/architecture/syntax-and-completion.md) retain the detailed scope and evidence. Historical results are not a fresh validation of this documentation checkpoint.
+The [workbench plan](./docs/architecture/goland-parity-implementation.md), [refactoring status](./docs/architecture/goland-parity-b6-refactor.md#b6-current-implementation-rulings), and [language plan](./docs/architecture/syntax-and-completion.md) retain the detailed scope and evidence. The [integration and acceptance record](./docs/architecture/ai-ide-phase-one.md) separates this batch’s scope and actual verification from historical results.
 
 ## Future TODO
 
@@ -90,11 +90,11 @@ All items below remain open. If development resumes, recheck the current source 
 11. Local application memory usage monitoring.
 12. One-command installation and updates through Homebrew.
 13. One-click in-app updates and installation.
-14. Automatic project entry-point detection with one-click run support for Java source, Gradle, npm, Cargo, Go, Python, Make, Docker Compose, Procfile, and shell projects.
+14. Entry-point detection and run support focused on Rust/Cargo, Go, and Python, retaining existing Make and shell workflows.
 15. Per-language service switches so language servers can be enabled or disabled independently to match the machine's resources.
 16. Multi-line editor tabs for keeping more files visible in the same workspace.
 17. Database connection workspace with multiple database types, connection management, SQL history, table browsing, and database operations.
-18. Native editor and workflow fixes preserved in this fork; further iteration is paused as noted above.
+18. Select useful upstream fixes while retaining the native editor, trimmed package, and simple configuration.
 
 ## Product tour
 
