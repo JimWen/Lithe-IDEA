@@ -65,9 +65,9 @@ Codex、Claude Code 等 AI 编程工具已经可以承担大量编码工作，�
 
 ## 后续 TODO
 
-以下均为未完成项；恢复开发时先复核源码与依赖，再选择具体批次。
+开始后续批次前，先复核当前源码与依赖。
 
-- [ ] **补齐最近切片验收：** B6a2 文本切片已随本次维护安装，基础编辑与跨标签 Undo/Redo 冒烟通过；仍需实测重命名、格式化、代码动作、补全及其撤销，补齐真实 `codeAction/resolve` 行为验证。[B6](./docs/architecture/goland-parity-b6-refactor.md#b6-current-implementation-rulings)
+- [x] 2026-11-25 完成 B6a2 首个文本切片的 macOS 安装验收。Go 重命名、格式化、代码动作和补全均核实了写盘与撤销；Rust 代码动作完成真实 `codeAction/resolve` 往返。[验收记录](./docs/architecture/goland-parity-b6-refactor.md#b6-text-edit-acceptance-2026-11-25)
 - [ ] **完成语义编辑与重构：** 补齐 prepareRename、选区/符号协议和真实选区 Code Action；完成服务端反向 `workspace/applyEdit`、资源事务、预览/冲突处理及 Refactor This，复用已有事务与撤销归属。[B6](./docs/architecture/goland-parity-b6-refactor.md)
 - [ ] **接通 LSP 编辑器交互：** 参数提示、内联提示、语义着色、符号出现点高亮，以及 Structure/面包屑。L4a 不依赖语法引擎，但细案和插入顺序仍待复核。[L4a](./docs/architecture/syntax-and-completion.md#l4a-split)
 - [ ] **落地语法与补全引擎：** 增量文档状态、Go/Rust/Python 离线高亮、自动补全与过滤/文档/snippet，再补离线符号与折叠；遵循 B6b2 → L0/L1 依赖及 L2/L3/L4b 计划。[L0–L2](./docs/architecture/syntax-l0-l2-engine.md)

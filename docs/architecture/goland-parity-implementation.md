@@ -10,6 +10,143 @@ Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已
 基线 `c09f2cc4`，目标分支 `dev/aiide`。总体方案复核见
 [审查记录](#plan-review)。
 
+<a id="workbench-parity-2026-11-25"></a>
+
+## 2026-11-25 工作台实测（Go、Rust、Python）
+
+主机为 Apple M6、16 GB、macOS 27.0。Lithe 验收包基于 `ab305685` 的 ARM64 Release，最终包包含本轮 SQLite 修复。Go 参照 GoLand 2026.2.3，Rust 参照 RustRover 2026.3.1.1，Python 参照 PyCharm 2026.3.0.2。三语言均在同一组自建源码中检查运行、断点与跨文件跳转。工作台比较使用固定提交的公共项目。
+
+**三种语言最影响日常使用的差距是断点调试。** Lithe 均可运行并跳转定义。三个参照 IDE 均在用户代码断点显示了 21 和 42 两个局部变量，继续运行均输出 42 并以 0 退出。Lithe 三语言各完成一次跨文件重命名，磁盘验证声明和引用同时更新，一次撤销后恢复。Go 的成功路径要求此次会话先打开调用文件并跳到声明，直接操作恢复的标签页曾被新鲜度检查拒绝。
+
+| 操作 | Lithe | GoLand |
+| --- | --- | --- |
+| Go 编辑、保存、撤销 | 在 `main.go` 粘贴注释、⌘S，磁盘 diff 可见。⌘Z、⌘S 后与原提交一致 | 逐键输入注释并换行，自动续写注释。保存后 diff 可见，两次撤销和保存后恢复。两种输入方式的撤销步数单独记录 |
+| 终端 | ⌥F12 建立样本目录的 shell。按键输入算式，工作目录内输出文件值为 42。自动化粘贴超时一次 | ⌥F12，执行 `pwd && expr 21 + 21`，控制台显示项目路径和 42 |
+| Git | ⌘9，图中读到样本提交 `Local comparison fixture`、作者及引用 | ⌘9，在 Vue 日志中读到 main 分支和与 HEAD 一致的提交标题 |
+| Go 调试 | 对第 8 行执行 ⌘F8 和 ⌃D，界面明确提示当前文件不支持断点和 Debug | 第 8 行 ⌘F8，首次构建提示编译器被终止。重试后 Delve 启动，切回用户帧确认 `main.main (main.go:8)`，恢复后输出 42、退出 0。再次调试时已在用户帧读到 count=21、result=42 |
+| SQLite | 启用模块并重启，连接同一库。最初结果为一行 `<unsupported>`，修复后四次均显示一行 42，22、35、32、32 ms | 从样本文件进入连接配置，下载 SQLite JDBC 3.51.1.0，连接成功。在查询控制台 ⌘Enter 执行 `SELECT sum(v) AS parity_sum FROM sample`，四次均为一行 42。控制台显示 500、335、85、331 ms |
+| HTTP | 同一 `.http` 文件可读，编辑区、工具菜单及 Actions 搜索均未找到发送请求入口 | 在请求编辑器点击运行。四次本机 GET 均为 200，JSON 值 42。客户端首次 135 ms，热请求 2、2、2 ms |
+| 搜索入口 | Keymap 的 Search Everywhere 一行显示 ⇧ ⇧ 和 ⇧⌘O。导航菜单的“全局搜索”及 ⇧⌘O 均打开带 Files / Actions 的搜索框。Hugo、Cargo 可按精确文件名回车进入编辑器，Django 同名文件可按目录选择 | 工具栏“随处搜索”打开“所有”标签，⇧⌘O 可按文件名导航。在“操作”标签搜索“随处搜索”，命令显示 ⇧ ⇧。本轮再次点击工具栏，确认“所有”标签及输入框获得焦点。两端双 Shift 的系统投递记录见下文 |
+
+**双 Shift。** 在自建 Go 样本的源码编辑器中，分别向 Lithe、GoLand 的进程发送两次左 Shift。每次按住 50 ms，松开后间隔 90 ms。macOS 对两次进程投递都记录了 `kTCCServicePostEvent` 拒绝（`authValue=0`），随后两端的焦点仍在编辑器。桌面控制接口也拒绝单独的 Shift。对照操作中，Lithe 的 ⌘⇧O 显示 Files、Actions 并聚焦输入框，GoLand 工具栏入口显示“所有”并聚焦输入框。双 Shift 在真实工作台能否触发仍未测得。21:43 复查时，macOS 将发键权限归到启动本次验收的 iTerm2（`com.googlecode.iterm2`），仍返回 `authValue=0`。实机键盘可直接检验这个手势，无需扩大终端权限。Lithe 的三个手势识别用例在 Debug 配置全部通过，覆盖两次独立点按、夹入大写或其他按键、重置后丢弃第一次点按。逐项报告为 `shift-gesture-debug.html`。首次用 Release 配置运行测试时，测试目标依赖仅在 Debug 中提供的接口，编译阶段退出。原始记录在 `.artifacts/parity-20261125/logs/double-shift-post-access.log` 和 `double-shift-workbench.json`。
+
+### 大仓首次导航
+
+GoLand 从单个项目信任确认到项目树首次可读，再从 ⌘⇧O 输入精确文件名到编辑区出现目标文件。下表记录 UI 自动化端观测墙钟，包含输入及辅助功能树读取，采用正常信任模式下的干净副本。每个首次样本只测一次，后台索引可继续运行。
+
+| 仓库与版本 | 跟踪文件 | 目标文件 | 项目树可读 | 首次导航 | 热导航三次（ms） |
+| --- | ---: | --- | ---: | ---: | --- |
+| Hugo `7f0b4416` | 2,619 | `hugolib/breaking_changes_test.go` | 1,619 ms | 1,634 ms | 1,320 / 1,301 / 1,280 |
+| Cargo `df742db3` | 3,094 | `src/ops/cargo_compile/unit_generator.rs` | 1,229 ms | 1,233 ms | 1,106 / 1,267 / 1,227 |
+| Vue core `50aaa3c7` | 704 | `packages/runtime-core/src/renderer.ts` | 1,454 ms | 1,678 ms | 2,266 / 1,959 / 1,886 |
+
+Django `f14af5a8` 有 7,104 个跟踪文件。PyCharm 安全预览将源码目录标为 excluded，Files 搜索完整相对路径结果为空。按路径直接打开则能读到 `django/db/models/sql/compiler.py` 的 `SQLCompiler` 定义。三个同名文件分别位于 MySQL 后端、PostgreSQL 后端和公共 SQL 模块，只有公共 SQL 模块在第 42 行定义该类。三份磁盘文件均与该提交的 Git 对象一致，路径与对象哈希见 `.artifacts/parity-20261125/logs/django-navigation-control.json`。安全预览不计入正常项目导航用时。
+
+**Django 正常信任模式。** PyCharm 在同一提交的干净副本中仅信任该项目，沿用本机 IDE 缓存，项目未配置 Python 解释器。自点击信任至本轮最后一次退出索引模式为 **11.78 s**。主扫描遍历 7,414 个条目，选出 6,032 个送入索引。以下三轮桌面热测均从仓库根目录的 `.gitignore` 出发，计时从快捷键开始，到读出目标编辑器源码结束。
+
+| Django 操作 | Lithe | PyCharm |
+| --- | --- | --- |
+| 按文件名查找 `compiler.py` | 三个同名结果可按目录区分。三次均打开公共 SQL 模块，桌面观测 16.59 / 16.50 / 16.51 s | 三次按 ⌘⇧O 按目录选中公共 SQL 模块。目标排在第 2 / 3 / 3 位，桌面观测 **1.971 / 1.726 / 2.100 s** |
+| 按类名定位 `SQLCompiler` | Classes、Symbols 都显示无匹配。打开目标 Python 文件后再查，Classes 仍无匹配。切到 Text 后可点中类声明，编辑器到 `compiler.py:42:1` | 三次按 ⌘O 输入类名，`django.db.models.sql.compiler` 的精确匹配均排第一。桌面观测 **1.621 / 1.632 / 1.442 s**，核对光标为 `compiler.py:42:7` |
+
+同一 Release Core 的 `workspace.searchEverywhere` 对 Go、Rust、Python 自建样本分别查询函数名，分别返回 2、2、3 条正文结果；Django 的 `SQLCompiler` 返回 33 条正文结果。四次都包含声明所在行，类型和符号结果均为零。原因可定位到 `rust/lithe-core/src/project/search_index.rs` 的 `read_search_data`：这里用 `java_symbols` 填充符号索引，它在 `project/files.rs` 对所有非 `.java` 路径直接返回空集合。这条工作区索引路径与前述三语言从调用跳定义所用的语言服务不同。逐次返回保存在 `.artifacts/parity-20261125/logs/go-rust-python-search-symbol-control.json`。
+
+以上文件导航时间含辅助功能树的读取与界面稳定等待。Lithe 与 PyCharm 的等待开销不同，因此无法据此计算编辑器自身的速度差。索引日志及逐次 UI 记录在 `.artifacts/parity-20261125/logs/` 下的 `pycharm-django-trusted-index.log`、`pycharm-django-trusted-navigation.json` 和 `lithe-django-class-search.json`。
+
+Vue 热测多了一次搜索弹窗焦点确认。早先从安全预览转为信任的副本里，Vue 源目录一度显示为排除项，按文件名没有命中。干净副本首次打开即信任，同一提交和路径可以命中。本表计时只覆盖文件查找。下节另列三语言的语义跳转、重命名和断点结果。
+
+构建采用本机 Swift 6.4、SwiftPM native 后端及 macOS 26.5 SDK。默认后端缺少 Metal 编译器，27.0 SDK 缺少 SwiftUI 宏插件。首次混用后端时，旧构建产物中空的 `Contents/Resources` 使 bundle 查找语法映射失败。移出生成的 bundle 并用 native 后端重打后，打开 Vue 源文件的启动日志无这两条警告。本机原始构建和启动日志在 `.artifacts/parity-20261125/logs/`，GoLand 的四份 HTTP 响应在 `.artifacts/parity-20261125/fixture/.idea/httpRequests/`。
+
+### 三语言编辑器高亮
+
+同一份自建源码分别在 Lithe 和对应的 JetBrains IDE 中打开。每份样本把 `return` 和 `marker` 同时放进可执行代码、双引号字符串和下一条真正的行注释，另有整数字面量 `42`。在本次深色主题下，两端都将代码中的 `return`、普通标识符、整数和整行注释显示为可区分的颜色。差异出现在引号内。
+
+| 语言与字符串 | Lithe | 对照 IDE |
+| --- | --- | --- |
+| Go · `"return // marker"` | `return` 为字符串色，从 `//` 到结束引号变成注释色 | GoLand 将整个字面量显示为字符串色 |
+| Rust · `"return // marker"` | 同样从 `//` 开始变成注释色 | RustRover 保留完整字符串色，并在这份样本中显示局部变量的推断类型 |
+| Python · `"return # marker"` | 同样从 `#` 开始变成注释色 | PyCharm 将井号及后续内容显示为字符串色 |
+
+**编辑与撤销。** 在 Lithe 源码编辑器中把字符串内的分隔符改为 `::`，三个样本的 `marker` 都恢复为字符串色。每个样本一次 ⌘Z 即还原源码，移开选区后，尾部再次呈现注释色。与界面结果一致，通用高亮适配器先给字符串着色，随后在同一范围匹配注释并覆盖前景色。该规则也会匹配引号内的分隔符。[通用高亮适配器](../../macos/Sources/Lithe/Views/Editor/SyntaxHighlighting/GenericSyntaxHighlightingAdapter.swift)
+
+本轮覆盖普通双引号字符串、行注释和一次编辑/撤销。多行字符串、转义、IME 和长文件增量绘制仍按 L2 验收范围跟踪。六个原始窗口的并排裁图在 `.artifacts/parity-20261125/logs/highlight-comparison.png`。同目录的 `highlight-observations.json` 保留三份源码、十二张截图的哈希、词元位置及 RGB 采样，可逐张与原图复核。
+
+### 三语言运行、调试与查询结果复验
+
+在 Plugins → More Language Support 启用 Go、Rust、Python，启用 Database，Confirm 后正常退出并重启。Go、Rust 通过项目设置指定本机工具链。验收期间强制结束过一次 Lithe，随后 Go 插件显示上次会话异常并已禁用。通过 Enable、Confirm 和重启恢复，后续在干净会话复核 Go。临时样本各自计算 21 × 2。Lithe 的 Run 控制台从命令行记录到首个 42 的时间分别为 Go 665 ms、Rust 501 ms、Python 58 ms。每项一次，包含对应工具链的启动，Go、Rust 还涉及构建。Rust 记录包含一次 0.20 s 的 Cargo dev 构建。
+
+三种语言的 Run 均成功。对 `main.go`、`main.rs` 和 `main.py` 实际执行 ⌃D 均出现该文件无法调试的通知。本机构建已能定位 Delve、lldb-dap 和带 debugpy 的 Python。插件声明决定有效调试能力，Go 原生插件及内置 Python、Rust 声明均未注册调试模块。组合根同时会把这些语言标为由插件负责，`LanguagePackRegistry` 因而不创建宿主默认调试器的启动配置。此缺口直接影响从断点开始的日常工作流。GoLand 在相同 Go 样本成功命中第 8 行并正常退出。
+
+| 同一语言样本 | Lithe 编辑器 | 对照 IDE |
+| --- | --- | --- |
+| Go | gopls 启动期间首次 ⌘B 提示找不到定义，就绪后从 `navigation.go` 跳到 `helper.go:3:6`。Shift F6 未唤起重命名。恢复旧标签后右键重命名两次未写盘，界面提示文档或服务器已变化。从调用重新 ⌘B 到声明后再重命名成功，磁盘两处一致，`go test ./...` 编译通过，一次 ⌘Z 两处恢复 | GoLand 从同一调用跳到 `helper.go:3:6`。Shift F6 成功更新声明和引用。撤销时提示 `navigation.go` 已更改，反向重命名后核实磁盘复原。Delve 在 `main.go:8` 显示 `count=21`、`result=42`，继续后输出 42、退出 0 |
+| Rust | 从 `src/lib.rs:4` 的调用跳到 `src/helper.rs:1:15`。右键重命名后两份文件更新，`cargo check --offline` 通过，一次 ⌘Z 后两处恢复 | RustRover 附加 Cargo.toml 后识别 lib、bin。⌘B 到同一声明，Shift F6 更新声明和调用，撤销并确认后两份文件复原。LLDB 在 `main.rs:4` 显示两个 i32 局部变量 21、42。Resume Program 后控制台输出 42，退出 0 |
+| Python | 从 `navigation.py:3` 跳到 `helper.py:1:5`。右键 Rename Symbol 后，两份文件中的声明、导入、调用均已更新。一次 ⌘Z，两份文件均恢复 | PyCharm 的 ⌘B 到同一声明。Shift F6 内联重命名、保存，两份文件的三处标识符同步，一次 ⌘Z 并确认后磁盘复原。使用已有 Python 3.9.6 的项目虚拟环境，debugpy 在 `main.py:4` 显示两个 int 局部变量 21、42，继续后输出 42、退出 0 |
+
+| Lithe Release Core 随处搜索 | 首次调用（ms） | 五次热查中位数（ms） | 桌面操作结果 |
+| --- | ---: | ---: | --- |
+| Hugo | 537.67 | 11.10 | ⌘⇧O 命中 `hugolib` 下的目标，回车打开 Go 源码 |
+| Cargo | 575.58 | 9.59 | ⌘⇧O 命中 `src/ops/cargo_compile`，回车打开 Rust 源码 |
+| Django | 1,443.27 | 111.26 | 输入 `compiler.py`，三个同名命中可按目录区分，打开 `django/db/models/sql/compiler.py` |
+| Vue core | 236.42 | 2.58 | 桌面按文件名回车打开 `packages/runtime-core/src/renderer.ts` |
+
+计时逐仓启动新进程调用与本次 Release 同构建的 `workspace.searchEverywhere`，保留系统文件缓存，每次核对完整目标路径。范围包括 Core 的索引及查询和 JSON 边界，不含 UI 去抖、键盘输入及渲染。GoLand 上表为 UI 观测值，两组数据不能计算速度比。原始逐次值在 `.artifacts/parity-20261125/logs/core-search-*.json`。
+
+在安装版 Lithe 上另做三次桌面热导航。每轮从仓库根目录的 `.gitignore` 出发，按 ⌘⇧O，等搜索框得到焦点，按文件名查询，点击完整目录匹配的行，再核对编辑区的源码。Cargo 的目标三次均为 `unit_generator.rs`，Django 三次均为包含 `SQLCompiler` 的 `django/db/models/sql/compiler.py`。自动化端从快捷键到源码可读分别为 Cargo 16.86 / 16.45 / 16.45 s、Django 16.59 / 16.50 / 16.51 s。逐步拆分后，读取搜索框、结果、编辑器三次各占约 5.1–5.3 s。改用截图匹配同名结果的目标行和源码，Django 一次为 15.99 s，三处都在返回的第一帧就已可见。由于两种观测方式均会等待界面稳定，用户实际看到首帧的时刻仍未知。上述数字仅供复查自动化过程。原始分步计时见 `.artifacts/parity-20261125/logs/desktop-navigation-samples.json`。
+
+SQLite 原因已定位到表达式列没有声明类型时仍按声明类型解码。修复在结果映射时读取实际值的类型，保留 NULL。重建 ARM64 包后在 SQL 工作区按 ⌘Enter，四次原查询的 `parity_sum` 均为 42。SQLite 表达式整型、浮点、文本和 NULL 回归 7 ms，sidecar 共 14 项通过。HTML、JUnit 和原始计时位于 `.artifacts/test-stability/db-sidecar.*`。客户端各自显示的查询时间包含哪些开销仍需独立剖析。
+
+Go 的格式化、整理导入和函数调用补全在 Lithe 与 GoLand 写出了相同的文件。Lithe 临时安装副本上，四种编辑各用一次 ⌘Z 均恢复原字节。Rust 的延迟代码动作完成了真实 `codeAction/resolve` 往返，包含原样传回的 data、服务器指定的文档版本、写盘和撤销核验。[逐项安装验收](goland-parity-b6-refactor.md#b6-text-edit-acceptance-2026-11-25)
+
+### Hugo 同仓 Git 与桌面响应
+
+Hugo 的浅克隆加深至 HEAD 可达 1,037 个提交，含 12 个合并提交。两端使用同一目录。⌘9、筛选并选中 `5fa3adb4` 后，两端详情均显示 `markup/goldmark: Adjust the ToC writer setup`。从初次打开的日志直接搜索 `df520e31`（`git log --skip=500 -1`），GoLand 给出 `resources/page: Fix shared reader in Source.ValueAsOpenReadSeekCloser`。Lithe 显示 `No commits match this view`。
+
+在上述仓库清除筛选、保留 `5fa3adb4` 选择后，先隐藏 Git 窗口，再计时从 ⌘9 到日志与同一提交详情均可读。三次热测 Lithe 为 **773 / 791 / 807 ms**，GoLand 为 **2,100 / 1,870 / 1,867 ms**。界面辅助功能树的读取时间计入结果，两端窗口大小和辅助功能实现不同。Hugo 文件导航另测，Lithe 从 ⌘⇧O 到目标结果再到编辑器三次为 2,502 / 2,398 / 2,221 ms，GoLand 的阶段一观测见上表。样本量只支持本机本次操作的观察。
+
+**跨页搜索与合并图复核。** 两端均选中拓扑顺序第 111 个提交 `5379c109`，并在相同的 3,840 × 2,100 像素窗口截图中显示合并线。真实父提交按 Git 记录顺序为 `0732eadd`、`36d24019`，日志中的相邻行按 `36d24019`、`0732eadd` 排列。两端都能分别选中这两个父提交，详情与 `git show` 一致。该提交的原始时间为 16:12（UTC+2），Lithe 显示 16:12，GoLand 在上海时区显示 22:12。
+
+| 操作 | Lithe | GoLand |
+| --- | --- | --- |
+| 到达合并行 | 滚到首批 100 条底部并点 Load more commits，旧页末尾留在视口内，再向下滚一页到达合并行 | 在 Git 日志的“转到哈希/分支/标记”中输入哈希，直接选中合并行 |
+| 翻页与窗口缩放 | 选中合并后向下滚两页、再向上滚两页，滚动条回到原位置，详情持续指向原提交。放大窗口并恢复，选中提交也保留 | 从 `0732eadd` 按 Page Down 到第 123 行 `ec69d0e6`，Page Up 回到原提交。合并详情在放大并恢复窗口后仍可读 |
+| 查询第 501 条 | 在未筛选的历史逐页加载至第六页后，搜索同一个 `df520e31` 命中唯一一行，点击可见完整标题与哈希 | 首次查询即可命中 |
+
+两张等尺寸截图里，主线都通过金色节点连接，文档父提交在右侧蓝线上。取合并点上方连续主线节点中心，Lithe 行距约 44 像素，GoLand 约 52 像素。配对截图位于 `.artifacts/parity-20261125/logs/{lithe,goland}-hugo-merge-max.jpg`，Git 校验结果在 `hugo-git-ui-control.json`，第六页的搜索结果在 `lithe-hugo-page-six.jpg`。此次覆盖 Hugo 的双父合并和加载边界。G1 的复杂交叉、多父提交和连续滚动绘制仍按原计划跟踪。
+
+**打开 Hugo 后的进程内存。** 两个 IDE 分别重新启动，打开同一份 `breaking_changes_test.go` 和 Git 日志，选中 `5379c109`，窗口均为 3,840 × 2,100 像素。按各自主进程年龄取样，第 120 秒开始每秒一次，共五次。下表为 macOS `ps` 常驻内存（RSS）的中位数。
+
+| IDE | 主进程 | 主进程及全部子孙进程 | 子进程构成 |
+| --- | ---: | ---: | --- |
+| Lithe | 349.9 MiB | 1,573.7 MiB | 两个 gopls 进程合计 1,216.1 MiB，另有 Git 进程 |
+| GoLand | 1,815.8 MiB | 2,170.0 MiB | 文件监视与 Chromium 辅助进程合计约 354 MiB |
+
+这是系统文件缓存和 IDE 缓存均已预热的一次配对启动。进程树 RSS 求和可能重复计算共享页。两个 IDE 的后台分析进度没有同步。另一次 Lithe 会话五次采样的进程树中位数达到 2,895.8 MiB，其中 gopls 占 2,668.4 MiB，不能把第 120 秒的结果作为长期上限。GoLand 启动时还报告 Hugo 仓库中的空 `internal/warpc/genwebp/go.mod` 缺少 module 声明。原始进程明细在 `.artifacts/parity-20261125/logs/{lithe,goland}-hugo-120s-memory.json`。
+
+### 终端热打开与首条输入
+
+两端在同一自建项目中预热 shell，再隐藏终端。每轮从 ⌥F12 开始立即逐键输入 `sh t` 并回车。脚本计算 21 + 21，把项目路径、结果和毫秒时间写入同一个本地日志。计时覆盖打开面板、分发按键、shell 执行到记录结果。
+
+| 三轮热打开 | 第一次 | 第二次 | 第三次 |
+| --- | ---: | ---: | ---: |
+| Lithe | 仅收到 `t`，命令失败 | 98 ms | 98 ms |
+| GoLand | 105 ms | 110 ms | 95 ms |
+
+Lithe 首次失败时终端显示 `zsh: command not found: t`。另外五轮均在预期目录得到 42。两端成功样本的用时接近，Lithe 在打开面板后立即输入的可靠性需要复核。原始记录见 `.artifacts/parity-20261125/logs/terminal-paired-trials.json` 和同目录的 `terminal-shell-output.tsv`。
+
+复核时新增一次性文本文件，每轮先隐藏已预热的终端，再点击编辑器并确认它持有键盘焦点。四轮交替采用两种输入时序，逐次检查 shell 的结果标记和编辑文件的磁盘内容。
+
+| 起始焦点均在编辑器 | Lithe | GoLand |
+| --- | --- | --- |
+| ⌥F12 后立即逐键输入 `sh t` | 两轮都把命令写入文本文件，shell 没有结果记录 | 两轮 shell 都得到 42，距快捷键分别为 92、94 ms |
+| 读到终端面板后再输入 | 两轮 shell 都得到 42 | 两轮 shell 都得到 42 |
+
+Lithe 的临时文本文件最终多出两行 `sh t`，GoLand 的同一个文件复原后跑完对照仍与原始字节一致。该问题会改写编辑中的文档。证据位于 `.artifacts/parity-20261125/logs/terminal-focus-control.json`、`terminal-focus-reproduce.tsv` 和 `terminal-focus-before-source.txt`。
+
+在独立的诊断构建中，快捷键分发、编辑区和终端挂载共用主线程时间戳，日志只记录事件类型。一次失败中，以识别 ⌥F12 为 0 ms，编辑器分别在 +2、+10、+11、+12、+13 ms 收到按键，命令回调在 +17 ms 执行，终端原生视图在 +46 ms 挂到窗口，+52 ms 请求键盘焦点。另一轮在视图挂到窗口后，编辑器又收到了两个事件。原始时序见 `focus-diagnostic-events.log`。诊断代码只用于该临时构建。
+
+同样从临时文本文件开始，在普通 Release 按 ⌘⇧O 后立即逐键输入 `helper`。GoLand 两轮均在 Files 命中根目录的 `helper.go`，编辑文件保持原始内容。Lithe 一轮正确命中，另一轮搜索框为空，关闭搜索后在编辑文件中读到了完整的 `helper`，磁盘快照见 `search-focus-before-source.txt`。这些小样本可复现焦点交接失序，无法估算日常发生率。
+
 ## 功能文档导航
 
 功能文档统一命名为 `goland-parity-<批次号>-<功能块>[-done].md`。
@@ -28,7 +165,7 @@ Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已
 | B4a4 | [Terminal 启动配置](goland-parity-b4a4-terminal-startup-done.md) | 已完成 |
 | B4a5 | [Terminal 显示与输入](goland-parity-b4a5-terminal-display-done.md) | 已完成 |
 | B4a6 | [Terminal 虚拟环境](goland-parity-b4a6-terminal-venv-done.md) | 已完成 |
-| B6 | [语义编辑事务与重构](goland-parity-b6-refactor.md) | B6a1a 已验收；B6a2 首个文本切片 Rust/Swift 自动验证通过，2026-10-28 已安装并完成基础编辑历史冒烟，语义动作实机验收待完成；复用既有文本事务/Undo，完整资源事务仍待实施，见[当前裁定](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
+| B6 | [语义编辑事务与重构](goland-parity-b6-refactor.md) | B6a1a 已验收；B6a2 首个文本切片 Rust/Swift 自动验证通过，2026-11-25 [四种编辑及真实 resolve 通过安装验收](goland-parity-b6-refactor.md#b6-text-edit-acceptance-2026-11-25)；复用既有文本事务/Undo，完整资源事务仍待实施，见[当前裁定](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
 | B7a | [Go Tools / Cargo](goland-parity-b7a-go-cargo.md) | 部分完成 |
 | B7a2a / B7a2b | [进程清理、工具捕获与插件资源](goland-parity-b7a2b-project-tool-capture-done.md) | 已完成 |
 | B7a2c | [项目元数据读取与刷新](goland-parity-b7a2c-project-metadata-refresh.md) | c1/c2 完成，c3 随 B7a3 完成 |
@@ -289,7 +426,7 @@ E1 的五项尚未确定批次编号与排期，不得在未经用户确认前�
 | B3 | B3a、B3b1a 通过；其余逐批细化 | B3b 范围、预览、Apply、排除与文本事务/Undo 已接入；B3c/B3d 待实施 | B3b1a 历史：Rust 331、Swift 985、原生链接 7 项及 ARM64 包通过；后续事务回归见功能文档 | 输入/键盘、Find 预览与 Unicode 已验收；后续安装版实际替换、排除与撤销见[集成验收](ai-ide-phase-one.md) | 历史未提交审查保留；当前范围以[事务记录](goland-parity-b3b-replacement.md#buffer-transaction-integration)为准 | B3a `010d4d57`；B3b1a `b0dac7e2`；后续集成与原生 Undo 修复见当前记录 |
 | B4 | B4a0–B4a6 通过 | Terminal 启动、显示/输入、venv 完成；其他设置待实施 | 1032 项完整测试、42+3 个 shell 场景、边界、ARM64 包通过 | 真实设置、Python prefix、Restart、环境缺失/恢复、迟到确认焦点及清理通过 | B4a0–B4a6 通过 | 启动 `db44d036`；字体 `4f74218a`；输入 `266c0c52`；venv `3724ea20` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
-| B6 | B6a1a 通过；后续依 2026-10-06 修订 | B6a2 首个有序文本编辑切片已实现；其余方法、反向请求、资源事务与重构待实施 | 历史：B6a2 Rust 523、Swift 1574 项通过；本次完整回归见[集成记录](ai-ide-phase-one.md) | B6a1a 已验收；B6a2 文本切片于 2026-10-28 安装，基础编辑历史冒烟通过，语义动作实机验收仍待完成 | 首个文本切片静态复核无剩余阻断项；不代表 B6a2 整体完成 | `40c08360`；[当前裁定与验证记录](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
+| B6 | B6a1a 通过；后续依 2026-10-06 修订 | B6a2 首个有序文本编辑切片已实现；其余方法、反向请求、资源事务与重构待实施 | 历史：B6a2 Rust 523、Swift 1574 项通过；本次完整回归见[集成记录](ai-ide-phase-one.md) | B6a1a 已验收；B6a2 首个文本切片的四种语义编辑、撤销及真实 resolve 已于 2026-11-25 完成安装验证 | 首个文本切片静态复核无剩余阻断项；不代表 B6a2 整体完成 | `40c08360`；[当前裁定与验证记录](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
 | B7 | B7a1/B7a2a–b/c1 通过；其余按子方案推进 | Cargo 只读刷新与右栏、双击运行和缺配置生成续跑已实现；Go Tools 与独立任务已完成（见 B7a3）；gutter/Structure/TODO 待实施 | 2026-09-08：Rust 354、Swift 1124、边界/契约/stability 通过 | Cargo 12 种真实对照运行；GUI 切换/刷新恢复/12 文件零写入通过；ARM64 已替换系统安装并复验 | c2 独立代码审查及修复复核通过 | 基线 `3d97c080`，本轮修复与验收记录一同提交；[Cargo 验收摘要](goland-parity-b7a2c2-cargo-tool-window-done.md#cargo-acceptance) |
 | B7a3 | 方案与代码复核通过 | Go 元数据隔离、工具窗口、独立任务和 G/R 图标完成 | Swift 1176 全量及最终 27+18 项回归、Rust/边界/契约/stability 通过 | 实际编辑修复、并发停止隔离、零写刷新、Go/Cargo 菜单运行及深浅色图标通过 | 通过 | [Go Tools 验收摘要](goland-parity-b7a3-go-tools-done.md#go-tools-acceptance)；`211395cc` 干净检出 1168 项通过，系统安装与 Go/Cargo 点击复验通过 |
 | B7b | 剩余细案待重审（[运行入口 gutter](goland-parity-b7b-run-gutter.md)），前置 B6a2 符号协议预交付 | 已有 Go/Rust runnable gutter 保留；剩余范围待实施 | 原有验证见上游集成记录；本批无新结果 | 本批待复验 | 待实施后审查 | — |

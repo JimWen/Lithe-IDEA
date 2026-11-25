@@ -65,9 +65,9 @@ The [workbench plan](./docs/architecture/goland-parity-implementation.md), [refa
 
 ## Future TODO
 
-All items below remain open. If development resumes, recheck the current source and dependencies before choosing a batch.
+Recheck current sources and dependencies before starting an open batch.
 
-- [ ] **Close the latest acceptance gap:** The B6a2 text-edit slice is now installed, with basic editing and cross-tab Undo/Redo smoke checks passed. Rename, formatting, code actions, completion and their undo behavior still need installed-app acceptance, including real `codeAction/resolve`. [B6](./docs/architecture/goland-parity-b6-refactor.md#b6-current-implementation-rulings)
+- [x] Verified the B6a2 text-edit slice in an installed macOS app on 2026-11-25. Go rename, formatting, code actions and completion passed with disk-verified undo. A Rust code action completed a real `codeAction/resolve` round trip. [Acceptance record](./docs/architecture/goland-parity-b6-refactor.md#b6-text-edit-acceptance-2026-11-25)
 - [ ] **Finish semantic editing and refactoring:** Add the remaining prepare-rename, selection/symbol and selected-range code-action paths; finish server-initiated `workspace/applyEdit`, resource transactions, preview/conflict handling and Refactor This. Reuse the existing transaction and Undo owners. [B6](./docs/architecture/goland-parity-b6-refactor.md)
 - [ ] **Connect LSP features to the editor:** Parameter help, inlay hints, semantic tokens, symbol highlights, and Structure/breadcrumbs. L4a does not depend on the syntax engine; its design and placement still need review. [L4a](./docs/architecture/syntax-and-completion.md#l4a-split)
 - [ ] **Build the syntax and completion engine:** Incremental document state, offline Go/Rust/Python highlighting, automatic completion with filtering, documentation and snippets, then offline symbols/folding. Follow the B6b2 → L0/L1 dependencies and L2/L3/L4b plans. [L0–L2](./docs/architecture/syntax-l0-l2-engine.md)

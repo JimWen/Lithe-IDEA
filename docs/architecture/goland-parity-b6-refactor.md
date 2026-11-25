@@ -833,3 +833,23 @@ additionalTextEdits 对光标位置的影响纳入验证。Code Action 的 comma
 真实 resolve 验证；基础编辑冒烟不替代这些验收。后续恢复迭代时继续 §11.3 其余
 方法/消费者。prepareRename、真实选区 Code Action、符号/selectionRange、资源事务、
 反向请求和 B6c/B6d 仍未完成。
+
+2026-11-25 在 ARM64 Release 验收包上补测 Go、Rust、Python 的跨文件定义跳转，三项均到达预期声明，三个参照 IDE 也到达同一位置。Lithe 右键 Rename Symbol 后，三语言各自两份文件里的声明、调用（Python 还包括导入）均同步写盘，一次 ⌘Z 后复原。改名状态下 Go 样本编译、Rust 样本 `cargo check --offline` 通过。Go 从恢复的标签直接重命名曾提示文档或服务器已变化，先从调用重新跳到声明后成功。GoLand 的反向重命名、RustRover 与 PyCharm 的撤销均做了磁盘复核。工具版本、GoLand 撤销保护提示和逐项记录见[工作台实测](goland-parity-implementation.md#workbench-parity-2026-11-25)。B6a2 的其余方法与冲突处理仍按本节跟踪。
+
+<a id="b6-text-edit-acceptance-2026-11-25"></a>
+
+### 2026-11-25 文本编辑切片安装验收
+
+签名验证通过的 ARM64 Release 临时安装在用户 Applications 目录。通过 Launch Services 启动并核实进程路径。安装副本的可执行文件与实测 Release 逐字节相同。Go 使用 gopls 0.24.0，Rust 使用 rust-analyzer 1.100.0。
+
+| 从编辑器执行的操作 | 应用后的检查 | 撤销后的检查 |
+| --- | --- | --- |
+| Go 跨文件重命名 | 声明和引用均写为 `twiceChecked` | 一次 ⌘Z，两个文件均恢复 `parityDouble` |
+| Go 格式化 | `Format Document` 的磁盘结果与 `gofmt` 及 GoLand ⌘⌥L 的结果逐字节相同 | 一次 ⌘Z，恢复原始空白 |
+| Go 整理导入 | `Source Actions → Organize Imports` 只移除未使用的 `strings`，保留 `fmt`。GoLand 优化导入得到相同文件 | 一次 ⌘Z，两个导入和原缩进均恢复 |
+| Go 补全 | `Complete Symbol` 中选择 `parityCaller`，磁盘写入 `parityCaller()`。GoLand 用 Tab 接受同一函数后写入相同调用 | 一次 ⌘Z，恢复输入前缀 `pari` |
+| Rust 延迟代码动作 | 对函数执行 `Generate a documentation template`。rust-analyzer 首次只回传动作及 data，Lithe 用原 data 发出 `codeAction/resolve`，服务器返回版本 1 的文本编辑，磁盘准确增加一行 `/// .` | 一次 ⌘Z，文件与操作前逐字节一致 |
+
+Go 的四项操作通过对五个样本文件分别记录“原文、修改、恢复”核实。GoLand 还观察到保存引入独立的格式化撤销步骤，补全撤销回到 Tab 前实际输入的 `parityC`。Rust 动作分别在打包副本和安装副本各执行一次。临时标准输入输出转发器原样传递协议帧，只记录与样本代码动作有关的请求和响应，结束后恢复临时工具链。证据在 `.artifacts/parity-20261125/logs/installed-editor-transitions.jsonl` 和 `rust-source-actions.jsonl`。
+
+本次验收覆盖四个既有编辑入口及真实的延迟解析。gopls 的同类延迟编辑仍受当前未声明 `textDocument.codeAction.dataSupport` 限制。prepareRename、从实际选区请求动作以及 §11.3 的符号协议各有独立的完成条件。
