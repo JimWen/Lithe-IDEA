@@ -2424,6 +2424,9 @@ where
             .map_err(|e| ("database_error".into(), e.to_string()))?;
         let value = if raw.is_null() {
             Value::Null
+        } else if column.type_info().is_null() {
+            // SQLite expressions can lack a declared type even when the cell has a value.
+            decode(row, index, raw.type_info().name())
         } else {
             decode(row, index, column.type_info().name())
         };
@@ -3995,6 +3998,33 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn sqlite_expression_columns_preserve_runtime_values() {
+        let rows = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut connection =
+                <sqlx::SqliteConnection as sqlx::Connection>::connect("sqlite::memory:").await?;
+            sqlx::query("WITH sample(v) AS (VALUES (20), (22)) SELECT sum(v) AS value FROM sample UNION ALL SELECT 0.5 UNION ALL SELECT 'text' UNION ALL SELECT NULL")
+                .fetch_all(&mut connection)
+                .await
+        })
+        .await
+        .expect("in-memory SQLite query timed out")
+        .expect("expression query should execute");
+        let values: Vec<_> = rows
+            .iter()
+            .map(|row| sqlite_row_json(row).unwrap())
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                json!({"value": 42}),
+                json!({"value": 0.5}),
+                json!({"value": "text"}),
+                json!({"value": null})
+            ]
+        );
+    }
 
     #[test]
     fn rejects_update_without_key() {
