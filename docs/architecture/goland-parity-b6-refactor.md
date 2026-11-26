@@ -4,8 +4,9 @@
 > - **已完成并验证**：
 >   - **B6a1a**：能力纠偏与报文快照（`94af8e89`）。
 >   - **B6a2 有序文本编辑切片**：Go/Rust/Python 跨文件重命名、格式化、代码动作、补全、`codeAction/resolve` 与单次 ⌘Z 撤销（`40c08360`，2026-11-25 ARM64 安装验收通过，见[验收记录](#b6-text-edit-acceptance-2026-11-25)）。
->   - **B6a2 核心协议与入口闭环（2026-11-26）**：开启 `textDocument.codeAction.dataSupport`、`textDocument.rename.prepareSupport`、静/动态 `renameProvider.prepareProvider` 探测与 `textDocument/prepareRename` 预填；透传真实 UTF-16 选区与范围相交诊断至 Code Actions；注册 `⇧F6`/`⌥⌘L`/`⌥↩`/`⌃Space`/`F1` 快捷键；修复恢复标签页跨文件同步与 `ModuleRuntime` 并发激活竞态（`e2433a52`、`41d991bc`，Rust 564/564、macOS 1,630/1,630 及本机真实 `gopls` 冒烟通过）。
-> - **待推进（TODO）**：B6a2 剩余协议（`documentSymbol`→L4a Structure、`selectionRange`→L8 选区扩展）、B6a1b 反向 `workspace/applyEdit`（按需）、B6b1 完整文件/目录资源事务（create/rename/delete）、B6c 内联 Rename UI、B6d Extract/Inline/Change Signature/Safe Delete。
+>   - **B6a2 核心协议与入口闭环（2026-11-26）**：开启 `textDocument.codeAction.dataSupport`、`textDocument.rename.prepareSupport`、静/动态 `renameProvider.prepareProvider` 探测与 `textDocument/prepareRename` 预填；透传真实 UTF-16 选区与范围相交诊断至 Code Actions；注册 `⇧F6`/`⌥⌘L`/`⌥↩`/`⌃Space`/`F1` 快捷键；修复恢复标签页跨文件同步与 `ModuleRuntime` 并发激活竞态（`e2433a52`、`41d991bc`）。
+>   - **B6c 内联 Rename UI、`Refactor This`（`⌃T`）与 `documentSymbol`（本轮完成）**：以非模态 `InlineRenamePanelController` 替代模态 `NSAlert`（锚定符号上方、`prepareRename` 预填、IME 安全、单次 `⌘Z` 撤销）；新增 `Refactor This`（`⌃T`）统一重构菜单（Rename + 选区 `refactor.*` Code Actions，经 `LitheContextMenuPresenter` 展示）；补齐 `textDocument/documentSymbol` 层次协议与 `workspace.documentSymbols` 离线回落。
+> - **暂缓（工程复杂度高 / 当前收益比低）**：B6a1b 反向 `workspace/applyEdit`、B6b1 完整文件/目录资源事务（含废纸篓子树回滚）、自研 Go AST Change Signature 与 Safe Delete；其余 `selectionRange`（L8 选区扩展）按需后续评估。
 > - **架构复用方向**：本方案确立的有序编辑事务、修改租约、文档新鲜度校验、共享 Undo/Redo 与磁盘失败补偿，也将作为未来 **ACP（Agent Client Protocol）AI Agent** 工作流修改工作区文件的统一安全底座（规划中，详见[工作台总架构与路线图](goland-parity-implementation.md#architecture-overview-2026-11-26)）。
 
 历史状态：第 1–10 节保留基于 `3680935d` 的第四版设计与历史验收，实施边界以第 11 节[实施前复核与衔接裁定](#b6-current-implementation-rulings)为准。第一版因「只核查 LSP 解析侧」被否；

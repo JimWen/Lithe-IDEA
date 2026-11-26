@@ -8,7 +8,7 @@
 语言能力不应等同于“已经启动一个 LSP 进程”。当前实现遵循以下规则：
 
 1. 编辑器只依赖统一的 `LanguageFeatureProvider`，不直接依赖具体语言服务器。
-2. 轻量本地能力无需外部进程；普通 LSP 按需启动，Java 工作区则在项目识别后异步预热 JDTLS。
+2. **默认轻量模式（Lightweight Mode）零 LSP 冷启动**：`AppSettings.languageIntelligenceMode` 默认为 `.lightweight`。打开项目或源码文件仅预热 Rust Core 进程内 `WorkspaceSearchIndex` 与轻量模块，不启动 `gopls`/`rust-analyzer`/`basedpyright` 等外部语言服务器，也不触发可执行文件探测子进程；用户可在状态栏、`Settings → LSP` 或命令面板（`Toggle Language Intelligence Mode`）按窗口或全局切换到 **Precision LSP**（`.lsp`），并在切回轻量模式时立即停止后台 LSP 进程释放内存。
 3. 可调用的 LSP 功能以服务器 `initialize` 响应和动态注册结果为准，不能根据语言名称硬编码。
 4. LSP 进程、stdio、JSON-RPC 状态机、deadline 和结果归一化属于 Rust Core；平台 adapter 只负责可执行文件与运行环境发现。
 5. 单个 provider 失败、缺失或返回空结果时，不应阻断仍可工作的本地能力。
@@ -64,23 +64,24 @@ lsp/
 
 当前优先级由高到低为 `languageServer (200)`、预留的 `projectSymbols (100)`、`builtin (0)`。每次请求先按文件和功能过滤 provider，再按优先级路由：
 
-- **Completion**：依次收集所有成功结果，保持高优先级顺序，并按 `label` 去重。因此 LSP 可提供精确候选，本地关键字和当前文件符号仍能补足结果。
-- **Hover**：返回第一个非空结果；LSP 无结果或失败时继续询问本地 provider。
-- **Definition/References/Implementation**：返回第一个非空位置列表，并在 LSP 不可用时降级到当前文件文本级导航。
-- **Rename/Formatting/Code Action/Resolve/Execute Command**：目前仍是 LSP-only；未运行或未声明相应能力时应返回明确的 capability 错误。
+- **Completion**：依次收集所有成功结果，保持高优先级顺序，并按 `label` 去重。轻量模式融合本地就近标识符、未保存打开缓冲区、Rust Core 缓存工作区符号前缀索引以及语言关键字/内建类型/常用代码片段；未启用精确 LSP 时屏蔽裸 `.`/`:` 噪音自动弹出（前缀 ≥ 2 字符再自动触发，手动 `⌃Space` 随时可用）。
+- **Hover**：返回第一个非空结果；LSP 无结果或未启动时由本地 provider 返回带源码签名、文档注释与相对路径行号的 Markdown Hover，鼠标悬停防抖自动过滤无意义的裸标识符回落（`F1` 显式调用仍保留）。
+- **Signature Help**：LSP 优先（200），轻量模式由 Rust Core `lsp.builtinSignatureHelp`（0）提供跨文件/打开缓冲区参数签名与 UTF-16 高亮。
+- **Definition / References**：LSP 优先，轻量模式由 Rust Core `lsp.builtinNavigation` 提供跨文件排序定义跳转与 Trigram 剪枝纯代码引用查找（跳过注释与字符串）。
+- **Implementation / Rename / Formatting / Code Action / Resolve / Execute Command**：严格保留为精确 LSP 专属能力；轻量模式不伪造 `textDocument/implementation` 或不安全的文本替换重命名，触发时通过通知横幅提供「一键为当前窗口启用精确 LSP」入口。
 
 provider 抛错不会让路由提前结束。这个策略用于隔离第三方语言服务器故障，但也意味着新增 provider 时必须给出稳定优先级，并避免返回伪造的“成功但无意义”结果。
 
-## 无进程能力
+## 无进程轻量智能（Lightweight Mode）
 
-Rust Core 的 `lsp.builtinCompletions`、`lsp.builtinHover` 和
-`lsp.builtinNavigation` 只读取当前文件文本。Swift 层另外为 Go、Swift、Rust、Python、JavaScript 和 TypeScript 提供关键字候选；即使 Rust Core 未链接，关键字补全仍可使用。
+Rust Core 的 `lsp.builtinCompletions`、`lsp.builtinHover`、`lsp.builtinNavigation`、
+`lsp.builtinSignatureHelp` 与 `editor.foldRegions` 构成默认零进程智能底座。每次请求接受当前文件文本、`filePath`、UTF-16 光标位置以及可选的 `workspaceRoot` 和 `openBuffers`，在非阻塞读取内存缓存的 `WorkspaceSearchIndex`（含 `BTreeMap` 小写前缀索引与 Trigram 倒排表）的前提下完成跨文件补全、定义跳转、纯代码引用查找、富 Markdown Hover 与参数签名提示，并由 `BuiltinLanguageFeatureProvider` 在 `@MainActor` 之外异步调用。Swift 层同时结合 `LanguageSyntaxProfileRegistry` 补充 Go/Rust/Python 关键字、内建类型与常用片段，并在 `CodeEditorView` 中提供全语言同词高亮与 O(log N) 折叠隐藏区间查询。
 
-这些结果是可用性降级，不是类型系统：
+这些结果是高响应、低内存的词法/索引智能，而非完整类型系统：
 
-- 不解析依赖，不启动构建工具，不访问网络；
-- 不保证跨文件定义、重载解析或类型正确性；
-- 位置统一使用零基行号和 UTF-16 列，确保可与 AppKit 和 LSP 结果合并。
+- 不启动外部语言服务器、不执行构建工具、不访问网络；Release C-ABI 在真实 `rust/lithe-core` 仓库（118 文件 / 2,833 符号）实测常驻内存 **18.36 MB**、子进程数 **0**、跨文件定义/Hover/签名/折叠均在 **0.37–1.09 ms**；
+- 不提供跨包类型推导、接口实现关系或实时编译期诊断（这些由按需启用的精确 LSP 承接）；
+- 位置统一使用零基行号和 UTF-16 列，确保可与 AppKit 和 LSP 结果无缝衔接。
 
 ## Catalog 与工具发现
 

@@ -15,8 +15,8 @@ Lithe 里“插件”不是一个概念，而是四层，必须分开理解：
 | Capability | `ModuleCapabilityID` → `AnyObject` | 模块对外暴露的唯一能力，消费方按 ID 取用 | 随模块激活发布、随休眠撤销 |
 | Contribution | `ModuleContribution` | 惰性 UI 元数据（命令、工具窗、设置、状态栏） | 静态数据，读取不构造模块 |
 
-一个包可以拥有多个模块（Go Support 拥有 LSP 与 Execution 两个），一个模块可以导出多个能力
-（Execution 同时导出 execution 与 testing）。**一个模块只能属于一个包，一个能力只能有一个
+一个包可以拥有多个模块（官方语言包 `GoSupport`、`RustSupport`、`PythonSupport` 各自拥有 LSP 与 Execution 两个模块），一个模块可以导出多个能力
+（Execution 同时导出 execution、testing 与 debug 能力；LSP 额外提供 `LanguageSyntaxExtensionProviding` 声明式词法/高亮/离线关键字配置）。**一个模块只能属于一个包，一个能力只能有一个
 活跃 provider**，冲突在静态校验阶段就失败。
 
 ## 分层与依赖方向

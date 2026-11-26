@@ -48,9 +48,9 @@ flowchart TB
 
 | 形态 | 代表 | 声明位置 | 模块归属 | 进程归属 |
 | --- | --- | --- | --- | --- |
-| 内置语言 | Java | Rust catalog | 内置 Language Intelligence / Execution / Debug 模块 | 宿主 |
-| 打包语言插件（builtIn 入口） | Python、Node.js、Rust、C/C++、Ruby… | `BundledLanguagePluginCatalog` | `BundledLanguageServerModule` / `BundledLanguageExecutionModule` | 宿主 `LanguageExecutionHostProviding` 提供 session，模块持有 |
-| 官方原生包（nativeBundle 入口） | Go | `Plugins/mac/Official/<Name>/plugin.json` | 包内自带模块实现 | 宿主提供 session，包模块持有并负责停止 |
+| 仅高亮 / 声明式语言配置 | JSON、YAML、TOML、Markdown、HTML/CSS、SQL、Shell、Dockerfile、Makefile 等 | `LanguageSyntaxProfileRegistry` + Rust catalog | 常驻无进程，不生成模块 | 无进程 |
+| 打包语言插件（builtIn 入口） | Node.js / TypeScript、C/C++、Ruby… | `BundledLanguagePluginCatalog` | `BundledLanguageServerModule` / `BundledLanguageExecutionModule` | 宿主 `LanguageExecutionHostProviding` 提供 session，模块持有 |
+| 官方原生包（nativeBundle 入口） | **Go (`GoSupport`)、Rust (`RustSupport`)、Python (`PythonSupport`)** | `Plugins/mac/Official/<Name>/plugin.json` | 包内自带 LSP + Execution 模块（同时导出 execution/testing/debug 与 `LanguageSyntaxExtensionProviding`） | 宿主提供 session，包模块持有并负责停止 |
 
 三者共用同一套 ID 规则，UI 与 AppModel 不区分来源：
 
@@ -60,26 +60,28 @@ flowchart TB
 能力 ID        dev.lithe.capability.language.<languageID>.language-server
                dev.lithe.capability.language.<languageID>.execution
                dev.lithe.capability.language.<languageID>.testing
+               dev.lithe.capability.language.<languageID>.debug
 ```
 
 `BundledLanguagePluginCatalog`（`macos/Sources/LitheModuleAPI/Catalog/BundledLanguagePluginCatalog.swift`）
-描述 40+ 门非 Java 语言的识别元数据，其中：
+描述其余非第一梯队语言的识别与轻量 LSP 元数据，其中：
 
 - `executableNames` 非空 ⇒ 生成一个 language-server 模块；
 - `supportsExecution == true` ⇒ 生成一个 execution 模块（同时导出 execution 与 testing 能力）；
-- 两者都不满足的语言（如 `json`、`markdown`、`dart`）只贡献识别与高亮，不产生模块。
+- 两者都不满足的语言（如 `json`、`markdown`、`dart`、`sql`、`shell` 等）只贡献识别与单趟/配置高亮（通过 `LanguageSyntaxProfileRegistry`），不产生模块或子进程。
 
-Go 不在这张表里，它是第一个走原生包路径的官方语言包，避免同一门语言被两个 owner 声明
+Go、Rust、Python 均已迁移为 `Plugins/mac/Official/{GoSupport,RustSupport,PythonSupport}` 原生签名官方包，不再留在 `BundledLanguagePluginCatalog` 中，避免同一门语言被两个 owner 声明
 （`ValidatedPluginCatalog` 会以 `duplicateLanguageSupport` 直接拒绝）。
+每个官方包在 LSP 模块中实现 `LanguageSyntaxExtensionProviding`，按需向线程安全的 `LanguageSyntaxProfileRegistry` 注入其词法高亮规则与离线关键字补全表，并与 Rust Core 的 LSP `semanticTokens` 着色层叠加生效。
 
 ## 能力矩阵
 
 | 能力 | 归属 | 说明 |
 | --- | --- | --- |
 | 文件识别 / 语言 ID | Rust catalog + 插件 overlay | 纯元数据，无进程 |
-| 语法高亮 | macOS 视图层 | `Views/Editor/SyntaxHighlighting`，按 `format-mappings.json` 选择 adapter；未映射的代码文件走 `GenericSyntaxHighlightingAdapter` 的通用正则着色，颜色来自 `color-mappings.json` |
-| 轻量编辑智能 | Rust Core `lsp/lightweight` + Swift 关键字表 | 当前文件符号、hover、导航、关键字补全，不启动进程 |
-| LSP | 语言包模块 → `LanguageToolingSessionManager` → Rust LSP runtime | 详见 [`language-tooling.md`](language-tooling.md) |
+| 语法高亮与代码折叠 | macOS 视图层 + Rust Core `editor.foldRegions` | `Views/Editor/SyntaxHighlighting` 单趟词法状态机与声明式 `LanguageSyntaxProfileRegistry`；Rust Core `editor.foldRegions` 提供 Go/Rust/Python/通用花括号语言零进程代码折叠 |
+| 默认轻量编辑智能（Lightweight Mode） | Rust Core `lsp/lightweight` + `WorkspaceSearchIndex` + Swift 关键字/片段表 | **默认启用、零 LSP 冷启动、零工具探测子进程**：提供跨文件定义跳转、Trigram 剪枝跨文件纯代码引用、富 Markdown Hover（签名 + 文档注释 + 位置）、参数签名提示（`signatureHelp`）、工作区+语言类型/片段补全、全语言同词高亮与多语言折叠 |
+| 精确 LSP（Precision LSP Mode，按需显式启用） | 语言包模块 → `LanguageToolingSessionManager` → Rust LSP runtime | 默认待机，可在状态栏/Settings → LSP/命令面板按窗口或全局一键开启，或触发 Rename/Format/Code Actions/Implementation 时一键升级；详见 [`language-tooling.md`](language-tooling.md) |
 | Run | `RunService` + `LanguageRunExtensionProviding` | 运行计划由 provider 生成，进程由宿主创建、模块持有 |
 | Test | `LanguageTestService` + `LanguageTestExtensionProviding` | Java 走 JDT Test 扩展命令；其他语言由包声明发现与执行计划 |
 | Debug | `DebugModule` + DAP 适配器 | Java/Go/Node 有专用 transport，其余走 `StdioDebugAdapterLaunch` |
