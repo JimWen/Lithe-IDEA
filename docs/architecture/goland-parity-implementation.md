@@ -1,18 +1,136 @@
-# GoLand 工作台与可扩展语言能力实施方案
+# Lithe macOS 轻量高性能 IDE：架构、能力对标、路线图与实测对比
 
-**2026-10-28 范围说明：** 较大的功能迭代继续暂缓。本次仅按用户要求，从截至上游 v0.6.5 的历史中挑选有意义的通用修复，优先轻量 macOS 与 Rust/Go/Python，不新增成套兼容层或配置；见 [集成记录](ai-ide-phase-one.md)。下方优先级和依赖保留为后续参考，不表示已承诺排期。B6a2 等未完成范围仍按各自验收状态跟踪，恢复入口见 [README 当前重点与 TODO](../../README.zh-CN.md#后续-todo)。
+> **产品定位（2026-11-26 更新，目标分支 `dev/aiide`，验证基线 `36e45432`）**
+> - **macOS 专用轻量高性能 IDE**：坚持原生 SwiftUI/AppKit + `NSTextView` 编辑器 + Rust Core，保持普通项目约 300–400 MB 基础内存占用，语言服务、调试器、终端与数据库组件按需启停。
+> - **第一梯队语言（优先深度对齐）**：**Go、Rust、Python**——围绕项目与框架工具、语法与高亮、智能补全推荐、跳转导航、重构、运行与断点调试全面对标 **GoLand / RustRover / PyCharm**。
+> - **第二梯队语言（后续规划）**：**Web 栈（TypeScript / JavaScript / HTML / CSS 等）**——在现有 Node 执行/调试底座、单趟高亮与 HTML/SVG 预览之上逐步扩展。
+> - **AI Agent 友好核心定位**：面向 AI Agent 协作设计，后续规划参考 **OpenIDEA** 与 **IDEA CCGUI** 接入 **基于 ACP（Agent Client Protocol）的 Agent 能力**，与原生编辑事务、Diff 审查、LSP 验证和运行调试形成闭环（当前为规划方向，尚未实施）。
+> - **显式排除与边界**：永久排除 Windows 产品与构建、Java 生态与框架增量（Maven/Spring/MyBatis/JDT/JDTLS/内置 JDK）、Linux.do 集成；Monaco 编辑器迁移继续暂缓。
 
-状态：B1 命令入口、B3a 搜索正确性、B3b1a Unicode 修复和 B4a0–B4a6 Terminal
-已完成。Project 按用户 2026-09-06 要求暂停。B7a1、B7a2a/b/c1 已完成；
-Cargo 刷新、双击运行、独立代码审查、GUI 与 ARM64 安装验收已完成（B7a2c2）；其余功能保留在第 6 节状态表，恢复迭代后再复核推进。
-2026-09-21 按 GoLand / RustRover / PyCharm 完成一次跨批次体验对齐复核，结论、新增缺口与
-优先级调整见 [体验对齐复核](#experience-parity-review-2026-09-21)；该复核未改变任何批次的实现状态。
-基线 `c09f2cc4`，目标分支 `dev/aiide`。总体方案复核见
-[审查记录](#plan-review)。
+历史演变说明：早期以 `c09f2cc4` 为基线推进 B1–B7、L0–L8 与 G1；B1、B3a/B3b 文本事务、B4a0–B4a6 Terminal、B7a（Cargo / Go Tools）与 B6a1a/B6a2 文本与协议切片已先后落地；2026-11-26 完成全仓审查与 8 批 P0/P1 修复（`aee8a009`..`36e45432`）并替换验收 `/Applications/Lithe.app`。总体方案复核见[审查记录](#plan-review)，2026-09-21 跨批次源码复核见[体验对齐复核](#experience-parity-review-2026-09-21)。
+
+---
+
+<a id="architecture-overview-2026-11-26"></a>
+
+## 当前架构总览
+
+Lithe 采用「**原生 macOS 界面与平台适配层 + Swift 6 模块化内核 + Rust 确定性核心与独立 Helper**」的分层架构，严格由 `./scripts/verify-service-boundaries.sh` 与 `./scripts/verify-module-boundaries.sh` 守护边界：
+
+```mermaid
+flowchart TB
+    subgraph UI["macOS 原生工作台层 (SwiftUI / AppKit)"]
+        Editor["NSTextView 原生编辑器\n单趟高亮 · 装订线 · 折叠 · Undo"]
+        Panels["工具窗口\nProject · Search · Git/Diff · Run/Debug\nTerminal(SwiftTerm) · Go/Cargo · Database"]
+        Cmd["统一命令与焦点交接\nLitheCommandCatalog · MacFocusHandoffCoordinator"]
+    end
+
+    subgraph App["应用编排与模块化内核 (LitheApplicationKernel)"]
+        AppModel["AppModel + Application FeatureModels + Services\nWorkspaceTextEditCoordinator (租约 / 新鲜度 / 共享 Undo / 磁盘补偿)"]
+        Modules["按需模块 (Swift 6 Targets)\nWorkspace · LanguageIntelligence · Execution · Debug\nGit · Search · LocalHistory · Terminal · Database · AIAssistance"]
+        Plugins["语言插件扩展\nOfficial: GoSupport.bundle\nBundled: Rust / Python / Node (按需启用)"]
+        FutureACP["[规划中] AI Agent 模块 (基于 ACP)\n参考 OpenIDEA / IDEA CCGUI\n复用编辑事务 · Diff 审查 · 运行/调试闭环"]
+    end
+
+    subgraph Platform["macOS 平台适配层 (Platform/MacOS)"]
+        Adapters["MacServiceContainer · MacProcessGroup / ManagedProcessRegistry\nMacRuntimeToolDiscovery · MacLocalSecretStore (0o600 原子写)"]
+    end
+
+    subgraph Rust["Rust 核心与独立 Helper (rust/)"]
+        Core["lithe-core (静态库 · JSON C ABI)\nLSP 引擎 · 多语言搜索/Trigram · Git 历史/Diff/图 · 本地历史"]
+        Helpers["独立子进程\nlithe-git-host · lithe-db-sidecar · lithe-db-mcp"]
+    end
+
+    UI --> AppModel
+    AppModel --> Modules
+    Modules --> Plugins
+    FutureACP -.->|"规划接入"| AppModel
+    AppModel --> Adapters
+    Adapters -->|"JSON C ABI (-force_load)"| Core
+    Adapters -->|"JSON-RPC / stdio / TCP"| Helpers
+```
+
+| 分层 | 关键目标 / 路径 | 核心职责与约束 |
+| --- | --- | --- |
+| **原生展示层** | `macos/Sources/Lithe/Views/` | SwiftUI 工作台与 AppKit 原生组件（`NSTextView`、`SwiftTerm`、`LitheSplitPaneView`）；禁止直接调用 Rust C ABI 或构造底层进程/文件适配器 |
+| **应用与服务编排层** | `macos/Sources/Lithe/{Models,Application,Services}/` | `AppModel` 聚合、`EditorChromeModel` 高频隔离状态、`WorkspaceTextEditCoordinator` 跨文件文本事务、`DebugLaunch*Resolver`、`RustDebugBuildService`；禁止引入 AppKit/SwiftUI |
+| **模块化内核与功能模块** | `LitheModuleAPI`、`LitheApplicationKernel`、`LitheCoreContracts`、`Lithe*Module`（10 个独立 Swift 6 模块） | 按需激活/休眠/关闭、在途激活去重防双进程、资源租约与 `ModuleRuntime` 生命周期管理；完全平台无关 |
+| **语言插件层** | `Plugins/mac/Official/GoSupport`、`BundledLanguagePluginCatalog` | 声明式注册语言服务、执行、测试与调试能力（`.languageServerExtension` / `.languageExecutionExtension` / `.languageDebugExtension`）；冻结 v1 兼容契约 |
+| **macOS 平台适配层** | `macos/Sources/Lithe/Platform/MacOS/` | 组合根 `MacServiceContainer`、进程组与 `ManagedProcessRegistry` 生命周期回收、工具链/Python `.venv`/Swiftly `lldb-dap` 发现、焦点交接与密钥存储 |
+| **Rust 确定性核心与 Helper** | `rust/lithe-core`、`rust/lithe-git-host`、`rust/lithe-db-sidecar`、`rust/lithe-db-mcp` | 承载确定性搜索索引/符号提取/替换、Git 流式历史与分支图、LSP 协议状态机与进程管理、多数据库运行时与 MCP 能力 |
+| **未来 AI Agent 扩展位（规划中）** | `LitheAIAssistanceModule` / 独立 ACP Agent 模块（待设计） | 计划参考 OpenIDEA 与 IDEA CCGUI 接入 ACP（Agent Client Protocol），通过原生事务与 Diff/LSP/Debug 通道实现可控、可回滚、可验证的 Agent 协作 |
+
+---
+
+<a id="feature-progress-2026-11-26"></a>
+
+## 功能进展总览（已完成｜TODO｜暂缓与排除）
+
+### 已完成能力（对标 GoLand / RustRover / PyCharm）
+
+> 以下条目均已在源码实现并通过自动化测试、合约校验及对应实机/工具链验证（截至 `36e45432`）。
+
+| 能力维度 | 对标目标 | Lithe 当前已交付能力 | 代表提交 / 验证证据 |
+| --- | --- | --- | --- |
+| **项目与工具窗口** | GoLand Go Tools、RustRover Cargo、PyCharm 项目环境 | Go Tools 与 Cargo 右侧工具窗（元数据只读隔离、目标树、独立工具任务、取消/刷新、G/R 图标）；自动识别 `go.mod`/`Cargo.toml`/Python 项目与 `.venv`/`VIRTUAL_ENV`；原生多项目窗口与多行标签 | `211395cc`、`3d97c080`、`279338a0`；[Go Tools](goland-parity-b7a3-go-tools-done.md)、[Cargo](goland-parity-b7a2c2-cargo-tool-window-done.md) |
+| **语法、高亮与编辑** | GoLand / RustRover / PyCharm 编辑器基础 | 原生 `NSTextView` 稳定 Undo、UTF-16 代理对安全、IME 组合态保护、括号匹配、代码折叠、行级编辑（`⌘/`、`⌘D`、`⌥⇧↑/↓`）；Go / Rust / Python / C 系 / SQL 单趟词法状态机高亮（修复引号内 `//`/`#`/`--`、raw string、Rust lifetime/属性、Python 三引号误染）；HTML/SVG/Markdown 预览 | `8ec7e1eb`、`1ae1a9cb`、`553fa143` |
+| **导航、搜索与替换** | Search Everywhere、Find/Replace in Files | 双击 Shift / `⌘⇧O` 原生焦点安全搜索框（All/Classes/Files/Symbols/Actions/Text）；Rust Core 多语言工作区符号提取（Go/Rust/Python/JS-TS/C 系）与非 ASCII 兼容 Trigram 索引；项目替换显式范围、预览、文件/匹配排除、二进制文件兼容、共享 Undo 与磁盘补偿 | `010d4d57`、`aee8a009`、`553fa143`；[B3b](goland-parity-b3b-replacement.md) |
+| **LSP 跳转、补全与重构** | GoLand / RustRover / PyCharm 语义动作 | 跨文件 Definition（`⌘B`）、Implementation（`⌥⌘B`）、References（`⌥⌘U`）；统一语言动作快捷键与 Code 菜单（`⇧F6` Rename、`⌥⌘L` Format、`⌥↩` Source Actions、`⌃Space` Complete、`F1` Quick Doc）；LSP 有序 `WorkspaceEdit`、`codeAction.dataSupport`、`codeAction/resolve`、真实 UTF-16 选区 Code Actions、`prepareRename` 占位符预填、恢复标签页跨文件同步、跨文件单次 ⌘Z 撤销；`ModuleRuntime` 并发激活去重防双 `gopls` | `40c08360`、`e2433a52`、`41d991bc`；[B6](goland-parity-b6-refactor.md)；真实 `gopls` / `rust-analyzer` 验证 |
+| **运行与断点调试** | GoLand Delve、RustRover LLDB、PyCharm debugpy | Go/Rust/Python/Node 调试扩展能力注册（含 `GoSupport.bundle` v2 `.languageDebugExtension("go")`）、多语言装订线与候选行校验、`⌘F8`/`⌃D`/Go Tools/Cargo 调试入口、Rust 调试前自动 `cargo build`、Python `.venv` 与 Swiftly `lldb-dap` 发现、参数/环境/`cwd` 透传、`/tmp` 符号链接归一化、DAP 帧恢复与子进程组回收 | `279338a0`；`verify-official-plugins.sh`；本机实测 Rust `cargo + lldb-dap` 命中 `main.rs:4` 读出 `count=21, result=42` 并退出 `0`（`dlv`/`debugpy` 待对应工具链环境复验） |
+| **终端与焦点交接** | GoLand / Zed 终端与键盘流 | 原生 SwiftTerm 终端（shell/参数/env/cwd/字体/滚动/venv 自动检测、退出关闭标签 `#1456`、Control 键归还终端 `#1360`）；`MacFocusHandoffCoordinator` 同步释放编辑器焦点并缓冲 250ms 按键，修复 `⌥F12`/`⌘⇧O` 按键泄漏写入源码 | `3724ea20`、`766b8619`、`c16c1201`、`553fa143`；[B4a](goland-parity-b4a-terminal-done.md) |
+| **Git 审查与本地历史** | GoLand Git Log / Diff / Local History | Git 后端流式历史过滤（最多 50,000 提交，支持文本/作者/日期/路径）、本地时区显示、分支图、双栏 Diff、Blame、Stash/Shelf/Worktree、隐藏仓库过滤、`--continue` 非交互保护；Local History 文件与项目快照（节流清理防 O(N²)） | `e14399e1`、`96285483`、`553fa143` |
+| **数据库与 AI 辅助** | DataGrip 基础 SQL 工作台 + AI Commit | 多数据库工作台（SQLite/Postgres/MySQL/SQL Server/MongoDB/Redis/Nacos）、`lithe-db-sidecar`（SQLite 动态类型解码、安全 SQL 导出/危险语句检测、SSH 隧道自动回收与防注入、SQL Server 事务回滚）与 `lithe-db-mcp`；AI Commit Message 生成与本机 AI 配置导入 | `6b729800`、`3ad474c3`；打包版 `lithe-db-sidecar` 冒烟通过 |
+
+### 后续 TODO 路线图（按优先级分层）
+
+| 优先级 | 方向 / 批次 | 核心目标 | 关键依赖与说明 |
+| --- | --- | --- | --- |
+| **P1-A** | **L4a · LSP 编辑器直通交互**（Go / Rust / Python 高频感知收益最高） | 接通 `inlayHint`（类型/参数名内联提示）、`signatureHelp`（函数参数签名提示）、`documentHighlight`（光标符号读写高亮）、`documentSymbol`（Structure 面板与面包屑）、`semanticTokens`（语义着色） | 不依赖 Tree-sitter 引擎；与 `client.rs` / `CodeEditorView.swift` 串行推进；见 [syntax-and-completion.md](syntax-and-completion.md#l4a-split) |
+| **P1-B** | **L0–L3 / L6 · 离线语法与现代补全引擎**（对标 GoLand/RustRover/PyCharm 核心输入体验） | Tree-sitter 增量文档状态（L0/L1）、三语言高精度离线高亮与结构（L2）、自动触发/增量过滤/排序/Snippet/文档预览补全 Popup（L3）、保存即格式化 `formatOnSave`（L6） | 按 `B6b2 → L0 → L1 → L2/L3` 顺序推进；见 [syntax-l0-l2-engine.md](syntax-l0-l2-engine.md) |
+| **P1-C** | **B6 剩余语义重构 + B7b 入口 gutter 深化** | 内联 Rename UI（B6c）、文件/目录资源事务 create/rename/delete（B6b1）、Extract/Inline/Change Signature/Safe Delete（B6d）、按需反向 `workspace/applyEdit`（B6a1b）；Go/Rust/Python 测试与基准测试行级 gutter、Go `dlv` / Python `debugpy` 真机断点复验、Python 项目工具体验补齐 | 复用已验证的 `WorkspaceTextEditCoordinator` 与 B6a2 协议；见 [goland-parity-b6-refactor.md](goland-parity-b6-refactor.md) |
+| **P1-D** | **AI Agent 能力（基于 ACP，参考 OpenIDEA & IDEA CCGUI）** | 设计并接入 **ACP（Agent Client Protocol）** 客户端会话、权限审批与工具调用面板；复用 Lithe 原生跨文件编辑事务（租约/新鲜度/共享 Undo）、Git Diff 审查、LSP 诊断/跳转、终端与 Run/Debug 反馈，打造「低内存原生 IDE + ACP Agent」协作闭环 | 需先完成 ACP 架构与安全/事务边界细案，按独立按需模块落地，不拖累空载内存 |
+| **P2-A** | **Web 语言栈（TypeScript / JavaScript / HTML / CSS 等）** | 扩展 `BundledLanguagePluginCatalog` 与 LSP/调试/项目识别：`typescript-language-server`/`vtsls`、HTML/CSS/Tailwind、ESLint/Prettier 格式化、`package.json`/Vite/Next 运行与前端调试、语法高亮与框架补全 | 排在 Go/Rust/Python 核心体验闭环之后推进，复用 L0–L8 语法与插件体系 |
+| **P2-B** | **工作台与可配置性补齐** | Search Everywhere 空查询最近文件与 `⌘E`（B3c/B3d）、B4 其余 Editor/Keymap 导入设置、B5 主题与声明式资源插件包、TODO 工具窗、G1 Git 图最终对照 | 各批次相互独立，按需推进 |
+
+### 暂缓与永久排除边界
+
+- **暂缓（保持现状，恢复前需重新确认范围）**：
+  - **B2（Project / Commit / Pull Requests 改造）**：Project 按此前要求暂停；GitHub PR 待凭据与错误路径补齐后再开放。
+  - **E1 编辑器与导航扩展能力**：跨语言统一 Problems 面板、多光标/列选择、调用/类型层级、书签、测试覆盖率（[明细见 E1](#e1-editor-navigation-gaps)，待确认批次号与排期）。
+  - **`.http` 请求客户端**：当前仅支持文本编辑，是否新增内置 HTTP Runner 待后续评估。
+- **永久排除 / 显式不做**：
+  - **Windows 产品与构建**（仅维护 macOS 产品及 macOS 实际使用的平台无关 Rust Core/契约）。
+  - **Java 生态与框架支持增量**（Maven、Spring、MyBatis、JDT/JDTLS、内置 JDK 及其打包/CI）。
+  - **Linux.do 插件与集成**。
+  - **Monaco 编辑器迁移**（坚持原生 AppKit/`NSTextView`，除非用户另行明确决策）。
+
+---
+
+<a id="performance-comparison-2026-11-26"></a>
+
+## 性能与实测对比汇总（Lithe vs GoLand / RustRover / PyCharm）
+
+> **口径说明**：下表整合 **2026-11-25 实机桌面对照（Apple M6 / 16 GB / macOS 27.0，基线 `ab305685` + SQLite 修复）** 与 **2026-11-26 修复后自动化/打包/工具链验证（基线 `36e45432`）**。凡 2026-11-26 代码已修复但尚未重跑桌面 GUI 采样的指标，均明确标出「历史实测」与「当前状态」，绝不虚构未测数值。原始日志位于 `.artifacts/parity-20261125/logs/` 与 `.artifacts/test-stability/`。
+
+| 实测维度 | 样本 / 场景 | Lithe 实测 | 参照 IDE（GoLand / RustRover / PyCharm） | 2026-11-26 状态与备注 |
+| --- | --- | --- | --- | --- |
+| **主进程常驻内存（RSS）** | 打开普通项目基础内存 | 约 **300–400 MB** | JetBrains IDE 常驻通常 1.5–2+ GB | 原生 AppKit + 按需模块架构核心优势 |
+| **大仓主进程 / 进程树内存** | Hugo（2,619 文件 + Git 日志，120s 中位数） | 主进程 **349.9 MiB**；进程树 1,573.7 MiB（当时含 2 个并发 `gopls` 1,216.1 MiB） | GoLand 主进程 **1,815.8 MiB**；进程树 2,170.0 MiB（辅助进程 ~354 MiB） | Lithe 主进程约为 GoLand 的 **1/5**；双 `gopls` 竞态已在 `e2433a52` 修复，待同仓重测进程树 RSS |
+| **Git 日志热打开** | Hugo（1,037 commits，含 12 合并提交，⌘9 三次热测） | **773 / 791 / 807 ms** | GoLand **2,100 / 1,870 / 1,867 ms** | Lithe 快 **2.3×–2.6×**；`96285483` 已补齐后端流式过滤（50K 提交）与本地时区 |
+| **Search Everywhere（Core 引擎）** | Release Core `workspace.searchEverywhere` 首次 / 五次热查中位数 | Hugo **537.67 / 11.10 ms**；Cargo **575.58 / 9.59 ms**；Django（7,104 文件）**1,443.27 / 111.26 ms**；Vue **236.42 / 2.58 ms** | *(不含 UI/AX 开销，不可直接与桌面端比值)* | `aee8a009` 新增 Go/Rust/Python 符号索引并修复非 ASCII 绕过 Trigram |
+| **Search Everywhere（桌面热导航）** | ⌘⇧O 精确文件名到源码可读 | Hugo **2,502 / 2,398 / 2,221 ms**；Django（含 AX 稳定等待）16.50–16.59 s | GoLand Hugo **1,320 / 1,301 / 1,280 ms**；PyCharm Django **1.97 / 1.73 / 2.10 s**（类名 `SQLCompiler` 1.44–1.63 s） | 2026-11-25 历史测得 Lithe Django 类名无命中（已于 `aee8a009` 修复）且焦点偶发泄漏（已于 `553fa143` 修复），待安装版桌面复测 |
+| **三语言 Run 启动** | 自建样本计算 `21 × 2` 到首个 `42` 输出 | Go **665 ms**、Rust **501 ms**（含 0.20s Cargo dev 构建）、Python **58 ms** | 参照 IDE 均成功输出 `42` 并退出 `0` | 轻快直接执行 |
+| **终端热打开 + 首条命令** | 预热 shell 后 `⌥F12` 立即输入 `sh t` 并回显结果 | 成功轮 **98 / 98 ms**（2026-11-25 首轮曾因焦点失序漏键） | GoLand **105 / 110 / 95 ms** | 热响应持平；`553fa143` 已通过焦点交接协调器与冷启输入缓冲修复漏键与写入源码问题 |
+| **SQLite 查询延迟** | `SELECT sum(v) AS parity_sum FROM sample`（四次） | **22 / 35 / 32 / 32 ms**（结果 `42`） | GoLand SQLite JDBC **500 / 335 / 85 / 331 ms** | 2026-11-26 打包版 `/Applications/Lithe.app/Contents/Helpers/lithe-db-sidecar` 复验动态表达式列全对（无 `<unsupported>`） |
+| **三语言语法高亮** | 字符串内含 `//` / `#` 及关键字 | 2026-11-25 曾误染为注释色；`553fa143` 已改写为单趟词法状态机并通过单测 | GoLand / RustRover / PyCharm 正确保持字符串色 | 2026-11-26 单趟高亮单元测试全绿；高精度语法树着色归 L0–L2 |
+| **三语言断点调试** | `main.go` / `main.rs` / `main.py` 断点停在输出前检查 `21, 42` | 2026-11-25 均不可调；`279338a0` 全链路打通，2026-11-26 本机实测 **Rust `cargo + lldb-dap` 命中 `main.rs:4` 读出 `count=21, result=42` 并退出 `0`** | GoLand / RustRover / PyCharm 均命中并读出 `21, 42` | 本机未装 `dlv`/`debugpy`，Go/Python 真机暂停留待有工具链环境复测 |
+| **全量工程回归基线** | `36e45432`（2026-11-26） | Rust **564/564**（`lithe-core` 535、`db-sidecar` 19、`db-mcp` 4、`git-host` 6）；macOS Swift **1,630/1,630**（193 suites，47.056s）；`verify-rust-core.sh`、`verify-official-plugins.sh` 及 `/Applications/Lithe.app` 安装校验全通 | — | 定时报告见 `.artifacts/test-stability/goal-*.json` 与 `index.html` |
+
+---
 
 <a id="workbench-parity-2026-11-25"></a>
 
-## 2026-11-25 工作台实测（Go、Rust、Python）
+## 2026-11-25 工作台实测明细（Go、Rust、Python 历史记录）
 
 主机为 Apple M6、16 GB、macOS 27.0。Lithe 验收包基于 `ab305685` 的 ARM64 Release，最终包包含本轮 SQLite 修复。Go 参照 GoLand 2026.2.3，Rust 参照 RustRover 2026.3.1.1，Python 参照 PyCharm 2026.3.0.2。三语言均在同一组自建源码中检查运行、断点与跨文件跳转。工作台比较使用固定提交的公共项目。
 
@@ -178,12 +296,12 @@ Lithe 的临时文本文件最终多出两行 `sh t`，GoLand 的同一个文件
 - **Rust 全工作区定时套件（564/564 通过）**：`lithe-core` 535、`lithe-db-sidecar` 19、`lithe-db-mcp` 4、`lithe-git-host` 6，报告见 `.artifacts/test-stability/goal-rust-*.json`。
 - **macOS 全量 Swift 定时套件（1,630/1,630 通过，193 suites，47.056s）**：覆盖全部新增回归套件（`ModuleRuntimeConcurrencyTests`、`GitLogBackendFilterTests`、`BatchCHardeningTests`、`BatchDMultiLanguageDebugTests`、`BatchELanguageActionsAndPrepareRenameTests`、`LanguageWorkspaceEditHostTests`），报告见 `.artifacts/test-stability/goal-macos-full.json` 与 `.artifacts/test-stability/index.html`。
 - **全套仓库门禁通过**：`cargo fmt --all --check`、`verify-rust-core-comments.sh`、`verify-rust-core-layout.sh`、`verify-service-boundaries.sh`、`verify-module-boundaries.sh`、`verify-shared-contracts.sh`、`verify-test-stability.sh`、`verify-core.sh`、`verify-git-graph.sh`、`verify-official-plugins.sh`（重构并验证 `GoSupport.bundle` 含 `.languageDebugExtension("go")`）及 `verify-rust-core.sh`（含 `ProjectMetadataOperationsTests` 18/18、`test-git-execution.py` 及 12/12 桥接集成测试）。
-- **ARM64 Release 打包校验**：`LITHE_ARCH=arm64 ./scripts/package-app.sh` 产出 `dist/Lithe-arm64.app`，通过可执行文件、Sparkle、`lithe-db-sidecar`/`lithe-db-mcp`、`GoSupport.bundle`、强符号、`lipo -verify_arch arm64` 与 `codesign --verify --deep --strict` 校验（未修改系统 `/Applications`）。
+- **ARM64 Release 打包与系统安装校验**：基于干净已提交 `HEAD`（`36e45432`，`LitheBuildGitDirty == false`）执行 `LITHE_ARCH=arm64 ./scripts/package-app.sh`，产出 `dist/Lithe-arm64.app` 并完成原子替换 `/Applications/Lithe.app`（保留回滚校验）；通过可执行文件、Sparkle、`lithe-db-sidecar`/`lithe-db-mcp`、`GoSupport.bundle`、强符号、`lipo -verify_arch arm64`、`codesign --verify --deep --strict`、SHA-256 与启动/退出及零残留进程校验。
 - **本机真实工具链冒烟**：
   - `gopls`：使用更新后的 `client-initialize-v1.json` 协商，确认返回 `renameProvider.prepareProvider=true` 与 `codeActionProvider.resolveProvider=true`，并完成真实 `textDocument/prepareRename`（返回占位符 `greet`）与跨 2 文件 `textDocument/rename`。
   - Rust `cargo build --message-format=json-render-diagnostics` + `lldb-dap`：命中 `src/main.rs:4` 已验证断点，读取局部变量 `count=21, result=42`，继续运行后以 `exitCode=0` 正常退出。
-  - 打包版 `dist/Lithe-arm64.app/Contents/Helpers/lithe-db-sidecar`：执行 SQLite 动态表达式查询 `SELECT sum(v) AS parity_sum, NULL AS empty_val, 3.5 AS ratio, 'ok' AS label FROM sample`，返回精确类型值且无 `<unsupported>`。
-- **诚实限制**：当前主机未安装 `dlv`、`debugpy`、`pyright`，Go/Python 的真机调试器暂停体验留待有对应工具链的环境复验；本轮未替换系统安装副本或运行桌面 GUI 自动化录制，打包产物保留于 `dist/Lithe-arm64.app`。
+  - 打包版 `/Applications/Lithe.app/Contents/Helpers/lithe-db-sidecar`：执行 SQLite 动态表达式查询 `SELECT sum(v) AS parity_sum, NULL AS empty_val, 3.5 AS ratio, 'ok' AS label FROM sample`，返回精确类型值且无 `<unsupported>`。
+- **诚实限制**：当前主机未安装 `dlv`、`debugpy`、`pyright`，Go/Python 的真机调试器暂停体验留待有对应工具链的环境复验；2026-11-26 修复后的大仓桌面 GUI 计时与进程树内存采样尚未重跑，相关数值继续如实标明为 2026-11-25 历史基线。
 
 ### P2 · 中长期演进与显式暂缓/待确认边界
 
@@ -210,7 +328,7 @@ Lithe 的临时文本文件最终多出两行 `sh t`，GoLand 的同一个文件
 | B4a4 | [Terminal 启动配置](goland-parity-b4a4-terminal-startup-done.md) | 已完成 |
 | B4a5 | [Terminal 显示与输入](goland-parity-b4a5-terminal-display-done.md) | 已完成 |
 | B4a6 | [Terminal 虚拟环境](goland-parity-b4a6-terminal-venv-done.md) | 已完成 |
-| B6 | [语义编辑事务与重构](goland-parity-b6-refactor.md) | B6a1a 已验收；B6a2 首个文本切片 Rust/Swift 自动验证通过，2026-11-25 [四种编辑及真实 resolve 通过安装验收](goland-parity-b6-refactor.md#b6-text-edit-acceptance-2026-11-25)；复用既有文本事务/Undo，完整资源事务仍待实施，见[当前裁定](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
+| B6 | [语义编辑事务与重构](goland-parity-b6-refactor.md) | B6a1a 已验收；B6a2 文本切片（2026-11-25 安装验收）与核心协议闭环（2026-11-26：`codeAction.dataSupport`、`prepareRename`、UTF-16 选区 Code Action、语言快捷键与恢复标签同步，`e2433a52`/`41d991bc`）已完成；`documentSymbol`/`selectionRange` 消费、完整资源事务与 B6c/B6d 待实施，见[当前裁定](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
 | B7a | [Go Tools / Cargo](goland-parity-b7a-go-cargo.md) | 部分完成 |
 | B7a2a / B7a2b | [进程清理、工具捕获与插件资源](goland-parity-b7a2b-project-tool-capture-done.md) | 已完成 |
 | B7a2c | [项目元数据读取与刷新](goland-parity-b7a2c-project-metadata-refresh.md) | c1/c2 完成，c3 随 B7a3 完成 |
@@ -468,11 +586,11 @@ E1 的五项尚未确定批次编号与排期，不得在未经用户确认前�
 | --- | --- | --- | --- | --- | --- | --- |
 | B1 | 方案复核通过 | B1a/B1b/B1c 完成，跳过 | 976 项测试、边界、ARM64 包通过 | 最近项稳定并可选；工具窗、改键及提示、主题、标签、设置入口通过 | 通过 | `8b8f21be`、`cb892c85` |
 | B2 | 设计基线复核通过，逐批细化 | Project 按用户要求暂停；其他待实施 | — | — | — | — |
-| B3 | B3a、B3b1a 通过；其余逐批细化 | B3b 范围、预览、Apply、排除与文本事务/Undo 已接入；B3c/B3d 待实施 | B3b1a 历史：Rust 331、Swift 985、原生链接 7 项及 ARM64 包通过；后续事务回归见功能文档 | 输入/键盘、Find 预览与 Unicode 已验收；后续安装版实际替换、排除与撤销见[集成验收](ai-ide-phase-one.md) | 历史未提交审查保留；当前范围以[事务记录](goland-parity-b3b-replacement.md#buffer-transaction-integration)为准 | B3a `010d4d57`；B3b1a `b0dac7e2`；后续集成与原生 Undo 修复见当前记录 |
-| B4 | B4a0–B4a6 通过 | Terminal 启动、显示/输入、venv 完成；其他设置待实施 | 1032 项完整测试、42+3 个 shell 场景、边界、ARM64 包通过 | 真实设置、Python prefix、Restart、环境缺失/恢复、迟到确认焦点及清理通过 | B4a0–B4a6 通过 | 启动 `db44d036`；字体 `4f74218a`；输入 `266c0c52`；venv `3724ea20` |
+| B3 | B3a、B3b1a 通过；其余逐批细化 | B3b 范围、预览、Apply、排除与文本事务/Undo 已接入；2026-11-26 补齐多语言符号索引、非 ASCII Trigram 修复、二进制替换兼容与焦点交接（`aee8a009`、`553fa143`）；B3c/B3d 待实施 | Rust 564/564、macOS 1,630/1,630 全绿（`36e45432`） | 历史输入/Find 预览与安装版替换撤销已验收；2026-11-26 新符号索引与焦点交接待桌面重测 | 当前范围以[事务记录](goland-parity-b3b-replacement.md#buffer-transaction-integration)为准 | B3a `010d4d57`；B3b1a `b0dac7e2`；2026-11-26 `aee8a009`、`553fa143` |
+| B4 | B4a0–B4a6 通过 | Terminal 启动、显示/输入、venv 完成；2026-11-26 补齐终端焦点交接与冷启输入缓冲（`553fa143`）；其他设置待实施 | 1032 项历史 + 2026-11-26 全量 1,630 项通过 | 真实设置、Python prefix、Restart、环境缺失/恢复、迟到确认焦点及清理通过 | B4a0–B4a6 通过 | 启动 `db44d036`；字体 `4f74218a`；输入 `266c0c52`；venv `3724ea20`；焦点交接 `553fa143` |
 | B5 | 设计基线复核通过，逐批细化 | 未开始 | 未开始 | 未开始 | 未开始 | — |
-| B6 | B6a1a 通过；后续依 2026-10-06 修订 | B6a2 首个有序文本编辑切片已实现；其余方法、反向请求、资源事务与重构待实施 | 历史：B6a2 Rust 523、Swift 1574 项通过；本次完整回归见[集成记录](ai-ide-phase-one.md) | B6a1a 已验收；B6a2 首个文本切片的四种语义编辑、撤销及真实 resolve 已于 2026-11-25 完成安装验证 | 首个文本切片静态复核无剩余阻断项；不代表 B6a2 整体完成 | `40c08360`；[当前裁定与验证记录](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
-| B7 | B7a1/B7a2a–b/c1 通过；其余按子方案推进 | Cargo 只读刷新与右栏、双击运行和缺配置生成续跑已实现；Go Tools 与独立任务已完成（见 B7a3）；gutter/Structure/TODO 待实施 | 2026-09-08：Rust 354、Swift 1124、边界/契约/stability 通过 | Cargo 12 种真实对照运行；GUI 切换/刷新恢复/12 文件零写入通过；ARM64 已替换系统安装并复验 | c2 独立代码审查及修复复核通过 | 基线 `3d97c080`，本轮修复与验收记录一同提交；[Cargo 验收摘要](goland-parity-b7a2c2-cargo-tool-window-done.md#cargo-acceptance) |
+| B6 | B6a1a 通过；后续依 2026-10-06 修订 | B6a2 文本切片与核心协议闭环（`dataSupport`、`prepareRename`、UTF-16 选区、快捷键、恢复标签同步）已完成；其余 `documentSymbol`/`selectionRange`、反向请求、资源事务与 B6c/B6d 待实施 | 2026-11-26：Rust 564/564（含 LSP 122/122）、macOS 1,630/1,630 通过 | B6a1a 已验收；2026-11-25 文本切片与真实 resolve 安装验收通过；2026-11-26 真实 `gopls` 协商/`prepareRename`/跨文件 rename 冒烟通过 | 无阻断项；B6 整体仍未完成 | `40c08360`、`e2433a52`、`41d991bc`；[当前裁定与验证记录](goland-parity-b6-refactor.md#b6-current-implementation-rulings) |
+| B7 | B7a1/B7a2a–b/c1 通过；其余按子方案推进 | Cargo/Go Tools 右栏与独立任务完成；2026-11-26 打通 Go/Rust/Python 调试扩展、装订线断点、Rust 自动构建与 DAP 回收（`279338a0`）；剩余 gutter/Structure/TODO 待实施 | 2026-11-26：Rust 564/564、macOS 1,630/1,630、`verify-official-plugins.sh` 通过 | Cargo/Go Tools 历史 GUI 验收通过；2026-11-26 本机 Rust `cargo + lldb-dap` 断点与局部变量读取冒烟通过（`dlv`/`debugpy` 待工具链环境复验） | 通过 | `3d97c080`、`211395cc`、`279338a0`；[Cargo](goland-parity-b7a2c2-cargo-tool-window-done.md#cargo-acceptance)、[Go Tools](goland-parity-b7a3-go-tools-done.md#go-tools-acceptance) |
 | B7a3 | 方案与代码复核通过 | Go 元数据隔离、工具窗口、独立任务和 G/R 图标完成 | Swift 1176 全量及最终 27+18 项回归、Rust/边界/契约/stability 通过 | 实际编辑修复、并发停止隔离、零写刷新、Go/Cargo 菜单运行及深浅色图标通过 | 通过 | [Go Tools 验收摘要](goland-parity-b7a3-go-tools-done.md#go-tools-acceptance)；`211395cc` 干净检出 1168 项通过，系统安装与 Go/Cargo 点击复验通过 |
 | B7b | 剩余细案待重审（[运行入口 gutter](goland-parity-b7b-run-gutter.md)），前置 B6a2 符号协议预交付 | 已有 Go/Rust runnable gutter 保留；剩余范围待实施 | 原有验证见上游集成记录；本批无新结果 | 本批待复验 | 待实施后审查 | — |
 | L0–L8 | 2026-09-08 L0–L2 第二版方案通过（[首轮 9 项闭环](syntax-l0-l2-engine.md#l0-l2-plan-review)），L3–L8 逐批细化 | 未开始 | 历史方案检查：79 处本地链接/锚点、5 个 wire 示例、八槽位、命令语法与 diff 通过；无产品测试 | 11.png 已核对（历史）；本轮无 GUI | 未开始 | 源码基线 `e14309d4`，历史文档验证 HEAD `7e0887a1`；细案与待实现 wire 同步保留 |

@@ -1,11 +1,17 @@
 # B6 重构：语义编辑事务与 Refactor This
 
-状态：第 1–10 节保留基于 `3680935d` 的第四版设计与历史验收；2026-10-06 已按当前源码复核，实施边界以第 11 节修订为准。**B6a2 首个文本编辑切片已实现并通过 Rust/Swift 自动验证；2026-10-28 已随轻量维护安装，基础编辑与跨标签 Undo/Redo 冒烟通过，语义动作实机验收仍待完成。B6a2 整体仍未完成。**
+> **当前状态（2026-11-26 更新，基线 `36e45432`）**
+> - **已完成并验证**：
+>   - **B6a1a**：能力纠偏与报文快照（`94af8e89`）。
+>   - **B6a2 有序文本编辑切片**：Go/Rust/Python 跨文件重命名、格式化、代码动作、补全、`codeAction/resolve` 与单次 ⌘Z 撤销（`40c08360`，2026-11-25 ARM64 安装验收通过，见[验收记录](#b6-text-edit-acceptance-2026-11-25)）。
+>   - **B6a2 核心协议与入口闭环（2026-11-26）**：开启 `textDocument.codeAction.dataSupport`、`textDocument.rename.prepareSupport`、静/动态 `renameProvider.prepareProvider` 探测与 `textDocument/prepareRename` 预填；透传真实 UTF-16 选区与范围相交诊断至 Code Actions；注册 `⇧F6`/`⌥⌘L`/`⌥↩`/`⌃Space`/`F1` 快捷键；修复恢复标签页跨文件同步与 `ModuleRuntime` 并发激活竞态（`e2433a52`、`41d991bc`，Rust 564/564、macOS 1,630/1,630 及本机真实 `gopls` 冒烟通过）。
+> - **待推进（TODO）**：B6a2 剩余协议（`documentSymbol`→L4a Structure、`selectionRange`→L8 选区扩展）、B6a1b 反向 `workspace/applyEdit`（按需）、B6b1 完整文件/目录资源事务（create/rename/delete）、B6c 内联 Rename UI、B6d Extract/Inline/Change Signature/Safe Delete。
+> - **架构复用方向**：本方案确立的有序编辑事务、修改租约、文档新鲜度校验、共享 Undo/Redo 与磁盘失败补偿，也将作为未来 **ACP（Agent Client Protocol）AI Agent** 工作流修改工作区文件的统一安全底座（规划中，详见[工作台总架构与路线图](goland-parity-implementation.md#architecture-overview-2026-11-26)）。
 
-历史状态：**第四版，B6a1a 能力纠正与报文快照已实现并通过 Rust 计时及真实 gopls 协议回归；真实编辑/点击及独立候选复验通过；`94af8e89` 已替换系统安装并复验，其余功能未实施（见 §3.4–3.6）。** 第一版因「只核查 LSP 解析侧」被否；
+历史状态：第 1–10 节保留基于 `3680935d` 的第四版设计与历史验收，实施边界以第 11 节[实施前复核与衔接裁定](#b6-current-implementation-rulings)为准。第一版因「只核查 LSP 解析侧」被否；
 第二版补上协商侧与反向请求侧后仍被独立审查**不放行**，列出 9 条阻塞问题。本版按那 9 条
 逐条修订，并采纳其对 B3b 归属冲突的处置建议。承接
-[B6 设计基线](goland-parity-implementation.md) 与
+[工作台总方案与路线图](goland-parity-implementation.md) 与
 [B3b 跨文件替换事务](goland-parity-b3b-replacement.md)。
 
 第二版的核心错误有两类：
