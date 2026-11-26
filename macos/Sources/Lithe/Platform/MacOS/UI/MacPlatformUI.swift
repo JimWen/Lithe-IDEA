@@ -7,6 +7,14 @@ final class MacPlatformUI: PlatformUI {
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
+    func beginFocusHandoff(to target: FocusHandoffTarget) {
+        MacFocusHandoffCoordinator.shared.begin(to: target, in: nil)
+    }
+
+    func cancelFocusHandoff(for target: FocusHandoffTarget) {
+        MacFocusHandoffCoordinator.shared.cancel(for: target)
+    }
+
     func chooseDirectory(title: String, prompt: String) -> URL? {
         let panel = NSOpenPanel()
         panel.title = title

@@ -95,7 +95,6 @@ enum SearchEverywhereResultSource: Equatable {
 /// IDEA 风格的全局搜索弹窗：分类标签、双栏结果和可执行 Actions 共用同一套键盘导航。
 struct SearchEverywhereView: View {
     @EnvironmentObject private var model: AppModel
-    @FocusState private var searchFocused: Bool
     @State private var query = ""
     @State private var selectedIndex = 0
     @State private var scope: SearchEverywhereScope = .all
@@ -149,7 +148,11 @@ struct SearchEverywhereView: View {
         ranked.reserveCapacity(results.count)
         for (index, value) in results.enumerated() {
             ranked.append(
-                RankedResult(index: index, score: SearchRelevance.score(value, query: query), value: value)
+                RankedResult(
+                    index: index,
+                    score: SearchRelevance.score(value, query: query, workspaceRoot: model.workspaceURL),
+                    value: value
+                )
             )
         }
         ranked.sort { left, right in
@@ -186,7 +189,6 @@ struct SearchEverywhereView: View {
         }
         .onAppear {
             query = model.searchEverywhereQuery
-            searchFocused = true
             selectedIndex = 0
         }
         .background(MacSearchKeyboardHandler(isEnabled: { model.isSearchEverywhereVisible }, handle: handleKey))
@@ -196,14 +198,18 @@ struct SearchEverywhereView: View {
         }
         .onChange(of: searchOptions) { _ in model.clearSearchEverywhereResults() }
         .onChange(of: scope) { _ in selectedIndex = 0 }
-        .task(id: "\(queryMode.workspaceSearchTaskID)|\(searchOptions.cacheKey)") {
+        .task(id: "\(queryMode.workspaceSearchTaskID)|\(searchOptions.cacheKey)|\(scope == .text)") {
             if queryMode.commandQuery != nil {
-                await model.searchEverywhere(query: "", options: searchOptions)
+                await model.searchEverywhere(query: "", options: searchOptions, includeContent: false)
                 return
             }
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            await model.searchEverywhere(query: queryMode.workspaceQuery, options: searchOptions)
+            await model.searchEverywhere(
+                query: queryMode.workspaceQuery,
+                options: searchOptions,
+                includeContent: scope == .text
+            )
         }
     }
 
@@ -251,10 +257,8 @@ struct SearchEverywhereView: View {
         HStack(spacing: 8) {
             LitheSystemIcon(systemImage: "magnifyingglass")
                 .foregroundStyle(LitheTheme.secondaryText)
-            TextField("", text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(size: 15))
-                .focused($searchFocused)
+            SearchEverywhereInputField(text: $query, onKeyboardAction: handleKey)
+                .frame(maxWidth: .infinity, maxHeight: 24)
             if query.isEmpty {
                 Text("Type / to see commands")
                     .font(.system(size: 12))
@@ -319,10 +323,27 @@ struct SearchEverywhereView: View {
         }
     }
 
-    /// 后端按 matchLimit 截断，命中数刚好顶到上限时提示还有更多。
+    /// 后端按各分桶上限截断（默认每类 50 条），命中数顶到当前范围上限时提示还有更多。
     private var isTruncated: Bool {
         guard queryMode.commandQuery == nil else { return false }
-        return model.searchEverywhereResults.allMatches.count >= SearchEverywhereResults.matchLimit
+        let bucketCap = 50
+        let results = model.searchEverywhereResults
+        switch scope {
+        case .all:
+            return results.fileMatches.count >= bucketCap
+                || results.classMatches.count >= bucketCap
+                || results.symbolMatches.count >= bucketCap
+        case .files:
+            return results.fileMatches.count >= bucketCap
+        case .classes:
+            return results.classMatches.count >= bucketCap
+        case .symbols:
+            return results.symbolMatches.count >= bucketCap
+        case .text:
+            return results.contentMatches.count >= bucketCap
+        case .actions:
+            return false
+        }
     }
 
     private var moreRow: some View {
@@ -488,12 +509,10 @@ struct SearchEverywhereView: View {
 
     private func iconKind(for result: FileSearchResult) -> LitheIconKind {
         switch result.kind {
-        case .file, .content:
+        case .file, .content, .symbol:
             return LitheIcons.kind(for: result.url, isDirectory: false)
         case .type:
             return .javaClass
-        case .symbol:
-            return .javaGeneric
         }
     }
 
@@ -529,4 +548,92 @@ struct SearchEverywhereView: View {
         }
     }
 
+}
+
+/// AppKit-backed text field that synchronously takes first responder when the
+/// Search Everywhere popup attaches to the window and replays any keystrokes
+/// buffered during focus handoff from the code editor.
+private struct SearchEverywhereInputField: NSViewRepresentable {
+    @Binding var text: String
+    var onKeyboardAction: (MacSearchKeyboardAction) -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onKeyboardAction: onKeyboardAction)
+    }
+
+    func makeNSView(context: Context) -> SearchEverywhereTextField {
+        let field = SearchEverywhereTextField(frame: .zero)
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = NSFont.systemFont(ofSize: 15)
+        field.textColor = .labelColor
+        field.usesSingleLineMode = true
+        field.lineBreakMode = .byTruncatingHead
+        field.stringValue = text
+        field.delegate = context.coordinator
+        field.onKeyboardAction = { [weak coordinator = context.coordinator] action in
+            coordinator?.onKeyboardAction(action) ?? false
+        }
+        return field
+    }
+
+    func updateNSView(_ nsView: SearchEverywhereTextField, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.onKeyboardAction = onKeyboardAction
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+            if let editor = nsView.currentEditor() {
+                let end = (text as NSString).length
+                editor.selectedRange = NSRange(location: end, length: 0)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+        var onKeyboardAction: (MacSearchKeyboardAction) -> Bool
+
+        init(text: Binding<String>, onKeyboardAction: @escaping (MacSearchKeyboardAction) -> Bool) {
+            self.text = text
+            self.onKeyboardAction = onKeyboardAction
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            if text.wrappedValue != field.stringValue {
+                text.wrappedValue = field.stringValue
+            }
+        }
+    }
+}
+
+private final class SearchEverywhereTextField: NSTextField {
+    var onKeyboardAction: ((MacSearchKeyboardAction) -> Bool)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        MacFocusHandoffCoordinator.shared.complete(
+            for: .searchEverywhere,
+            responder: self,
+            in: window
+        ) { [weak self] events in
+            guard let self else { return }
+            for event in events {
+                if let action = MacSearchKeyboardAction.resolve(
+                    keyCode: event.keyCode,
+                    modifiers: event.modifierFlags
+                ) {
+                    _ = self.onKeyboardAction?(action)
+                    if action == .dismiss || action == .submit { break }
+                    continue
+                }
+                if let editor = self.currentEditor() ?? (self.window?.firstResponder as? NSTextView) {
+                    editor.keyDown(with: event)
+                }
+            }
+        }
+    }
 }

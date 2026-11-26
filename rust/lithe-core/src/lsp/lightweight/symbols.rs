@@ -1,6 +1,6 @@
 //! In-process document symbols, references, renames, and semantic-token helpers.
 
-use super::edits::{range_for_offsets, utf16_position_to_byte_offset};
+use super::edits::utf16_position_to_byte_offset;
 use crate::lsp::interface::{
     LspPosition, LspPositionResponse, LspRangeResponse, LspTextEditResponse,
 };
@@ -202,23 +202,67 @@ pub fn builtin_navigation(
 
 fn identifier_occurrences(text: &str) -> Vec<IdentifierOccurrence> {
     let mut values = Vec::new();
-    let mut current_start: Option<usize> = None;
+    let mut current_start: Option<(usize, i64, i64)> = None;
+    let mut line: i64 = 0;
+    let mut utf16_col: i64 = 0;
     for (index, character) in text.char_indices() {
         if is_identifier_character(character) {
             if current_start.is_none() {
-                current_start = Some(index);
+                current_start = Some((index, line, utf16_col));
             }
-        } else if let Some(start) = current_start.take() {
-            push_identifier(text, start, index, &mut values);
+        } else if let Some((start, start_line, start_col)) = current_start.take() {
+            push_identifier(
+                text,
+                start,
+                index,
+                LspRangeResponse {
+                    start: LspPositionResponse {
+                        line: start_line,
+                        utf16_column: start_col,
+                    },
+                    end: LspPositionResponse {
+                        line,
+                        utf16_column: utf16_col,
+                    },
+                },
+                &mut values,
+            );
+        }
+        if character == '\n' {
+            line += 1;
+            utf16_col = 0;
+        } else {
+            utf16_col += character.len_utf16() as i64;
         }
     }
-    if let Some(start) = current_start {
-        push_identifier(text, start, text.len(), &mut values);
+    if let Some((start, start_line, start_col)) = current_start {
+        push_identifier(
+            text,
+            start,
+            text.len(),
+            LspRangeResponse {
+                start: LspPositionResponse {
+                    line: start_line,
+                    utf16_column: start_col,
+                },
+                end: LspPositionResponse {
+                    line,
+                    utf16_column: utf16_col,
+                },
+            },
+            &mut values,
+        );
     }
     values
 }
 
-fn push_identifier(text: &str, start: usize, end: usize, values: &mut Vec<IdentifierOccurrence>) {
+fn push_identifier(
+    text: &str,
+    start: usize,
+    end: usize,
+    range: LspRangeResponse,
+    values: &mut Vec<IdentifierOccurrence>,
+) {
     let value = &text[start..end];
     if value.chars().next().is_some_and(is_identifier_start)
         && !is_language_keyword(value)
@@ -228,7 +272,7 @@ fn push_identifier(text: &str, start: usize, end: usize, values: &mut Vec<Identi
             value: value.to_string(),
             start,
             end,
-            range: range_for_offsets(text, start, end),
+            range,
         });
     }
 }

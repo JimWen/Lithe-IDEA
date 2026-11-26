@@ -1,10 +1,17 @@
 import Foundation
 
+enum FocusHandoffTarget: Equatable, Sendable {
+    case terminal
+    case searchEverywhere
+}
+
 /// Small platform-facing UI capabilities used by application orchestration.
 /// Implementations may use AppKit, Qt, or another native UI toolkit.
 @MainActor
 protocol PlatformUI: AnyObject {
     func activateApplication()
+    func beginFocusHandoff(to target: FocusHandoffTarget)
+    func cancelFocusHandoff(for target: FocusHandoffTarget)
     func chooseDirectory(title: String, prompt: String) -> URL?
     func chooseFile(title: String, prompt: String) -> URL?
     func revealInFileBrowser(_ url: URL)
@@ -18,6 +25,8 @@ protocol PlatformUI: AnyObject {
 
 extension PlatformUI {
     func activateApplication() {}
+    func beginFocusHandoff(to target: FocusHandoffTarget) {}
+    func cancelFocusHandoff(for target: FocusHandoffTarget) {}
     func startAccessingProject(_ url: URL) -> Bool { false }
     func stopAccessingProject(_ url: URL) {}
 }

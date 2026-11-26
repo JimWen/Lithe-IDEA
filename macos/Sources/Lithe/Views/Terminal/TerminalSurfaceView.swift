@@ -110,7 +110,6 @@ struct TerminalSurfaceView: View {
     }
 
     private func requestInputFocus() {
-        guard session.isRunning else { return }
         focusRequestID &+= 1
         session.focus()
     }
@@ -139,12 +138,7 @@ private struct TerminalNativeSurface: NSViewRepresentable {
             .setWorkbenchBackgroundVisible(showsWorkbenchBackground)
         guard context.coordinator.lastFocusRequestID != focusRequestID else { return }
         context.coordinator.lastFocusRequestID = focusRequestID
-        DispatchQueue.main.async {
-            guard nativeView.superview === hostView,
-                  let window = nativeView.window,
-                  window.firstResponder !== nativeView else { return }
-            window.makeFirstResponder(nativeView)
-        }
+        hostView.requestTerminalFocus()
     }
 
     static func dismantleNSView(_ hostView: TerminalSurfaceHostView, coordinator: Coordinator) {
@@ -158,6 +152,7 @@ private struct TerminalNativeSurface: NSViewRepresentable {
 
 private final class TerminalSurfaceHostView: NSView {
     private weak var terminalView: NSView?
+    private var wantsFocusOnAttach = true
 
     func attach(_ view: NSView) {
         // A source host can receive one last update after the persistent
@@ -176,6 +171,34 @@ private final class TerminalSurfaceHostView: NSView {
         view.frame = bounds
         view.autoresizingMask = [.width, .height]
         addSubview(view)
+        if wantsFocusOnAttach || MacFocusHandoffCoordinator.shared.pendingTarget == .terminal {
+            applyTerminalFocusIfAttached()
+        }
+    }
+
+    func requestTerminalFocus() {
+        wantsFocusOnAttach = true
+        applyTerminalFocusIfAttached()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        if wantsFocusOnAttach || MacFocusHandoffCoordinator.shared.pendingTarget == .terminal {
+            applyTerminalFocusIfAttached()
+        }
+    }
+
+    private func applyTerminalFocusIfAttached() {
+        guard let terminalView,
+              terminalView.superview === self,
+              let window = terminalView.window else { return }
+        wantsFocusOnAttach = false
+        MacFocusHandoffCoordinator.shared.complete(
+            for: .terminal,
+            responder: terminalView,
+            in: window
+        )
     }
 
     override func layout() {

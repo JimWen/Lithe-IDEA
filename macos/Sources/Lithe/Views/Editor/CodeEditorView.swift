@@ -760,6 +760,7 @@ struct CodeEditorView: NSViewRepresentable {
         context.coordinator.attachStableNativeUndo(to: textView)
         textView.isExternalEditSuspended = { [weak model] in
             model?.services.workspaceTextEditUndoController.isApplying == true
+                || model?.isSearchEverywhereVisible == true
         }
         if previewLine != nil {
             // The preview has its own query and must not consume another editor's broadcasts.

@@ -42,7 +42,11 @@ extension AppModel {
 
     func toggleTerminal() {
         isTerminalVisible.toggle()
-        guard isTerminalVisible else { return }
+        guard isTerminalVisible else {
+            platformUI.cancelFocusHandoff(for: .terminal)
+            return
+        }
+        platformUI.beginFocusHandoff(to: .terminal)
         isTestsVisible = false
         isGitLogVisible = false
         isReferencesVisible = false
@@ -51,6 +55,8 @@ extension AppModel {
         isDebugVisible = false
         if terminalCapability == nil || activeTerminalSession == nil {
             _ = createTerminalSession()
+        } else {
+            activeTerminalSession?.focus()
         }
     }
 

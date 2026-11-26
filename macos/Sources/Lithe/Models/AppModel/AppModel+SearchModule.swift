@@ -90,10 +90,12 @@ extension AppModel {
 
     func toggleSearchEverywhere() {
         guard workspaceURL != nil, !isSearchEverywhereVisible else { return }
+        platformUI.beginFocusHandoff(to: .searchEverywhere)
         isSearchEverywhereVisible = true
     }
 
     func dismissSearchEverywhere() {
+        platformUI.cancelFocusHandoff(for: .searchEverywhere)
         isSearchEverywhereVisible = false
         searchEverywhereQuery = ""
     }
@@ -103,7 +105,11 @@ extension AppModel {
         searchFeatureIfActive?.clearSearchEverywhere()
     }
 
-    func searchEverywhere(query requestedQuery: String? = nil, options: ProjectSearchOptions = .default) async {
+    func searchEverywhere(
+        query requestedQuery: String? = nil,
+        options: ProjectSearchOptions = .default,
+        includeContent: Bool = true
+    ) async {
         if let requestedQuery { searchEverywhereQuery = requestedQuery }
         guard let workspaceURL, isSearchEverywhereVisible else { return }
         let request = searchRequests.begin(.everywhere)
@@ -119,7 +125,9 @@ extension AppModel {
         ) else { return }
         await searchFeature.searchEverywhere(
             at: workspaceURL, query: query, options: options,
-            visibilityRules: settings.fileVisibilityRules.searchRules, isCurrent: isCurrent
+            visibilityRules: settings.fileVisibilityRules.searchRules,
+            includeContent: includeContent,
+            isCurrent: isCurrent
         )
         try? services.moduleRuntime.markIdle(.search)
     }

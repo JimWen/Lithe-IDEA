@@ -320,6 +320,9 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     private var connection: MacTerminalProcessConnection?
     private var preparationID: UUID?
     private var cancelPreparation: (() -> Void)?
+    private var pendingStartupInput: [Data] = []
+    private var pendingStartupInputBytes = 0
+    private static let maxPendingStartupInputBytes = 4096
     private var activation: VirtualEnvironmentActivation?
     private var cancelActivationTimeout: (() -> Void)?
     private let virtualEnvironmentProbe: MacTerminalVirtualEnvironmentProbe
@@ -720,12 +723,32 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
         }
         processSession = MacTerminalProcessSession(processID: processID)
         self.activation?.processID = processID
+        if !pendingStartupInput.isEmpty {
+            let queued = pendingStartupInput
+            pendingStartupInput.removeAll()
+            pendingStartupInputBytes = 0
+            for chunk in queued {
+                connection.process.send(data: Array(chunk)[...])
+            }
+        }
         return processID
     }
 
     func send(_ input: Data) throws {
-        guard isRunning else { return }
-        connection?.process.send(data: Array(input)[...])
+        if isRunning {
+            connection?.process.send(data: Array(input)[...])
+            return
+        }
+        bufferStartupInputIfPreparing(input)
+    }
+
+    private func bufferStartupInputIfPreparing(_ input: Data) {
+        guard preparationID != nil, !input.isEmpty else { return }
+        let remaining = Self.maxPendingStartupInputBytes - pendingStartupInputBytes
+        guard remaining > 0 else { return }
+        let slice = input.prefix(remaining)
+        pendingStartupInput.append(Data(slice))
+        pendingStartupInputBytes += slice.count
     }
 
     func interrupt() throws {
@@ -745,6 +768,8 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
 
     func stop() {
         preparationID = nil
+        pendingStartupInput.removeAll()
+        pendingStartupInputBytes = 0
         let cancel = cancelPreparation; cancelPreparation = nil
         cancel?()
         activation = nil
@@ -779,8 +804,11 @@ final class MacTerminalTransport: NSObject, TerminalTransport, @preconcurrency T
     }
 
     func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
-        guard isRunning else { return }
-        connection?.process.send(data: data)
+        if isRunning {
+            connection?.process.send(data: data)
+            return
+        }
+        bufferStartupInputIfPreparing(Data(data))
     }
 
     func requestOpenLink(source: SwiftTerm.TerminalView, link: String, params: [String: String]) {

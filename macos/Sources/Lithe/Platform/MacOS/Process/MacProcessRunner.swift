@@ -7,6 +7,7 @@ final class MacProcessRunner: ProcessRunner, @unchecked Sendable {
     private static let outputDrainGracePeriod: TimeInterval = 0.2
     private static let terminationGracePeriod: TimeInterval = 0.2
     private static let forcedTerminationGracePeriod: TimeInterval = 1
+    static let maxOutputBytes = 32 * 1024 * 1024
 
     func run(_ request: ProcessRequest) -> ProcessResult {
         let outputPipe = Pipe()
@@ -28,8 +29,9 @@ final class MacProcessRunner: ProcessRunner, @unchecked Sendable {
             outputLock.lock()
             if data.isEmpty {
                 reachedOutputEOF = true
-            } else {
-                output.append(data)
+            } else if output.count < Self.maxOutputBytes {
+                let remaining = Self.maxOutputBytes - output.count
+                output.append(data.prefix(remaining))
             }
             outputLock.unlock()
         }
@@ -43,16 +45,21 @@ final class MacProcessRunner: ProcessRunner, @unchecked Sendable {
             )
         }
 
+        var inputWriterStarted = false
         do {
             try process.run()
             try? inputPipe?.fileHandleForReading.close()
             try? outputPipe.fileHandleForWriting.close()
             if let input = request.standardInput, let inputPipe {
                 // Large input must not prevent this thread from enforcing the
-                // process deadline when a child stops reading stdin.
+                // process deadline when a child stops reading stdin. The writer
+                // exclusively owns closing the write handle so the caller never
+                // races with an in-flight write on the same file descriptor.
+                inputWriterStarted = true
+                let writeHandle = inputPipe.fileHandleForWriting
                 DispatchQueue.global(qos: .utility).async {
-                    try? inputPipe.fileHandleForWriting.write(contentsOf: input)
-                    try? inputPipe.fileHandleForWriting.close()
+                    try? writeHandle.write(contentsOf: input)
+                    try? writeHandle.close()
                 }
             }
             let deadline = request.timeoutMilliseconds.map {
@@ -70,7 +77,9 @@ final class MacProcessRunner: ProcessRunner, @unchecked Sendable {
                 }
                 Thread.sleep(forTimeInterval: Self.pollingInterval)
             }
-            try? inputPipe?.fileHandleForWriting.close()
+            if !inputWriterStarted {
+                try? inputPipe?.fileHandleForWriting.close()
+            }
             if !process.isRunning {
                 // The managed process group removes inherited-pipe descendants;
                 // the grace period only lets the final readability event arrive.
@@ -87,12 +96,14 @@ final class MacProcessRunner: ProcessRunner, @unchecked Sendable {
             try? outputPipe.fileHandleForReading.close()
             let data = outputLock.withLock { output }
             return ProcessResult(
-                output: String(data: data, encoding: .utf8) ?? "",
+                output: String(decoding: data, as: UTF8.self),
                 exitCode: timedOut ? 124 : process.terminationStatus
             )
         } catch {
             try? inputPipe?.fileHandleForReading.close()
-            try? inputPipe?.fileHandleForWriting.close()
+            if !inputWriterStarted {
+                try? inputPipe?.fileHandleForWriting.close()
+            }
             try? outputPipe.fileHandleForWriting.close()
             outputPipe.fileHandleForReading.readabilityHandler = nil
             try? outputPipe.fileHandleForReading.close()

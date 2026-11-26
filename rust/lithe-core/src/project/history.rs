@@ -3,14 +3,21 @@
 use crate::protocol::{invalid_relative_path, CoreError, ErrorCode};
 use crate::protocol::{HistoryEntriesResponse, HistoryEntryResponse};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_FILE_SIZE: usize = 2 * 1024 * 1024;
 const MAX_ENTRIES_PER_FILE: usize = 100;
 const RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+const PRUNE_THROTTLE_INTERVAL: Duration = Duration::from_secs(60);
 const HISTORY_VERSION: u32 = 2;
+
+static NEXT_HISTORY_NONCE: AtomicU64 = AtomicU64::new(1);
+static LAST_PRUNED_AT: OnceLock<Mutex<HashMap<PathBuf, Instant>>> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,7 +159,7 @@ pub fn record(request: HistoryRecordRequest) -> Result<Option<HistoryEntryRespon
         }
     }
     let timestamp = unix_seconds();
-    let raw_id = format!("{:032x}", timestamp as u128 * 1_000_000 + monotonic_nonce());
+    let raw_id = format!("{:032x}", next_entry_id_value(timestamp));
     let id = format!(
         "{}-{}-{}-{}-{}",
         &raw_id[0..8],
@@ -179,7 +186,7 @@ pub fn record(request: HistoryRecordRequest) -> Result<Option<HistoryEntryRespon
         serde_json::to_vec(&stored).expect("history metadata should encode"),
     )?;
     trim_entries(&directory, &storage);
-    if request.prune_expired {
+    if request.prune_expired && should_prune_expired(&storage) {
         prune_expired(&storage);
     }
     Ok(Some(stored.into_response()))
@@ -486,11 +493,31 @@ fn unix_seconds() -> i64 {
         .unwrap_or_default()
 }
 
-fn monotonic_nonce() -> u128 {
-    SystemTime::now()
+fn should_prune_expired(storage: &Path) -> bool {
+    let map = LAST_PRUNED_AT.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut guard) = map.lock() else {
+        return true;
+    };
+    let now = Instant::now();
+    if let Some(last) = guard.get(storage) {
+        if now.saturating_duration_since(*last) < PRUNE_THROTTLE_INTERVAL {
+            return false;
+        }
+    }
+    guard.insert(storage.to_path_buf(), now);
+    true
+}
+
+fn next_entry_id_value(timestamp_seconds: i64) -> u128 {
+    let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|value| value.subsec_nanos() as u128)
-        .unwrap_or_default()
+        .map(|value| u128::from(value.subsec_nanos()))
+        .unwrap_or_default();
+    let sequence = u128::from(NEXT_HISTORY_NONCE.fetch_add(1, Ordering::Relaxed) & 0xFFFF_FFFF);
+    // Pack unsigned seconds, subsecond nanoseconds (< 2^30), and a 32-bit
+    // monotonic counter into disjoint bit ranges so IDs stay strictly ordered
+    // without overflowing seconds.
+    ((timestamp_seconds.max(0) as u128) << 64) | (nanos << 32) | sequence
 }
 
 fn is_valid_reason(value: &str) -> bool {

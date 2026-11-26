@@ -250,8 +250,18 @@ impl LspProcessHandle for SystemProcess {
 
     fn terminate(&self) {
         if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
+            if matches!(child.try_wait(), Ok(None)) {
+                let _ = child.kill();
+            }
+            let _ = child.wait();
         }
+    }
+}
+
+impl Drop for SystemProcess {
+    fn drop(&mut self) {
+        self.close_input();
+        self.terminate();
     }
 }
 

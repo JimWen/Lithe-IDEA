@@ -1,8 +1,6 @@
 //! UTF-16-aware text edit validation and application.
 
-use crate::lsp::interface::{
-    LspDocumentContentChange, LspPosition, LspPositionResponse, LspRange, LspRangeResponse,
-};
+use crate::lsp::interface::{LspDocumentContentChange, LspPosition, LspRange};
 use crate::protocol::{CoreError, ErrorCode};
 use serde::{Deserialize, Serialize};
 
@@ -210,32 +208,4 @@ fn byte_offset_for_utf16_column(
         }
     }
     contents_end
-}
-
-fn byte_offset_to_lsp_position(text: &str, offset: usize) -> LspPositionResponse {
-    let offset = offset.min(text.len());
-    let mut line = 0_i64;
-    let mut column = 0_i64;
-    for (index, character) in text.char_indices() {
-        if index >= offset {
-            break;
-        }
-        if character == '\n' {
-            line += 1;
-            column = 0;
-        } else {
-            column += character.len_utf16() as i64;
-        }
-    }
-    LspPositionResponse {
-        line,
-        utf16_column: column,
-    }
-}
-
-pub(super) fn range_for_offsets(text: &str, start: usize, end: usize) -> LspRangeResponse {
-    LspRangeResponse {
-        start: byte_offset_to_lsp_position(text, start),
-        end: byte_offset_to_lsp_position(text, end),
-    }
 }

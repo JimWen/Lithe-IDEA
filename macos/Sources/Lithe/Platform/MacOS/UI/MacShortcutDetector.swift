@@ -188,6 +188,7 @@ private final class MacShortcutDetector: ShortcutDetector, @unchecked Sendable {
     private var focusGeneration: @MainActor () -> Int = { 0 }
     private var lastFocusGeneration = 0
     private var dispatchGeneration = 0
+    private var isDispatchingCommand = false
     private var keyMonitor: Any?
     private var flagsMonitor: Any?
 
@@ -270,12 +271,12 @@ private final class MacShortcutDetector: ShortcutDetector, @unchecked Sendable {
                   event.window == nil || event.window === NSApp.keyWindow else { return event }
             let generation = MainActor.assumeIsolated { self.focusGeneration() }
             let dispatchGeneration = self.dispatchGeneration
-            Task { @MainActor [weak self] in
-                guard let self, !self.isSuspended, self.keyMonitor != nil,
-                      self.dispatchGeneration == dispatchGeneration,
-                      self.permitsCommand(commandID), self.focusGeneration() == generation else { return }
-                self.onCommand(commandID)
-            }
+            self.dispatchCommand(
+                commandID,
+                expectedFocusGeneration: generation,
+                expectedDispatchGeneration: dispatchGeneration,
+                requiresFlagsMonitor: false
+            )
             return nil
         }
 
@@ -304,13 +305,46 @@ private final class MacShortcutDetector: ShortcutDetector, @unchecked Sendable {
             }
             let generation = MainActor.assumeIsolated { self.focusGeneration() }
             let dispatchGeneration = self.dispatchGeneration
+            self.dispatchCommand(
+                commandID,
+                expectedFocusGeneration: generation,
+                expectedDispatchGeneration: dispatchGeneration,
+                requiresFlagsMonitor: true
+            )
+            return event
+        }
+    }
+
+    private func dispatchCommand(
+        _ commandID: String,
+        expectedFocusGeneration: Int,
+        expectedDispatchGeneration: Int,
+        requiresFlagsMonitor: Bool
+    ) {
+        // Commands that run modal file panels must not block inside an NSEvent monitor.
+        if commandID == "open-project" {
             Task { @MainActor [weak self] in
-                guard let self, !self.isSuspended, self.flagsMonitor != nil,
-                      self.dispatchGeneration == dispatchGeneration,
-                      self.permitsCommand(commandID), self.focusGeneration() == generation else { return }
+                guard let self, !self.isSuspended,
+                      (requiresFlagsMonitor ? self.flagsMonitor != nil : self.keyMonitor != nil),
+                      self.dispatchGeneration == expectedDispatchGeneration,
+                      self.permitsCommand(commandID),
+                      self.focusGeneration() == expectedFocusGeneration else { return }
                 self.onCommand(commandID)
             }
-            return event
+            return
+        }
+        // Dispatch workbench/focus-transfer shortcuts synchronously on the event turn
+        // so responder handoff (e.g. Terminal / Search Everywhere) completes before the
+        // next queued keystroke can hit the previously focused editor.
+        MainActor.assumeIsolated {
+            guard !self.isDispatchingCommand, !self.isSuspended,
+                  (requiresFlagsMonitor ? self.flagsMonitor != nil : self.keyMonitor != nil),
+                  self.dispatchGeneration == expectedDispatchGeneration,
+                  self.permitsCommand(commandID),
+                  self.focusGeneration() == expectedFocusGeneration else { return }
+            self.isDispatchingCommand = true
+            defer { self.isDispatchingCommand = false }
+            self.onCommand(commandID)
         }
     }
 

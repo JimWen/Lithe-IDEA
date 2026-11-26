@@ -1406,29 +1406,139 @@ private final class SQLTextView: NSTextView {
     }
 }
 
-private enum SQLSyntaxHighlighter {
+enum SQLSyntaxHighlighter {
+    private static let keywords: Set<String> = [
+        "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "DELETE",
+        "MERGE", "REPLACE", "CREATE", "ALTER", "DROP", "TRUNCATE", "TABLE", "VIEW",
+        "INDEX", "DATABASE", "SCHEMA", "TRIGGER", "PROCEDURE", "FUNCTION", "JOIN",
+        "LEFT", "RIGHT", "INNER", "OUTER", "ON", "AS", "AND", "OR", "NOT", "NULL",
+        "IS", "IN", "EXISTS", "BETWEEN", "LIKE", "DISTINCT", "GROUP", "BY", "ORDER",
+        "HAVING", "LIMIT", "OFFSET", "UNION", "ALL", "WITH", "RETURNING", "SET",
+        "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "PRAGMA", "BEGIN", "COMMIT",
+        "ROLLBACK", "GRANT", "REVOKE", "CASE", "WHEN", "THEN", "ELSE", "END"
+    ]
+
     static func apply(to storage: NSTextStorage, isDark: Bool) {
         let range = NSRange(location: 0, length: storage.length)
         let textColor = isDark
             ? NSColor(srgbRed: 0.84, green: 0.84, blue: 0.84, alpha: 1)
             : NSColor(srgbRed: 0.16, green: 0.17, blue: 0.19, alpha: 1)
+        let keywordColor = isDark
+            ? NSColor(srgbRed: 0.43, green: 0.67, blue: 0.98, alpha: 1)
+            : NSColor(srgbRed: 0.10, green: 0.39, blue: 0.72, alpha: 1)
+        let numberColor = isDark
+            ? NSColor(srgbRed: 0.87, green: 0.69, blue: 0.38, alpha: 1)
+            : NSColor(srgbRed: 0.55, green: 0.39, blue: 0.03, alpha: 1)
+        let stringColor = isDark
+            ? NSColor(srgbRed: 0.66, green: 0.80, blue: 0.53, alpha: 1)
+            : NSColor(srgbRed: 0.17, green: 0.48, blue: 0.20, alpha: 1)
+        let commentColor = isDark
+            ? NSColor(srgbRed: 0.48, green: 0.55, blue: 0.61, alpha: 1)
+            : NSColor(srgbRed: 0.38, green: 0.42, blue: 0.46, alpha: 1)
+
         storage.beginEditing()
         storage.setAttributes([
             .font: NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular),
             .foregroundColor: textColor
         ], range: range)
-        apply(pattern: "(?i)\\b(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|DELETE|MERGE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|TABLE|VIEW|INDEX|DATABASE|SCHEMA|TRIGGER|PROCEDURE|FUNCTION|JOIN|LEFT|RIGHT|INNER|OUTER|ON|AS|AND|OR|NOT|NULL|IS|IN|EXISTS|BETWEEN|LIKE|DISTINCT|GROUP|BY|ORDER|HAVING|LIMIT|OFFSET|UNION|ALL|WITH|RETURNING|SET|SHOW|DESCRIBE|DESC|EXPLAIN|PRAGMA|BEGIN|COMMIT|ROLLBACK|GRANT|REVOKE)\\b", color: isDark ? NSColor(srgbRed: 0.43, green: 0.67, blue: 0.98, alpha: 1) : NSColor(srgbRed: 0.10, green: 0.39, blue: 0.72, alpha: 1), in: storage)
-        apply(pattern: "\\b\\d+(?:\\.\\d+)?\\b", color: isDark ? NSColor(srgbRed: 0.87, green: 0.69, blue: 0.38, alpha: 1) : NSColor(srgbRed: 0.55, green: 0.39, blue: 0.03, alpha: 1), in: storage)
-        apply(pattern: "'(?:''|[^'])*'|\\\"(?:\\\"\\\"|[^\\\"])*\\\"|`(?:``|[^`])*`", color: isDark ? NSColor(srgbRed: 0.66, green: 0.80, blue: 0.53, alpha: 1) : NSColor(srgbRed: 0.17, green: 0.48, blue: 0.20, alpha: 1), in: storage)
-        apply(pattern: "--[^\\n]*|/\\*[\\s\\S]*?\\*/", color: isDark ? NSColor(srgbRed: 0.48, green: 0.55, blue: 0.61, alpha: 1) : NSColor(srgbRed: 0.38, green: 0.42, blue: 0.46, alpha: 1), in: storage)
-        storage.endEditing()
-    }
 
-    private static func apply(pattern: String, color: NSColor, in storage: NSTextStorage) {
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return }
-        let range = NSRange(location: 0, length: storage.length)
-        for match in expression.matches(in: storage.string, range: range) {
-            storage.addAttribute(.foregroundColor, value: color, range: match.range)
+        let source = storage.string as NSString
+        let limit = source.length
+        var cursor = 0
+        while cursor < limit {
+            let ch = source.character(at: cursor)
+
+            // Line comment: `-- ...`
+            if ch == 45, cursor + 1 < limit, source.character(at: cursor + 1) == 45 {
+                let start = cursor
+                cursor += 2
+                while cursor < limit, source.character(at: cursor) != 10 {
+                    cursor += 1
+                }
+                storage.addAttribute(.foregroundColor, value: commentColor, range: NSRange(location: start, length: cursor - start))
+                continue
+            }
+
+            // Block comment: `/* ... */`
+            if ch == 47, cursor + 1 < limit, source.character(at: cursor + 1) == 42 {
+                let start = cursor
+                cursor += 2
+                while cursor < limit {
+                    if source.character(at: cursor) == 42,
+                       cursor + 1 < limit,
+                       source.character(at: cursor + 1) == 47 {
+                        cursor += 2
+                        break
+                    }
+                    cursor += 1
+                }
+                storage.addAttribute(.foregroundColor, value: commentColor, range: NSRange(location: start, length: cursor - start))
+                continue
+            }
+
+            // Quoted strings and quoted identifiers (`'...'`, `"..."`, `` `...` ``)
+            if ch == 39 || ch == 34 || ch == 96 {
+                let start = cursor
+                cursor += 1
+                while cursor < limit {
+                    if source.character(at: cursor) == ch {
+                        if cursor + 1 < limit, source.character(at: cursor + 1) == ch {
+                            cursor += 2
+                            continue
+                        }
+                        cursor += 1
+                        break
+                    }
+                    cursor += 1
+                }
+                storage.addAttribute(.foregroundColor, value: stringColor, range: NSRange(location: start, length: cursor - start))
+                continue
+            }
+
+            // Numbers
+            if ch >= 48 && ch <= 57 {
+                let start = cursor
+                cursor += 1
+                var seenDot = false
+                while cursor < limit {
+                    let unit = source.character(at: cursor)
+                    if unit >= 48 && unit <= 57 {
+                        cursor += 1
+                    } else if unit == 46, !seenDot, cursor + 1 < limit,
+                              source.character(at: cursor + 1) >= 48,
+                              source.character(at: cursor + 1) <= 57 {
+                        seenDot = true
+                        cursor += 2
+                    } else {
+                        break
+                    }
+                }
+                storage.addAttribute(.foregroundColor, value: numberColor, range: NSRange(location: start, length: cursor - start))
+                continue
+            }
+
+            // Identifiers & SQL keywords
+            if (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95 {
+                let start = cursor
+                cursor += 1
+                while cursor < limit {
+                    let unit = source.character(at: cursor)
+                    if (unit >= 65 && unit <= 90) || (unit >= 97 && unit <= 122)
+                        || (unit >= 48 && unit <= 57) || unit == 95 {
+                        cursor += 1
+                    } else {
+                        break
+                    }
+                }
+                let wordRange = NSRange(location: start, length: cursor - start)
+                if keywords.contains(source.substring(with: wordRange).uppercased()) {
+                    storage.addAttribute(.foregroundColor, value: keywordColor, range: wordRange)
+                }
+                continue
+            }
+
+            cursor += 1
         }
+        storage.endEditing()
     }
 }

@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 /// Stores AI credentials in Lithe's local application data instead of Keychain.
@@ -88,13 +89,70 @@ final class MacLocalSecretStore: SecureStore, @unchecked Sendable {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+        try? fileManager.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: directoryURL.path
+        )
 
         let data = try JSONEncoder().encode(contents)
-        try data.write(to: fileURL, options: .atomic)
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: fileURL.path
+        try writeAtomicallyWithRestrictedPermissions(data, to: fileURL)
+    }
+
+    /// Creates the staged file with `0o600` from the very first syscall so
+    /// secret bytes never appear on disk with default umask permissions.
+    private func writeAtomicallyWithRestrictedPermissions(_ data: Data, to destinationURL: URL) throws {
+        let directoryURL = destinationURL.deletingLastPathComponent()
+        let tempURL = directoryURL.appendingPathComponent(
+            ".\(destinationURL.lastPathComponent).tmp-\(UUID().uuidString)"
         )
+        let fd = tempURL.path.withCString { path in
+            Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(S_IRUSR | S_IWUSR))
+        }
+        guard fd >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+
+        var didClose = false
+        func cleanupOnFailure() {
+            if !didClose {
+                Darwin.close(fd)
+                didClose = true
+            }
+            try? fileManager.removeItem(at: tempURL)
+        }
+
+        do {
+            try data.withUnsafeBytes { rawBuffer in
+                guard let baseAddress = rawBuffer.baseAddress else { return }
+                var written = 0
+                while written < rawBuffer.count {
+                    let step = Darwin.write(fd, baseAddress.advanced(by: written), rawBuffer.count - written)
+                    if step < 0 {
+                        if errno == EINTR { continue }
+                        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                    }
+                    written += step
+                }
+            }
+            _ = Darwin.fchmod(fd, mode_t(S_IRUSR | S_IWUSR))
+            _ = Darwin.fsync(fd)
+            if Darwin.close(fd) != 0 {
+                didClose = true
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            didClose = true
+            let renamed = tempURL.path.withCString { src in
+                destinationURL.path.withCString { dst in
+                    Darwin.rename(src, dst)
+                }
+            }
+            guard renamed == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        } catch {
+            cleanupOnFailure()
+            throw error
+        }
     }
 
     private func transform(_ data: Data, key: String) -> Data {

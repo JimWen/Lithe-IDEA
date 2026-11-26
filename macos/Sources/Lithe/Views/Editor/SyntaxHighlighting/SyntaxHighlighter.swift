@@ -82,7 +82,12 @@ enum SyntaxHighlighter {
         case .envFile:
             EnvSyntaxHighlightingAdapter.apply(to: storage, palette: palette, range: target)
         case .generic:
-            GenericSyntaxHighlightingAdapter.apply(to: storage, palette: palette, range: target)
+            GenericSyntaxHighlightingAdapter.apply(
+                to: storage,
+                palette: palette,
+                range: target,
+                fileExtension: fileExtension
+            )
         case .ini:
             INISyntaxHighlightingAdapter.apply(to: storage, palette: palette, range: target)
         case .json:
