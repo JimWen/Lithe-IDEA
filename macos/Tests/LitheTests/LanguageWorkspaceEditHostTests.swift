@@ -302,6 +302,57 @@ struct LanguageWorkspaceEditHostTests {
         }
     }
 
+    @Test
+    func renameSynchronizesUnsynchronizedRestoredSiblingTabBeforePlanning() async throws {
+        try await withFixture { fixture in
+            let siblingURL = fixture.root.appendingPathComponent("helper.go")
+            try "old".write(to: siblingURL, atomically: true, encoding: .utf8)
+            // Open sibling tab without activating or synchronizing it to the LSP,
+            // mirroring a restored background tab on workspace reopen.
+            await fixture.model.documentFeature.openFileAsync(
+                siblingURL,
+                isReadOnly: false,
+                displayPath: nil,
+                activateWhenReady: false
+            )
+            let siblingDoc = try #require(
+                fixture.model.openDocuments.first(where: { $0.url.standardizedFileURL == siblingURL.standardizedFileURL })
+            )
+            // Simulate a restored background tab whose document was never opened
+            // in the active LSP session (e.g., workspace reopen before LSP startup).
+            fixture.session.snapshots.removeValue(forKey: siblingURL.standardizedFileURL)
+            #expect(fixture.session.synchronizedDocumentSnapshot(for: siblingURL) == nil)
+
+            fixture.model.requestLanguageRename(line: 0, utf16Column: 0, newName: "new")
+            let syncedSibling = try #require(fixture.session.synchronizedDocumentSnapshot(for: siblingURL))
+            #expect(syncedSibling.sourceText == "old")
+
+            let reply = try #require(fixture.session.renames.first)
+            let text = LanguageServerTextEdit(
+                range: .init(start: .init(line: 0, utf16Column: 0), end: .init(line: 0, utf16Column: 3)),
+                newText: "new"
+            )
+            let edit = LanguageServerWorkspaceEdit(operations: [
+                .edit(.init(
+                    uri: fixture.document.url.absoluteString,
+                    version: fixture.session.synchronizedDocumentSnapshot(for: fixture.document.url)?.version,
+                    edits: [text]
+                )),
+                .edit(.init(
+                    uri: siblingURL.absoluteString,
+                    version: syncedSibling.version,
+                    edits: [text]
+                ))
+            ])
+            reply(.success(edit))
+            await fixture.model.languageEditTask?.value
+
+            #expect(fixture.document.text == "new")
+            #expect(siblingDoc.text == "new")
+            #expect(siblingDoc.isDirty)
+        }
+    }
+
     private func withFixture(gatedWrite: Bool = false, gatedRestore: Bool = false,
                              _ body: @MainActor (LanguageEditHostFixture) async throws -> Void) async throws {
         let fixture = try LanguageEditHostFixture(gatedWrite: gatedWrite, gatedRestore: gatedRestore)

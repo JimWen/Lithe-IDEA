@@ -56,6 +56,7 @@ extension AppModel {
         var synchronized: [URL: LanguageServerSynchronizedDocumentSnapshot] = [:]
         if let token, let manager = languageToolingSessionsIfActive {
             let session = try manager.editingSession(matching: token)
+            let activeURL = document.url.standardizedFileURL
             for open in openDocuments {
                 let url = open.url.standardizedFileURL
                 if let accepted = session.synchronizedDocumentSnapshot(for: url) {
@@ -64,11 +65,26 @@ extension AppModel {
                     // guess a version or accept an unsynchronized dirty buffer.
                     if accepted.version == 0 {
                         try manager.synchronizeEditingDocument(fileURL: url, text: accepted.sourceText, in: token)
+                    } else if url != activeURL,
+                              languageProviderCatalog.provider(for: open.url)?.id == token.providerID,
+                              !accepted.sourceText.utf8.elementsEqual(open.text.utf8) {
+                        try manager.synchronizeEditingDocument(fileURL: url, text: open.text, in: token)
                     }
                     synchronized[url] = session.synchronizedDocumentSnapshot(for: url)
-                    if url == document.url.standardizedFileURL,
-                       let accepted = synchronized[url], accepted.sessionIdentity == token.identity {
-                        document.acknowledgeLanguageServerSnapshot(accepted.sourceText)
+                    if let current = synchronized[url], current.sessionIdentity == token.identity {
+                        open.acknowledgeLanguageServerSnapshot(current.sourceText)
+                    }
+                } else if url != activeURL,
+                          languageProviderCatalog.provider(for: open.url)?.id == token.providerID {
+                    // Restored or background tabs of the same language server
+                    // must be synchronized before a workspace edit (such as
+                    // cross-file rename) so the server and freshness planner
+                    // share an authoritative snapshot for every open buffer.
+                    try manager.synchronizeEditingDocument(fileURL: url, text: open.text, in: token)
+                    if let current = session.synchronizedDocumentSnapshot(for: url),
+                       current.sessionIdentity == token.identity {
+                        synchronized[url] = current
+                        open.acknowledgeLanguageServerSnapshot(current.sourceText)
                     }
                 }
             }

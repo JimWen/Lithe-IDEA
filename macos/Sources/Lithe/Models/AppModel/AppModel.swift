@@ -660,15 +660,6 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
             let provider = settings.importAIConfiguration(configuration)
             try? services.secureStore.delete(key: provider.apiKeyIdentifier)
         }
-        languageServerToolsIfActive?.onCandidatesChanged = { [weak self] providerID in
-            guard let self,
-                  self.languageToolingFeature.shouldRetryCandidate(providerID: providerID),
-                  let document = self.activeDocument,
-                  self.languageProviderCatalog.provider(for: document.url)?.id == providerID else {
-                return
-            }
-            _ = self.activateLanguageServerIfAvailable(for: document)
-        }
         shortcutDetector = services.shortcutDetectorFactory.make { [weak self] commandID in
             self?.performShortcutCommand(id: commandID)
         }
@@ -885,6 +876,10 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         languageServerInstallPromptedProviderIDs.removeAll()
         cancelJavaLanguageServerPreparation()
         let didStart = activateCurrentDocumentLanguageServerIfAvailable()
+        if let activeDocument,
+           let providerID = languageProviderCatalog.provider(for: activeDocument.url)?.id {
+            synchronizeOpenDocuments(forLanguageProvider: providerID, excluding: activeDocument.url)
+        }
         showNotification(
             didStart
                 ? (settings.language == .simplifiedChinese ? "语言服务器已启动" : "Language server started")
@@ -1454,10 +1449,15 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
             }
             let capabilityID = ModuleCapabilityID.languageServerExtension(support.id)
             if services.moduleRuntime.capability(capabilityID) == nil {
+                let identity = currentWorkspaceIdentity
                 Task { [weak self, weak document] in
                     guard let self, let document else { return }
+                    await self.awaitModuleRuntimeShutdown()
+                    guard self.currentWorkspaceIdentity == identity,
+                          self.openDocuments.contains(where: { $0.id == document.id }) else { return }
                     do {
                         _ = try await self.services.moduleRuntime.activateCapability(capabilityID)
+                        guard self.currentWorkspaceIdentity == identity else { return }
                         _ = self.activateLanguageServerIfAvailable(for: document)
                     } catch {
                         self.languageToolingFeature.markActivationFailed(
@@ -1486,11 +1486,16 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         if let snapshot = try? services.moduleRuntime.snapshot(for: .languageIntelligence),
            snapshot.state != .active,
            snapshot.state != .idle {
-            Task { [weak self] in
-                guard let self else { return }
+            let identity = currentWorkspaceIdentity
+            Task { [weak self, weak document] in
+                guard let self, let document else { return }
+                await self.awaitModuleRuntimeShutdown()
+                guard self.currentWorkspaceIdentity == identity,
+                      self.openDocuments.contains(where: { $0.id == document.id }) else { return }
                 do {
                     let value = try await self.services.moduleRuntime.activateCapability(.languageIntelligence)
-                    guard let capability = value as? LitheLanguageIntelligenceModule.LanguageIntelligenceCapability else { return }
+                    guard self.currentWorkspaceIdentity == identity,
+                          let capability = value as? LitheLanguageIntelligenceModule.LanguageIntelligenceCapability else { return }
                     self.bindLanguageIntelligenceCapability(capability)
                     _ = self.activateLanguageServerIfAvailable(for: document)
                 } catch {

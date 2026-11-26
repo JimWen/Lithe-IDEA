@@ -13,6 +13,7 @@ extension AppModel {
     }
 
     func activateGitModule() async -> GitFeatureModel? {
+        await awaitModuleRuntimeShutdown()
         if let feature = gitFeatureIfActive { return feature }
         do {
             let value = try await services.moduleRuntime.activateCapability(.gitWorkspace)

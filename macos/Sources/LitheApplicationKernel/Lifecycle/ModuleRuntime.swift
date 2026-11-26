@@ -13,7 +13,19 @@ public final class ModuleRuntime: ModuleCapabilityResolver, ModuleEventPublishin
         var instance: (any LitheModule)?
     }
 
+    @MainActor
+    private final class ActivationResultBox {
+        var instance: (any LitheModule)?
+    }
+
+    private struct InFlightActivation {
+        let id: UUID
+        let task: Task<Void, Error>
+        let result: ActivationResultBox
+    }
+
     private var entries: [ModuleID: Entry] = [:]
+    private var activatingTasks: [ModuleID: InFlightActivation] = [:]
     private var capabilities: [ModuleCapabilityID: (provider: ModuleID, value: AnyObject)] = [:]
     private var eventObservers: [UUID: @MainActor (ModuleEvent) -> Void] = [:]
     private var moduleContributions: [ModuleID: [ModuleContribution]] = [:]
@@ -119,86 +131,142 @@ public final class ModuleRuntime: ModuleCapabilityResolver, ModuleEventPublishin
 
     @discardableResult
     public func activate(_ id: ModuleID) async throws -> any LitheModule {
-        guard var entry = entries[id] else { throw ModuleRuntimeError.unknownModule(id) }
-        guard !entry.isQuarantined else { throw ModuleRuntimeError.moduleQuarantined(id) }
-        guard !entry.isSuppressedBySafeMode else {
+        try await activate(id, ancestors: [])
+    }
+
+    private func activate(
+        _ id: ModuleID,
+        ancestors: Set<ModuleID>
+    ) async throws -> any LitheModule {
+        if ancestors.contains(id) {
+            throw ModuleRuntimeError.dependencyCycle([id])
+        }
+        guard let initialEntry = entries[id] else { throw ModuleRuntimeError.unknownModule(id) }
+        guard !initialEntry.isQuarantined else { throw ModuleRuntimeError.moduleQuarantined(id) }
+        guard !initialEntry.isSuppressedBySafeMode else {
             throw ModuleRuntimeError.optionalModuleUnavailableInSafeMode(id)
         }
-        guard entry.isEnabled else { throw ModuleRuntimeError.moduleDisabled(id) }
-        if let instance = entry.instance, entry.state == .active || entry.state == .idle {
+        guard initialEntry.isEnabled else { throw ModuleRuntimeError.moduleDisabled(id) }
+        if let instance = initialEntry.instance,
+           initialEntry.state == .active || initialEntry.state == .idle {
             return instance
         }
+        if let inFlight = activatingTasks[id] {
+            try await inFlight.task.value
+            if let instance = inFlight.result.instance ?? entries[id]?.instance {
+                return instance
+            }
+            throw ModuleRuntimeError.unknownModule(id)
+        }
 
-        for dependency in entry.factory.manifest.dependencies.sorted(by: dependencyOrder) {
-            switch dependency {
-            case .module(let dependencyID):
-                _ = try await activate(dependencyID)
-            case .capability(let capabilityID):
-                guard let provider = providerID(for: capabilityID) else {
-                    throw ModuleRuntimeError.missingCapabilityDependency(module: id, capability: capabilityID)
+        let activationID = UUID()
+        let resultBox = ActivationResultBox()
+        let nextAncestors = ancestors.union([id])
+        let task = Task<Void, Error> { @MainActor in
+            defer {
+                if self.activatingTasks[id]?.id == activationID {
+                    self.activatingTasks.removeValue(forKey: id)
                 }
-                _ = try await activate(provider)
             }
-        }
 
-        if !entry.factory.manifest.isRequired {
-            addPendingActivation(id)
+            let dependencies = self.entries[id]?.factory.manifest.dependencies.sorted(by: self.dependencyOrder) ?? []
+            for dependency in dependencies {
+                switch dependency {
+                case .module(let dependencyID):
+                    _ = try await self.activate(dependencyID, ancestors: nextAncestors)
+                case .capability(let capabilityID):
+                    guard let provider = self.providerID(for: capabilityID) else {
+                        throw ModuleRuntimeError.missingCapabilityDependency(module: id, capability: capabilityID)
+                    }
+                    _ = try await self.activate(provider, ancestors: nextAncestors)
+                }
+            }
+
+            guard var entry = self.entries[id] else { throw ModuleRuntimeError.unknownModule(id) }
+            guard !entry.isQuarantined else { throw ModuleRuntimeError.moduleQuarantined(id) }
+            guard !entry.isSuppressedBySafeMode else {
+                throw ModuleRuntimeError.optionalModuleUnavailableInSafeMode(id)
+            }
+            guard entry.isEnabled else { throw ModuleRuntimeError.moduleDisabled(id) }
+            if let instance = entry.instance, entry.state == .active || entry.state == .idle {
+                resultBox.instance = instance
+                return
+            }
+
+            if !entry.factory.manifest.isRequired {
+                self.addPendingActivation(id)
+            }
+            entry.state = .activating
+            self.entries[id] = entry
+            self.publishStateChanged(id)
+            var activatingInstance: (any LitheModule)?
+            do {
+                let instance = try entry.instance ?? entry.factory.makeModule()
+                activatingInstance = instance
+                let context = ModuleContext(
+                    moduleID: id,
+                    workspaceURL: self.workspaceURL,
+                    capabilities: self,
+                    events: self,
+                    resources: entry.resources,
+                    leases: entry.resources,
+                    contributions: self
+                )
+                try await instance.activate(context: context)
+                guard var latest = self.entries[id] else {
+                    await instance.shutdown()
+                    await entry.resources.stopAllResources()
+                    entry.resources.releaseStoppedResources()
+                    throw ModuleRuntimeError.unknownModule(id)
+                }
+                latest.resources.recordActivity()
+                latest.instance = instance
+                latest.state = .active
+                self.entries[id] = latest
+                resultBox.instance = instance
+                try self.publishCapabilities(of: instance, manifest: latest.factory.manifest)
+                let instanceContributions = instance.contributions().sorted(by: self.contributionOrder)
+                guard instanceContributions == latest.factory.contributions else {
+                    throw ModuleRuntimeError.contributionCatalogMismatch(id)
+                }
+                for contribution in latest.factory.contributions {
+                    self.register(contribution, for: id)
+                }
+                self.publish(ModuleEvent(source: id, name: "module.activated"))
+                self.publishStateChanged(id)
+                self.removePendingActivation(id)
+            } catch {
+                self.removePendingActivation(id)
+                if let activatingInstance {
+                    await activatingInstance.shutdown()
+                }
+                let currentEntry = self.entries[id] ?? entry
+                await currentEntry.resources.stopAllResources()
+                let activeKinds = currentEntry.resources.resourceSnapshots().filter(\.isActive).map(\.kind)
+                currentEntry.resources.releaseStoppedResources()
+                self.removeCapabilities(providedBy: id)
+                self.removeContributions(for: id)
+                var failedEntry = currentEntry
+                failedEntry.instance = nil
+                resultBox.instance = nil
+                if !activeKinds.isEmpty {
+                    failedEntry.state = .failed(message: "Resources remain active after failed activation")
+                    self.entries[id] = failedEntry
+                    self.publishStateChanged(id)
+                    throw ModuleRuntimeError.activeResourcesRemain(module: id, kinds: activeKinds)
+                }
+                failedEntry.state = .failed(message: error.localizedDescription)
+                self.entries[id] = failedEntry
+                self.publishStateChanged(id)
+                throw error
+            }
         }
-        entry.state = .activating
-        entries[id] = entry
-        publishStateChanged(id)
-        var activatingInstance: (any LitheModule)?
-        do {
-            let instance = try entry.instance ?? entry.factory.makeModule()
-            activatingInstance = instance
-            let context = ModuleContext(
-                moduleID: id,
-                workspaceURL: workspaceURL,
-                capabilities: self,
-                events: self,
-                resources: entry.resources,
-                leases: entry.resources,
-                contributions: self
-            )
-            try await instance.activate(context: context)
-            entry.resources.recordActivity()
-            entry.instance = instance
-            entry.state = .active
-            entries[id] = entry
-            try publishCapabilities(of: instance, manifest: entry.factory.manifest)
-            let instanceContributions = instance.contributions().sorted(by: contributionOrder)
-            guard instanceContributions == entry.factory.contributions else {
-                throw ModuleRuntimeError.contributionCatalogMismatch(id)
-            }
-            for contribution in entry.factory.contributions {
-                register(contribution, for: id)
-            }
-            publish(ModuleEvent(source: id, name: "module.activated"))
-            publishStateChanged(id)
-            removePendingActivation(id)
+        activatingTasks[id] = InFlightActivation(id: activationID, task: task, result: resultBox)
+        try await task.value
+        if let instance = resultBox.instance ?? entries[id]?.instance {
             return instance
-        } catch {
-            removePendingActivation(id)
-            if let activatingInstance {
-                await activatingInstance.shutdown()
-            }
-            await entry.resources.stopAllResources()
-            let activeKinds = entry.resources.resourceSnapshots().filter(\.isActive).map(\.kind)
-            entry.resources.releaseStoppedResources()
-            removeCapabilities(providedBy: id)
-            removeContributions(for: id)
-            entry.instance = nil
-            if !activeKinds.isEmpty {
-                entry.state = .failed(message: "Resources remain active after failed activation")
-                entries[id] = entry
-                publishStateChanged(id)
-                throw ModuleRuntimeError.activeResourcesRemain(module: id, kinds: activeKinds)
-            }
-            entry.state = .failed(message: error.localizedDescription)
-            entries[id] = entry
-            publishStateChanged(id)
-            throw error
         }
+        throw ModuleRuntimeError.unknownModule(id)
     }
 
     public func setEnabled(_ enabled: Bool, for id: ModuleID) async throws {

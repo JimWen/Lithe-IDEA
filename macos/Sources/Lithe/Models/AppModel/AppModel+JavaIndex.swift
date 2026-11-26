@@ -54,16 +54,31 @@ extension AppModel {
         )
         capability.tools.onCandidatesChanged = { [weak self] providerID in
             guard let self,
-                  self.languageToolingFeature.shouldRetryCandidate(providerID: providerID),
-                  let document = self.activeDocument,
-                  self.languageProviderCatalog.provider(for: document.url)?.id == providerID else {
+                  self.languageToolingFeature.shouldRetryCandidate(providerID: providerID) else {
                 return
             }
-            _ = self.activateLanguageServerIfAvailable(for: document)
+            if let document = self.activeDocument,
+               self.languageProviderCatalog.provider(for: document.url)?.id == providerID {
+                _ = self.activateLanguageServerIfAvailable(for: document)
+                self.synchronizeOpenDocuments(forLanguageProvider: providerID, excluding: document.url)
+            } else {
+                self.synchronizeOpenDocuments(forLanguageProvider: providerID, excluding: nil)
+            }
         }
         capability.sessions.onLanguageServerStateChange = { [weak self] providerID, state, operationID in
             guard providerID == "java" else { return }
             self?.handleJavaLanguageServerState(state, operationID: operationID)
+        }
+    }
+
+    func synchronizeOpenDocuments(forLanguageProvider providerID: String, excluding excludedURL: URL?) {
+        let excludedStandardized = excludedURL?.standardizedFileURL
+        for open in openDocuments {
+            if let excludedStandardized, open.url.standardizedFileURL == excludedStandardized {
+                continue
+            }
+            guard languageProviderCatalog.provider(for: open.url)?.id == providerID else { continue }
+            _ = activateLanguageServerIfAvailable(for: open)
         }
     }
 
