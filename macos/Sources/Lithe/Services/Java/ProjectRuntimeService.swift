@@ -248,6 +248,12 @@ final class ProjectRuntimeService: ObservableObject {
         return environment
     }
 
+    /// Ensures platform-discovered shell environment variables are settled
+    /// before capturing a consistent snapshot for metadata or language tools.
+    func prepareEnvironmentIfNeeded() async {
+        await runtimeLocator.prepareEnvironment()
+    }
+
     /// Base environment for language-neutral processes such as Go, Rust, Python and
     /// Node. Project environment overrides and explicit caller overrides are layered
     /// on top without injecting Java variables.

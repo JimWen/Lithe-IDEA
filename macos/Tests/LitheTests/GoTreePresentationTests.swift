@@ -178,10 +178,60 @@ struct GoTreePresentationTests {
         #expect(presentation.expandedTargetGroups == ["pa"])
     }
 
+    @Test
+    func diagnosticFormattingDecodesGoJSONDeduplicatesAndGuidesOnGoProxyOff() throws {
+        let proxyDetails = #"{"Err":"module lookup disabled by GOPROXY=off","Pos":"","ImportStack":["example.com/app/cmd","example.com/private/pkg"]}"#
+        let items = try decodeDiagnostics([
+            ["code": "dependencyError", "importPath": "example.com/app/cmd", "details": proxyDetails],
+            ["code": "dependencyError", "importPath": "example.com/app/cmd", "details": proxyDetails],
+            ["code": "packageError", "importPath": "example.com/app/cmd", "details": #"{"Err":"expected ';'","Pos":"main.go:12:4"}"#],
+            ["code": "moduleError", "details": "Plain fallback error"]
+        ])
+
+        let formatted = GoDiagnosticFormatting.entries(from: items)
+        #expect(formatted.count == 3)
+        #expect(formatted[0].count == 2)
+        #expect(formatted[0].summary.contains("module lookup disabled by GOPROXY=off"))
+        #expect(formatted[0].summary.contains("Go Mod Download"))
+        #expect(formatted[0].tooltip.contains("example.com/app/cmd -> example.com/private/pkg"))
+        #expect(formatted[1].summary == "main.go:12:4: expected ';'")
+        #expect(formatted[1].count == 1)
+        #expect(formatted[2].summary == "Plain fallback error")
+    }
+
+    @Test
+    func hasDiagnosticsOrIncompleteDetectsIssuesAcrossSnapshotLevels() throws {
+        let clean = try decodeSnapshot(json: Self.workspaceJSON(modules: [
+            Self.moduleJSON(id: "a", name: "example.com/a", directory: "a",
+                            manifest: "a/go.mod", targets: [Self.packageJSON(
+                id: "pa", name: "main", importPath: "example.com/a",
+                directory: "a", runnable: true, testable: true
+            )])
+        ]))
+        #expect(!GoTreePresentation.hasDiagnosticsOrIncomplete(clean))
+
+        let incompletePackage = try decodeSnapshot(json: Self.workspaceJSON(modules: [
+            Self.moduleJSON(id: "a", name: "example.com/a", directory: "a",
+                            manifest: "a/go.mod", targets: [
+                                Self.targetJSON(
+                                    id: "pa", name: "main", importPath: "example.com/a",
+                                    directoryRootID: "workspace", directoryRelative: "a",
+                                    runnable: false, testable: false, incomplete: true
+                                )
+                            ])
+        ]))
+        #expect(GoTreePresentation.hasDiagnosticsOrIncomplete(incompletePackage))
+    }
+
     // MARK: - Fixtures
 
     private func decodeSnapshot(json: String) throws -> ProjectMetadataSnapshot {
         try JSONDecoder().decode(ProjectMetadataSnapshot.self, from: Data(json.utf8))
+    }
+
+    private func decodeDiagnostics(_ items: [[String: String]]) throws -> [ProjectMetadataDiagnostic] {
+        let data = try JSONSerialization.data(withJSONObject: items)
+        return try JSONDecoder().decode([ProjectMetadataDiagnostic].self, from: data)
     }
 
     private static func workspaceJSON(modules: [String]) -> String {
@@ -240,14 +290,14 @@ struct GoTreePresentationTests {
     private static func targetJSON(
         id: String, name: String, importPath: String,
         directoryRootID: String, directoryRelative: String,
-        runnable: Bool, testable: Bool
+        runnable: Bool, testable: Bool, incomplete: Bool = false
     ) -> String {
         """
         {"id":"\(id)","name":"\(name)","kind":"package","rawKinds":["package"],"crateTypes":[],
          "edition":null,"directory":{"rootID":"\(directoryRootID)","relativePath":"\(directoryRelative)"},
          "sources":[{"location":{"rootID":"workspace","relativePath":"\(directoryRelative)/main.go"},"role":"go"}],
          "importPath":"\(importPath)","requiredFeatures":[],"runnable":\(runnable),"testable":\(testable),
-         "doctest":false,"incomplete":false,"imports":[],"testImports":[],"externalTestImports":[],
+         "doctest":false,"incomplete":\(incomplete),"imports":[],"testImports":[],"externalTestImports":[],
          "diagnostics":[]}
         """
     }

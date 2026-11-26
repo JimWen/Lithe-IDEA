@@ -134,7 +134,7 @@ struct MacWorkspaceTextEditFileOperations: WorkspaceTextEditFileOperations {
         }
         let temporaryURL = url.deletingLastPathComponent().appendingPathComponent(".lithe-edit-\(UUID().uuidString)")
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-        try Data(edit.replacementText.utf8).write(to: temporaryURL, options: .completeFileProtectionUnlessOpen)
+        try Data(edit.replacementText.utf8).write(to: temporaryURL, options: .withoutOverwriting)
         do {
             if let permissions = attributes?[.posixPermissions] as? NSNumber {
                 try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: temporaryURL.path)

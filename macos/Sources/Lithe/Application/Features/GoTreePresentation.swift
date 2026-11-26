@@ -55,6 +55,18 @@ final class GoTreePresentation: ObservableObject {
         GoTreeLayout(workspaceName: workspaceName, modules: snapshot.members)
     }
 
+    /// Returns true when the cached snapshot still contains diagnostics or
+    /// incomplete modules/packages (for example, missing local module cache at
+    /// initial prewarm) so reopening Go Tools refreshes automatically.
+    static func hasDiagnosticsOrIncomplete(_ snapshot: ProjectMetadataSnapshot) -> Bool {
+        if !snapshot.diagnostics.isEmpty { return true }
+        return snapshot.members.contains { member in
+            member.incomplete
+                || !member.diagnostics.isEmpty
+                || member.targets.contains { $0.incomplete || !$0.diagnostics.isEmpty }
+        }
+    }
+
     /// The packages of one module, which the metadata carries as targets of
     /// kind `package`; every other kind stays invisible to this tree.
     static func packages(of member: ProjectMetadataMember) -> [ProjectMetadataTarget] {
@@ -176,6 +188,82 @@ struct GoManifestCache {
     /// nil when no scan has been applied yet, which is a cacheable answer too.
     let snapshotID: UUID?
     let urls: [URL]
+}
+
+/// Formats serialized Rust Core Go diagnostic payloads (`{"Err":...}`) into
+/// concise, deduplicated messages for the Go Tools tree.
+struct GoFormattedDiagnostic: Equatable, Identifiable {
+    let id: String
+    let summary: String
+    let tooltip: String
+    let count: Int
+}
+
+enum GoDiagnosticFormatting {
+    private struct Payload: Decodable {
+        let err: String?
+        let pos: String?
+        let importStack: [String]?
+        let query: String?
+
+        enum CodingKeys: String, CodingKey {
+            case err = "Err"
+            case pos = "Pos"
+            case importStack = "ImportStack"
+            case query = "Query"
+        }
+    }
+
+    static func entries(from items: [ProjectMetadataDiagnostic]) -> [GoFormattedDiagnostic] {
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        var summaries: [String: String] = [:]
+        var tooltips: [String: String] = [:]
+
+        for item in items {
+            let formatted = format(item)
+            let key = formatted.summary
+            if counts[key] == nil {
+                order.append(key)
+                summaries[key] = formatted.summary
+                tooltips[key] = formatted.tooltip
+            }
+            counts[key, default: 0] += 1
+        }
+
+        return order.map { key in
+            GoFormattedDiagnostic(
+                id: key,
+                summary: summaries[key] ?? key,
+                tooltip: tooltips[key] ?? key,
+                count: counts[key] ?? 1
+            )
+        }
+    }
+
+    private static func format(_ item: ProjectMetadataDiagnostic) -> (summary: String, tooltip: String) {
+        guard let data = item.details.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(Payload.self, from: data),
+              let rawError = payload.err?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawError.isEmpty else {
+            return (item.details, item.details)
+        }
+
+        let position = payload.pos?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var summary = position.isEmpty ? rawError : "\(position): \(rawError)"
+        if rawError.localizedCaseInsensitiveContains("module lookup disabled by GOPROXY=off") {
+            summary += " (Not in local Go module cache — run Go Mod Download or check GOPATH/GOMODCACHE)"
+        }
+
+        var tooltipLines = [summary]
+        if let stack = payload.importStack, !stack.isEmpty {
+            tooltipLines.append("Import stack: " + stack.joined(separator: " -> "))
+        }
+        if let query = payload.query, !query.isEmpty {
+            tooltipLines.append("Query: " + query)
+        }
+        return (summary, tooltipLines.joined(separator: "\n"))
+    }
 }
 
 /// Uses only the applied inventory, so recognition never probes a toolchain

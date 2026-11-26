@@ -27,43 +27,115 @@ enum MacProcessArchitecture: Sendable {
 struct MacRuntimeLocator: RuntimeLocator {
     private let resourceURL: URL?
     private let processArchitecture: MacProcessArchitecture
+    private let homeDirectoryURL: URL
+    private let baseEnvironmentProvider: @Sendable () -> [String: String]
+    private let shellEnvironmentProvider: @Sendable () -> [String: String]
+    private let prepareShellEnvironment: @Sendable () async -> Void
+    private let goEnvFileProvider: @Sendable (URL) -> String?
+    private let fileExists: @Sendable (String) -> Bool
+    private let isExecutableCheck: @Sendable (String) -> Bool
 
     init(
         resourceURL: URL? = Bundle.main.resourceURL,
-        processArchitecture: MacProcessArchitecture = .current
+        processArchitecture: MacProcessArchitecture = .current,
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
+        baseEnvironmentProvider: @escaping @Sendable () -> [String: String] = {
+            ProcessInfo.processInfo.environment
+        },
+        shellEnvironmentProvider: @escaping @Sendable () -> [String: String] = {
+            MacLoginShellEnvironmentCache.shared.cachedEnvironment()
+        },
+        prepareShellEnvironment: @escaping @Sendable () async -> Void = {
+            await MacLoginShellEnvironmentCache.shared.awaitReady()
+        },
+        goEnvFileProvider: @escaping @Sendable (URL) -> String? = { url in
+            try? String(contentsOf: url, encoding: .utf8)
+        },
+        fileExists: @escaping @Sendable (String) -> Bool = {
+            FileManager.default.fileExists(atPath: $0)
+        },
+        isExecutableCheck: @escaping @Sendable (String) -> Bool = {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }
     ) {
         self.resourceURL = resourceURL
         self.processArchitecture = processArchitecture
+        self.homeDirectoryURL = homeDirectoryURL.standardizedFileURL
+        self.baseEnvironmentProvider = baseEnvironmentProvider
+        self.shellEnvironmentProvider = shellEnvironmentProvider
+        self.prepareShellEnvironment = prepareShellEnvironment
+        self.goEnvFileProvider = goEnvFileProvider
+        self.fileExists = fileExists
+        self.isExecutableCheck = isExecutableCheck
+    }
+
+    func prepareEnvironment() async {
+        await prepareShellEnvironment()
     }
 
     func environment() -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
-        // Finder-launched apps do not inherit shell startup files. Mirror the
-        // Go tool's well-known installation roots so the later GOROOT/GOPATH
-        // candidates have the same priority as `go env` in a terminal.
-        if environment["GOROOT"] == nil {
-            let home = FileManager.default.homeDirectoryForCurrentUser
+        var environment = baseEnvironmentProvider()
+        let shellEnvironment = shellEnvironmentProvider()
+
+        // Finder-launched apps do not inherit shell startup files. Layer
+        // allowlisted login-shell exports beneath explicit process variables so
+        // GOPATH, GOMODCACHE, GOROOT, CARGO_HOME, and PATH match the user's
+        // terminal without overriding explicit launches or tests.
+        for (key, value) in shellEnvironment {
+            guard !value.isEmpty else { continue }
+            if key == "PATH" {
+                environment["PATH"] = Self.mergePath(primary: environment["PATH"], secondary: value)
+            } else if environment[key]?.isEmpty ?? true {
+                environment[key] = value
+            }
+        }
+
+        // Next consult Go's user env file (`go env -w`) for safe path keys
+        // (`GOPATH`, `GOMODCACHE`, `GOCACHE`, `GOROOT`) only.
+        let goEnvURL = MacLoginShellEnvironmentCache.goEnvFileURL(
+            environment: environment,
+            homeDirectoryURL: homeDirectoryURL
+        )
+        if let goEnvText = goEnvFileProvider(goEnvURL) {
+            for (key, value) in MacLoginShellEnvironmentCache.parseGoEnvFile(goEnvText) {
+                if environment[key]?.isEmpty ?? true {
+                    environment[key] = value
+                }
+            }
+        }
+
+        if environment["GOROOT"]?.isEmpty ?? true {
             let roots = [
-                home.appendingPathComponent(".g/go"),
+                homeDirectoryURL.appendingPathComponent(".g/go"),
                 URL(fileURLWithPath: "/usr/local/go")
             ]
             if let root = roots.first(where: {
-                FileManager.default.isExecutableFile(atPath: $0.appendingPathComponent("bin/go").path)
+                isExecutableCheck($0.appendingPathComponent("bin/go").path)
             }) {
                 environment["GOROOT"] = root.path
             }
         }
-        if environment["GOPATH"] == nil {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            let roots = [
-                home.appendingPathComponent("go"),
-                home.appendingPathComponent("Repository/gopath")
-            ]
-            if let root = roots.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
-                environment["GOPATH"] = root.path
+        if environment["GOPATH"]?.isEmpty ?? true {
+            let defaultGoPath = homeDirectoryURL.appendingPathComponent("go")
+            if fileExists(defaultGoPath.path) {
+                environment["GOPATH"] = defaultGoPath.path
             }
         }
         return environment
+    }
+
+    private static func mergePath(primary: String?, secondary: String) -> String {
+        var entries: [String] = []
+        var seen: Set<String> = []
+        for source in [primary ?? "", secondary] {
+            for part in source.split(separator: ":") where !part.isEmpty {
+                let entry = String(part)
+                if seen.insert(entry).inserted {
+                    entries.append(entry)
+                }
+            }
+        }
+        return entries.joined(separator: ":")
     }
 
     func discover() -> RuntimeDiscoveryResult {

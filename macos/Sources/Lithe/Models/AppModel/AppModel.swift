@@ -1528,6 +1528,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
                 Task { [weak self, weak document] in
                     guard let self, let document else { return }
                     await self.awaitModuleRuntimeShutdown()
+                    await self.services.projectRuntimeService.prepareEnvironmentIfNeeded()
                     guard self.currentWorkspaceIdentity == identity,
                           self.openDocuments.contains(where: { $0.id == document.id }) else { return }
                     do {
@@ -1565,6 +1566,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
             Task { [weak self, weak document] in
                 guard let self, let document else { return }
                 await self.awaitModuleRuntimeShutdown()
+                await self.services.projectRuntimeService.prepareEnvironmentIfNeeded()
                 guard self.currentWorkspaceIdentity == identity,
                       self.openDocuments.contains(where: { $0.id == document.id }) else { return }
                 do {
