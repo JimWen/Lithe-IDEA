@@ -1676,6 +1676,27 @@ struct SshTunnel {
     child: Child,
 }
 
+impl Drop for SshTunnel {
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+    }
+}
+
+fn validate_ssh_token(value: &str, label: &str) -> Result<(), (String, String)> {
+    if value.is_empty()
+        || value.starts_with('-')
+        || value
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace() || ch == '@')
+    {
+        return Err(("invalid_ssh_tunnel".into(), format!("Invalid SSH {label}")));
+    }
+    Ok(())
+}
+
 async fn open_ssh_tunnel(connection: &Connection) -> Result<Option<SshTunnel>, (String, String)> {
     if connection.ssh_host.is_empty() {
         return Ok(None);
@@ -1684,6 +1705,18 @@ async fn open_ssh_tunnel(connection: &Connection) -> Result<Option<SshTunnel>, (
         return Err((
             "invalid_ssh_tunnel".into(),
             "SSH host, username, and local port are required".into(),
+        ));
+    }
+    validate_ssh_token(&connection.ssh_host, "host")?;
+    validate_ssh_token(&connection.ssh_username, "username")?;
+    validate_ssh_token(&connection.host, "target host")?;
+    if !connection.proxy_url.is_empty() {
+        // Never forward a user-supplied URL string into ssh's shell-evaluated
+        // ProxyCommand option.
+        return Err((
+            "unsupported_proxy".into(),
+            "SSH tunnel proxy URLs are not supported; configure ProxyJump in ~/.ssh/config instead."
+                .into(),
         ));
     }
     let target_port = if connection.port > 0 {
@@ -1721,12 +1754,8 @@ async fn open_ssh_tunnel(connection: &Connection) -> Result<Option<SshTunnel>, (
     if !connection.ssh_key_path.is_empty() {
         command.arg("-i").arg(&connection.ssh_key_path);
     }
-    if !connection.proxy_url.is_empty() {
-        command
-            .arg("-o")
-            .arg(format!("ProxyCommand={}", connection.proxy_url));
-    }
     let mut child = command
+        .arg("--")
         .arg(destination)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -2595,7 +2624,15 @@ fn pg_text(row: &PgRow, index: usize) -> Value {
 }
 
 fn sqlite_value(row: &SqliteRow, index: usize, kind: &str) -> Value {
-    match kind.to_ascii_uppercase().as_str() {
+    // SQLite uses dynamic per-cell typing; a column declared TEXT/NUMERIC/ANY
+    // can hold an INTEGER, REAL, or BLOB value at runtime. Prefer the cell's
+    // actual SQLite storage class whenever available.
+    let effective_kind = row
+        .try_get_raw(index)
+        .ok()
+        .and_then(|raw| (!raw.type_info().is_null()).then(|| raw.type_info().name().to_string()))
+        .unwrap_or_else(|| kind.to_string());
+    match effective_kind.to_ascii_uppercase().as_str() {
         "INTEGER" | "INT" | "INT64" => row
             .try_get::<i64, _>(index)
             .map(|v| json!(v))
@@ -2618,6 +2655,9 @@ fn sqlite_value(row: &SqliteRow, index: usize, kind: &str) -> Value {
 fn sqlite_text(row: &SqliteRow, index: usize) -> Value {
     row.try_get::<String, _>(index)
         .map(Value::String)
+        .or_else(|_| row.try_get::<i64, _>(index).map(|v| json!(v)))
+        .or_else(|_| row.try_get::<f64, _>(index).map(|v| json!(v)))
+        .or_else(|_| row.try_get::<Vec<u8>, _>(index).map(tagged_binary))
         .unwrap_or_else(|_| Value::String("<unsupported>".into()))
 }
 
@@ -2873,12 +2913,76 @@ fn ensure_transaction_allowed(
 }
 
 fn is_dangerous_sql(sql: &str) -> bool {
-    let upper = sql.trim_start().to_ascii_uppercase();
-    upper == "RESTORE"
-        || upper.starts_with("DROP ")
-        || upper.starts_with("TRUNCATE ")
-        || (upper.starts_with("UPDATE ") && !upper.contains(" WHERE "))
-        || (upper.starts_with("DELETE ") && !upper.contains(" WHERE "))
+    let stripped = strip_sql_comments_and_strings(sql);
+    for statement in stripped.split(';') {
+        let normalized = statement
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_uppercase();
+        if normalized.is_empty() {
+            continue;
+        }
+        if normalized == "RESTORE"
+            || normalized.starts_with("DROP ")
+            || normalized.starts_with("TRUNCATE ")
+            || (normalized.starts_with("UPDATE ") && !normalized.contains(" WHERE "))
+            || (normalized.starts_with("DELETE ") && !normalized.contains(" WHERE "))
+            || (normalized.starts_with("WITH ")
+                && ((normalized.contains(" DELETE ") || normalized.contains(" UPDATE "))
+                    && !normalized.contains(" WHERE ")))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn strip_sql_comments_and_strings(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut out = String::with_capacity(sql.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i + 1] == b'-' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            out.push(' ');
+            continue;
+        }
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            out.push(' ');
+            continue;
+        }
+        if bytes[i] == b'\'' {
+            out.push(' ');
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\'' {
+                    i += 1;
+                    if i < bytes.len() && bytes[i] == b'\'' {
+                        i += 1;
+                        continue;
+                    }
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if let Some(ch) = sql[i..].chars().next() {
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    out
 }
 
 async fn apply_changes(
@@ -2980,21 +3084,24 @@ fn mutation_sql(
                 ));
             }
             let names = columns(&mutation.values)?;
-            let key_names = columns(&mutation.key)?;
             let assignments: Vec<String> = names
                 .iter()
                 .enumerate()
                 .map(|(index, name)| format!("{name} = {}", placeholder(kind, index + 1)))
                 .collect();
-            let predicates: Vec<String> = key_names
-                .iter()
-                .enumerate()
-                .map(|(index, name)| {
-                    format!("{name} = {}", placeholder(kind, names.len() + index + 1))
-                })
-                .collect();
             let mut values: Vec<Value> = mutation.values.values().cloned().collect();
-            values.extend(mutation.key.values().cloned());
+            let mut next_param = values.len() + 1;
+            let mut predicates = Vec::with_capacity(mutation.key.len());
+            for (raw_key, key_value) in &mutation.key {
+                let quoted = quote_identifier(kind, raw_key)?;
+                if key_value.is_null() {
+                    predicates.push(format!("{quoted} IS NULL"));
+                } else {
+                    predicates.push(format!("{quoted} = {}", placeholder(kind, next_param)));
+                    values.push(key_value.clone());
+                    next_param += 1;
+                }
+            }
             Ok((
                 format!(
                     "UPDATE {table} SET {} WHERE {}",
@@ -3006,15 +3113,22 @@ fn mutation_sql(
         }
         "delete" => {
             require_key(&mutation.key)?;
-            let names = columns(&mutation.key)?;
-            let predicates: Vec<String> = names
-                .iter()
-                .enumerate()
-                .map(|(index, name)| format!("{name} = {}", placeholder(kind, index + 1)))
-                .collect();
+            let mut values = Vec::with_capacity(mutation.key.len());
+            let mut next_param = 1;
+            let mut predicates = Vec::with_capacity(mutation.key.len());
+            for (raw_key, key_value) in &mutation.key {
+                let quoted = quote_identifier(kind, raw_key)?;
+                if key_value.is_null() {
+                    predicates.push(format!("{quoted} IS NULL"));
+                } else {
+                    predicates.push(format!("{quoted} = {}", placeholder(kind, next_param)));
+                    values.push(key_value.clone());
+                    next_param += 1;
+                }
+            }
             Ok((
                 format!("DELETE FROM {table} WHERE {}", predicates.join(" AND ")),
-                mutation.key.values().cloned().collect(),
+                values,
             ))
         }
         action => Err((
@@ -3678,17 +3792,23 @@ async fn postgres_foreign_key_ddls(
     Ok(statements)
 }
 
+const POSTGRES_SEQUENCE_SQL: &str = r#"SELECT CAST(a.attname AS TEXT), CAST(pg_get_serial_sequence(format('%I.%I',$1,$2),a.attname) AS TEXT)
+        FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+        LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+        WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped
+          AND (a.attidentity<>'' OR pg_get_expr(d.adbin,d.adrelid) LIKE 'nextval(%')"#;
+
 async fn postgres_sequence_sql(
     pool: &AnyPool,
     schema: &str,
     table: &str,
 ) -> Result<String, (String, String)> {
-    let rows = sqlx::query(r#"SELECT CAST(a.attname AS TEXT), CAST(pg_get_serial_sequence(format('%I.%I',$1,$2),a.attname) AS TEXT)
-        FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-        LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-        WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped
-          AND (a.attidentity<>'' OR pg_get_expr(d.adbin,d.adrelid) LIKE 'nextval(%')"#)
-        .bind(schema).bind(table).fetch_all(pool).await.map_err(db_error)?;
+    let rows = sqlx::query(POSTGRES_SEQUENCE_SQL)
+        .bind(schema)
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .map_err(db_error)?;
     let qualified = format!(
         "{}.{}",
         quote_identifier("postgresql", schema)?,
@@ -3807,12 +3927,44 @@ fn write_insert_row<W: Write>(
     )
 }
 
+fn escape_sql_string(kind: &str, value: &str) -> String {
+    if kind == "mysql" || kind == "mariadb" {
+        format!("'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
+    } else {
+        format!("'{}'", value.replace('\'', "''"))
+    }
+}
+
+fn decimal_input(object: &Map<String, Value>) -> Option<&str> {
+    if object.len() != 1 {
+        return None;
+    }
+    let raw = object.get("decimal")?.as_str()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let unsigned = trimmed
+        .strip_prefix('-')
+        .or_else(|| trimmed.strip_prefix('+'))
+        .unwrap_or(trimmed);
+    let mut parts = unsigned.split('.');
+    let whole = parts.next()?;
+    let frac = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+    let whole_ok = !whole.is_empty() && whole.bytes().all(|b| b.is_ascii_digit());
+    let frac_ok = frac.is_none_or(|f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit()));
+    (whole_ok && frac_ok).then_some(trimmed)
+}
+
 fn sql_literal(kind: &str, value: &Value) -> Result<String, (String, String)> {
     match value {
         Value::Null => Ok("NULL".into()),
         Value::Bool(value) => Ok(if *value { "TRUE" } else { "FALSE" }.into()),
         Value::Number(value) => Ok(value.to_string()),
-        Value::String(value) => Ok(format!("'{}'", value.replace('\'', "''"))),
+        Value::String(value) => Ok(escape_sql_string(kind, value)),
         Value::Object(object) if binary_input(object).is_some() => {
             let bytes = BASE64
                 .decode(binary_input(object).unwrap())
@@ -3827,7 +3979,10 @@ fn sql_literal(kind: &str, value: &Value) -> Result<String, (String, String)> {
                 _ => format!("X'{hex}'"),
             })
         }
-        other => Ok(format!("'{}'", other.to_string().replace('\'', "''"))),
+        Value::Object(object) if decimal_input(object).is_some() => {
+            Ok(decimal_input(object).unwrap().to_string())
+        }
+        other => Ok(escape_sql_string(kind, &other.to_string())),
     }
 }
 
@@ -3891,6 +4046,8 @@ fn row_json(row: &sqlx::any::AnyRow) -> Result<Value, (String, String)> {
         let raw = row.try_get_raw(index).map_err(db_error)?;
         let value = if raw.is_null() {
             Value::Null
+        } else if column.type_info().is_null() {
+            typed_value(row, index, raw.type_info().name())
         } else {
             typed_value(row, index, column.type_info().name())
         };
@@ -3925,6 +4082,10 @@ fn typed_value(row: &sqlx::any::AnyRow, index: usize, kind: &str) -> Value {
 fn text_value(row: &sqlx::any::AnyRow, index: usize) -> Value {
     row.try_get::<String, _>(index)
         .map(Value::String)
+        .or_else(|_| row.try_get::<i64, _>(index).map(|v| json!(v)))
+        .or_else(|_| row.try_get::<f64, _>(index).map(|v| json!(v)))
+        .or_else(|_| row.try_get::<bool, _>(index).map(Value::Bool))
+        .or_else(|_| row.try_get::<Vec<u8>, _>(index).map(tagged_binary))
         .unwrap_or_else(|_| Value::String("<unsupported>".into()))
 }
 
@@ -4224,5 +4385,130 @@ mod tests {
         assert!(url.contains("sslmode=require"));
         assert!(url.contains("sslrootcert=%2Ftmp%2Fca.pem"));
         assert!(redact("connection failed: secret".to_string(), "secret").contains("***"));
+    }
+
+    #[test]
+    fn postgres_sequence_sql_has_balanced_parentheses_outside_literals() {
+        let stripped = strip_sql_comments_and_strings(POSTGRES_SEQUENCE_SQL);
+        let opens = stripped.chars().filter(|&ch| ch == '(').count();
+        let closes = stripped.chars().filter(|&ch| ch == ')').count();
+        assert_eq!(opens, closes, "unbalanced SQL: {POSTGRES_SEQUENCE_SQL}");
+        assert!(POSTGRES_SEQUENCE_SQL.ends_with("LIKE 'nextval(%')"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_dynamic_column_and_any_row_preserve_runtime_values() {
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut sqlite =
+                <sqlx::SqliteConnection as sqlx::Connection>::connect("sqlite::memory:").await?;
+            // In SQLite, an `ANY` / `NONE`-affinity column preserves each row's
+            // actual storage class (INTEGER, REAL, TEXT, BLOB, NULL).
+            sqlx::query("CREATE TABLE dyn(v ANY); INSERT INTO dyn VALUES (42), (3.5), ('abc'), (X'00FF'), (NULL);")
+                .execute(&mut sqlite)
+                .await?;
+            let direct_rows = sqlx::query("SELECT v FROM dyn").fetch_all(&mut sqlite).await?;
+            let direct: Vec<_> = direct_rows
+                .iter()
+                .map(|row| sqlite_row_json(row).unwrap())
+                .collect();
+
+            sqlx::any::install_default_drivers();
+            let any_pool = AnyPoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await?;
+            let any_rows = sqlx::query("WITH s(v) AS (VALUES (20), (22)) SELECT sum(v) AS total FROM s")
+                .fetch_all(&any_pool)
+                .await?;
+            let any_vals: Vec<_> = any_rows.iter().map(|row| row_json(row).unwrap()).collect();
+            Ok::<_, sqlx::Error>((direct, any_vals))
+        })
+        .await
+        .expect("SQLite dynamic typing test timed out")
+        .expect("SQLite queries should execute");
+
+        assert_eq!(
+            result.0,
+            vec![
+                json!({"v": 42}),
+                json!({"v": 3.5}),
+                json!({"v": "abc"}),
+                json!({"v": {"binary": "AP8="}}),
+                json!({"v": null}),
+            ]
+        );
+        assert_eq!(result.1, vec![json!({"total": 42})]);
+    }
+
+    #[test]
+    fn sql_literals_escape_mysql_backslashes_and_export_decimals() {
+        assert_eq!(
+            sql_literal("mysql", &json!(r"C:\tmp\O'Reilly")).unwrap(),
+            r"'C:\\tmp\\O''Reilly'"
+        );
+        assert_eq!(
+            sql_literal("postgresql", &json!({"decimal": "123.45"})).unwrap(),
+            "123.45"
+        );
+        assert_eq!(
+            sql_literal("mysql", &json!({"decimal": "-0.50"})).unwrap(),
+            "-0.50"
+        );
+    }
+
+    #[test]
+    fn mutations_use_is_null_for_null_keys_and_dangerous_sql_detects_comments_and_newlines() {
+        let mutation = Mutation {
+            action: "update".into(),
+            table: "items".into(),
+            values: Map::from_iter([("name".into(), json!("ok"))]),
+            key: Map::from_iter([("deleted_at".into(), Value::Null), ("id".into(), json!(9))]),
+        };
+        let (sql, values) = mutation_sql("postgresql", "public", &mutation).unwrap();
+        assert_eq!(
+            sql,
+            "UPDATE \"public\".\"items\" SET \"name\" = $1 WHERE \"deleted_at\" IS NULL AND \"id\" = $2"
+        );
+        assert_eq!(values, vec![json!("ok"), json!(9)]);
+
+        assert!(is_dangerous_sql("/* lead */ DROP TABLE users"));
+        assert!(is_dangerous_sql("-- lead\nDELETE\nFROM users"));
+        assert!(is_dangerous_sql("SELECT 1; TRUNCATE TABLE users"));
+        assert!(is_dangerous_sql("WITH x AS (SELECT 1) DELETE FROM users"));
+        assert!(!is_dangerous_sql("SELECT 'DROP TABLE users' AS txt"));
+    }
+
+    #[tokio::test]
+    async fn ssh_tunnel_rejects_option_injection_and_proxy_command() {
+        let mut bad_host = Connection {
+            kind: "postgresql".into(),
+            host: "db.internal".into(),
+            port: 5432,
+            username: "u".into(),
+            password: String::new(),
+            database: "app".into(),
+            path: String::new(),
+            ssl: false,
+            ca_certificate_path: String::new(),
+            server_name: String::new(),
+            ssh_host: "-oProxyCommand=id".into(),
+            ssh_port: 22,
+            ssh_username: "alice".into(),
+            ssh_key_path: String::new(),
+            ssh_local_port: 15432,
+            proxy_url: String::new(),
+            read_only: false,
+            production_protection: false,
+        };
+        assert_eq!(
+            open_ssh_tunnel(&bad_host).await.err().unwrap().0,
+            "invalid_ssh_tunnel"
+        );
+        bad_host.ssh_host = "bastion.internal".into();
+        bad_host.proxy_url = "sh -c id".into();
+        assert_eq!(
+            open_ssh_tunnel(&bad_host).await.err().unwrap().0,
+            "unsupported_proxy"
+        );
     }
 }

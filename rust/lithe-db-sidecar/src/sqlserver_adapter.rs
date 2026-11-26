@@ -206,7 +206,13 @@ async fn apply_changes(client: &mut SqlServerClient, mutations: &[Mutation]) -> 
     execute(client, "BEGIN TRANSACTION").await?;
     let mut affected = 0_u64;
     for mutation in mutations {
-        let sql = mutation_sql(mutation)?;
+        let sql = match mutation_sql(mutation) {
+            Ok(sql) => sql,
+            Err(error) => {
+                let _ = client.execute("ROLLBACK TRANSACTION", &[]).await;
+                return Err(error);
+            }
+        };
         match client.execute(sql, &[]).await {
             Ok(result) => affected += result.total(),
             Err(error) => {
