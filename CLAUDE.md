@@ -23,4 +23,6 @@ Principles** confirmed on 2026-09-21. For later upstream integrations:
   verification sequence takes precedence. Do not push or publish unless asked.
 
 For test work also load `.agents/skills/write-stable-tests/SKILL.md`. The full
-policy and lifecycle/layout requirements remain in `AGENTS.md`.
+upstream policy, lifecycle/layout requirements, closed-loop engineering &
+verification gates, and production-verified pitfalls checklist remain in
+`AGENTS.md`.
