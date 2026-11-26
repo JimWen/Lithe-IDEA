@@ -60,7 +60,11 @@ pub fn client_initialize(request: ClientInitializeRequest) -> Result<LspClientRe
                     "typeDefinition": { "dynamicRegistration": true },
                     "implementation": { "dynamicRegistration": true },
                     "references": { "dynamicRegistration": true },
-                    "rename": { "dynamicRegistration": true },
+                    "rename": {
+                        "dynamicRegistration": true,
+                        "prepareSupport": true,
+                        "prepareSupportDefaultBehavior": 1
+                    },
                     "formatting": { "dynamicRegistration": true },
                     "inlayHint": { "dynamicRegistration": true },
                     "foldingRange": {
@@ -76,6 +80,7 @@ pub fn client_initialize(request: ClientInitializeRequest) -> Result<LspClientRe
                     "codeLens": { "dynamicRegistration": true },
                     "codeAction": {
                         "dynamicRegistration": true,
+                        "dataSupport": true,
                         "resolveSupport": {
                             "properties": ["edit", "command"]
                         },
@@ -580,6 +585,7 @@ fn validate_lsp_method(method: &str) -> Result<(), CoreError> {
         | "textDocument/typeDefinition"
         | "textDocument/implementation"
         | "textDocument/references"
+        | "textDocument/prepareRename"
         | "textDocument/rename"
         | "textDocument/formatting"
         | "textDocument/inlayHint"
@@ -606,7 +612,8 @@ fn feature_request_params(request: &ClientFeatureRequest) -> Result<Value, CoreE
         | "textDocument/definition"
         | "textDocument/declaration"
         | "textDocument/typeDefinition"
-        | "textDocument/implementation" => Ok(json!({
+        | "textDocument/implementation"
+        | "textDocument/prepareRename" => Ok(json!({
             "textDocument": text_document,
             "position": lsp_position_json(required_position(request)?)
         })),
@@ -844,6 +851,9 @@ fn lsp_feature_result_for_method(
         }),
         Some("textDocument/hover") => Some(json!({
             "hover": parse_hover(result)
+        })),
+        Some("textDocument/prepareRename") => Some(json!({
+            "prepareRename": parse_prepare_rename(result)
         })),
         Some("textDocument/rename") => Some(if result.is_null() {
             // Rename alone permits a null result meaning no edit. An explicit
@@ -1152,6 +1162,42 @@ fn parse_code_action(action: &Value) -> Result<Option<Value>, WorkspaceEditParse
     })))
 }
 
+fn parse_prepare_rename(result: &Value) -> Value {
+    if result.is_null() {
+        return Value::Null;
+    }
+    let Some(object) = result.as_object() else {
+        return Value::Null;
+    };
+    if object.get("defaultBehavior").and_then(Value::as_bool) == Some(true) {
+        return json!({
+            "range": Value::Null,
+            "placeholder": Value::Null,
+            "defaultBehavior": true
+        });
+    }
+    if let Some(range) = object.get("range").and_then(parse_lsp_range_value) {
+        let placeholder = object
+            .get("placeholder")
+            .and_then(Value::as_str)
+            .map(Value::from)
+            .unwrap_or(Value::Null);
+        return json!({
+            "range": range,
+            "placeholder": placeholder,
+            "defaultBehavior": false
+        });
+    }
+    if let Some(range) = parse_lsp_range_value(result) {
+        return json!({
+            "range": range,
+            "placeholder": Value::Null,
+            "defaultBehavior": false
+        });
+    }
+    Value::Null
+}
+
 fn parse_lsp_command(value: &Value) -> Option<Value> {
     Some(json!({
         "title": value.get("title").and_then(Value::as_str).unwrap_or_default(),
@@ -1336,6 +1382,14 @@ fn feature_names_from_capabilities(capabilities: &Value) -> Vec<String> {
     {
         insert_unique(&mut values, "codeActionResolve");
     }
+    if capabilities
+        .get("renameProvider")
+        .and_then(|value| value.get("prepareProvider"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        insert_unique(&mut values, "prepareRename");
+    }
     values
 }
 
@@ -1378,6 +1432,15 @@ fn apply_dynamic_registration(state: &mut LspClientState, message: &Value) {
                 insert_unique(&mut state.server_capabilities, "codeActionResolve");
             }
         }
+        if registration.get("method").and_then(Value::as_str) == Some("textDocument/rename")
+            && registration
+                .get("registerOptions")
+                .and_then(|options| options.get("prepareProvider"))
+                .and_then(Value::as_bool)
+                == Some(true)
+        {
+            insert_unique(&mut state.server_capabilities, "prepareRename");
+        }
     }
 }
 
@@ -1394,14 +1457,26 @@ fn apply_dynamic_unregistration(state: &mut LspClientState, message: &Value) {
         return;
     };
     for unregistration in unregistrations {
-        if let Some(feature) = unregistration
-            .get("method")
-            .and_then(Value::as_str)
-            .and_then(feature_name_for_method)
-        {
+        let method = unregistration.get("method").and_then(Value::as_str);
+        if let Some(feature) = method.and_then(feature_name_for_method) {
             state
                 .server_capabilities
                 .retain(|existing| existing != feature);
+        }
+        if method == Some("textDocument/rename") {
+            state
+                .server_capabilities
+                .retain(|existing| existing != "prepareRename");
+        }
+        if method == Some("textDocument/completion") {
+            state
+                .server_capabilities
+                .retain(|existing| existing != "completionResolve");
+        }
+        if method == Some("textDocument/codeAction") {
+            state
+                .server_capabilities
+                .retain(|existing| existing != "codeActionResolve");
         }
     }
 }

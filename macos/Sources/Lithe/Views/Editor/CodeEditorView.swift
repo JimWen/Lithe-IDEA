@@ -887,12 +887,18 @@ struct CodeEditorView: NSViewRepresentable {
                         viewportStore.restoreSelection(selection, for: documentID)
                     })
             }
+            textView.onPrepareRenameRequested = { [weak model] line, column, completion in
+                model?.requestLanguagePrepareRename(line: line, utf16Column: column, completion: completion)
+            }
             textView.onRenameRequested = { [weak model] line, column, newName in
                 model?.requestLanguageRename(line: line, utf16Column: column, newName: newName)
             }
+            textView.onLanguageActionMessage = { [weak model] message in
+                model?.showNotification(message)
+            }
             textView.onFormatRequested = { [weak model] in model?.requestLanguageFormatting() }
-            textView.onCodeActionsRequested = { [weak model, weak textView] line, column in
-                model?.requestLanguageCodeActions(line: line, utf16Column: column) { [weak textView, weak model] actions in
+            textView.onCodeActionsRequested = { [weak model, weak textView] range in
+                model?.requestLanguageCodeActions(range: range) { [weak textView, weak model] actions in
                     textView?.presentLanguageCodeActions(actions) { action in model?.applyLanguageCodeAction(action) }
                 }
             }
@@ -1066,6 +1072,15 @@ struct CodeEditorView: NSViewRepresentable {
                 context.coordinator.lastFindOptions = findOptions
                 codeTextView.syncFindState(isVisible: findVisible, query: findQuery, options: findOptions)
             }
+            if let actionRequest = chrome.languageActionRequest,
+               actionRequest.documentID == document.id,
+               context.coordinator.handledLanguageActionRequestID != actionRequest.id {
+                context.coordinator.handledLanguageActionRequestID = actionRequest.id
+                Task { @MainActor [weak chrome, weak codeTextView] in
+                    chrome?.consumeLanguageActionRequest(id: actionRequest.id)
+                    codeTextView?.triggerLanguageAction(actionRequest.kind)
+                }
+            }
         }
         context.coordinator.applyInitialRunnableMarkers()
         context.coordinator.applySynchronizedMarkdownScrollIfNeeded(to: container.scrollView)
@@ -1098,6 +1113,7 @@ struct CodeEditorView: NSViewRepresentable {
 
         private var appliedPreviewLine: Int?
         var appliedNavigationTargetID: UUID?
+        var handledLanguageActionRequestID: UUID?
         var foldRegions: [JavaFoldRegion] = []
         var collapsedFoldIDs: Set<String> = []
         var implementationMarkers: [JavaImplementationMarker] = []
@@ -2879,9 +2895,11 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     var onQuickDocumentation: ((Int, Int) -> Void)?
     var onCompletionRequested: ((Int, Int) -> Void)?
     var onCompletionSelected: ((LanguageServerCompletionItem, LanguageServerRange) -> Void)?
+    var onPrepareRenameRequested: ((Int, Int, @escaping (Result<LanguageServerPrepareRenameResult?, Error>) -> Void) -> Void)?
     var onRenameRequested: ((Int, Int, String) -> Void)?
+    var onLanguageActionMessage: ((String) -> Void)?
     var onFormatRequested: (() -> Void)?
-    var onCodeActionsRequested: ((Int, Int) -> Void)?
+    var onCodeActionsRequested: ((LanguageServerRange) -> Void)?
     var onRunToCursor: ((Int, Int) -> Void)?
     var isRunToCursorEnabled = false
     var onDebugHover: ((String, @escaping (String?) -> Void) -> Void)?
@@ -4693,26 +4711,112 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         requestLanguageCompletions()
     }
 
+    func triggerLanguageAction(_ kind: EditorLanguageActionKind) {
+        guard !hasMarkedText() else { return }
+        switch kind {
+        case .renameSymbol:
+            guard languageServerFeatures.contains(.rename) else { return }
+            renameSymbolFromMenu()
+        case .sourceActions:
+            guard languageServerFeatures.contains(.codeActions) else { return }
+            codeActionsFromMenu()
+        case .completeSymbol:
+            guard languageServerFeatures.contains(.completion) else { return }
+            requestLanguageCompletions()
+        case .quickDocumentation:
+            guard languageServerFeatures.contains(.hover) else { return }
+            showQuickDocumentationFromMenu()
+        }
+    }
+
     @objc private func renameSymbolFromMenu() {
-        let position = languageServerPosition(at: selectedRange().location)
+        guard !hasMarkedText() else { return }
+        let selection = selectedRange()
+        let position = languageServerPosition(at: selection.location)
+        let fallbackPrefill = identifier(at: min(selection.location, (string as NSString).length), in: string as NSString)?.text ?? ""
+
+        guard languageServerFeatures.contains(.prepareRename),
+              let onPrepareRenameRequested else {
+            presentRenamePrompt(line: position.line, utf16Column: position.utf16Column, initialName: fallbackPrefill)
+            return
+        }
+        renameRequestGeneration &+= 1
+        let expectedGeneration = renameRequestGeneration
+        let expectedDocumentID = documentID
+        let expectedTextCount = (string as NSString).length
+        onPrepareRenameRequested(position.line, position.utf16Column) { [weak self] result in
+            guard let self,
+                  self.renameRequestGeneration == expectedGeneration,
+                  self.documentID == expectedDocumentID,
+                  !self.hasMarkedText(),
+                  self.selectedRange() == selection,
+                  (self.string as NSString).length == expectedTextCount else { return }
+            switch result {
+            case .failure(let error):
+                self.onLanguageActionMessage?(error.localizedDescription)
+            case .success(nil):
+                self.onLanguageActionMessage?(String(localized: "This symbol cannot be renamed"))
+            case .success(let prepared?):
+                let prefill = prepared.placeholder
+                    ?? prepared.range.flatMap { self.substring(for: $0) }
+                    ?? fallbackPrefill
+                self.presentRenamePrompt(
+                    line: position.line,
+                    utf16Column: position.utf16Column,
+                    initialName: prefill
+                )
+            }
+        }
+    }
+
+    private func presentRenamePrompt(line: Int, utf16Column: Int, initialName: String) {
         let alert = NSAlert()
         alert.messageText = "Rename Symbol"
         alert.informativeText = "Enter the new symbol name."
-        let field = NSTextField(string: "")
+        let field = NSTextField(string: initialName)
         field.frame = NSRect(x: 0, y: 0, width: 300, height: 24)
         alert.accessoryView = field
         alert.addButton(withTitle: "Rename")
         alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        field.selectText(nil)
         guard alert.runModal() == .alertFirstButtonReturn,
               !field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        onRenameRequested?(position.line, position.utf16Column, field.stringValue)
+        onRenameRequested?(line, utf16Column, field.stringValue)
     }
 
     @objc private func formatDocumentFromMenu() { onFormatRequested?() }
 
     @objc private func codeActionsFromMenu() {
-        let position = languageServerPosition(at: selectedRange().location)
-        onCodeActionsRequested?(position.line, position.utf16Column)
+        guard !hasMarkedText() else { return }
+        onCodeActionsRequested?(selectedLanguageServerRange())
+    }
+
+    func selectedLanguageServerRange() -> LanguageServerRange {
+        let sourceLength = (string as NSString).length
+        let selection = selectedRange()
+        let startLocation = min(max(0, selection.location), sourceLength)
+        let endLocation = min(max(startLocation, NSMaxRange(selection)), sourceLength)
+        let start = languageServerPosition(at: startLocation)
+        let end = languageServerPosition(at: endLocation)
+        return LanguageServerRange(
+            start: LanguageServerPosition(line: start.line, utf16Column: start.utf16Column),
+            end: LanguageServerPosition(line: end.line, utf16Column: end.utf16Column)
+        )
+    }
+
+    private func substring(for range: LanguageServerRange) -> String? {
+        let source = string as NSString
+        let startOffset = min(
+            source.length,
+            lineIndex.characterOffset(forLine: max(0, range.start.line)) + max(0, range.start.utf16Column)
+        )
+        let endOffset = min(
+            source.length,
+            lineIndex.characterOffset(forLine: max(0, range.end.line)) + max(0, range.end.utf16Column)
+        )
+        guard endOffset > startOffset else { return nil }
+        return source.substring(with: NSRange(location: startOffset, length: endOffset - startOffset))
     }
 
     private func requestLanguageCompletions() {
@@ -4759,6 +4863,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     private var languageCodeActionHandler: ((LanguageServerCodeAction) -> Void)?
+    private var renameRequestGeneration = 0
 
     @objc private func selectLanguageCodeAction(_ sender: NSMenuItem) {
         guard let action = sender.representedObject as? LanguageServerCodeAction else { return }

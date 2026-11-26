@@ -98,6 +98,11 @@ enum LitheActionRegistry {
             action("go-to-line", model: model) { model.showGoToLine() },
             action("go-to-definition", model: model) { model.goToDefinition() },
             action("find-usages", model: model) { model.findReferences() },
+            action("rename-symbol", model: model) { model.triggerRenameSymbol() },
+            action("format-document", model: model) { model.triggerFormatDocument() },
+            action("source-actions", model: model) { model.triggerSourceActions() },
+            action("complete-symbol", model: model) { model.triggerCompleteSymbol() },
+            action("quick-documentation", model: model) { model.triggerQuickDocumentation() },
             action("local-history", model: model) {
                 if let url = model.activeDocument?.url { model.showLocalHistory(for: url) }
             },

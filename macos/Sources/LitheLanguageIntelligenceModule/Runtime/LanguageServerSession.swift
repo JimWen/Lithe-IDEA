@@ -344,6 +344,18 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
         }
     }
 
+    package func prepareRename(
+        fileURL: URL,
+        position: LanguageServerPosition,
+        completion: @escaping (Result<LanguageServerPrepareRenameResult?, Error>) -> Void
+    ) throws {
+        try request(.prepareRename, fileURL: fileURL, position: position) { result in
+            completion(result.flatMap {
+                Self.decodeEventResult($0, as: PrepareRenamePayload.self)
+            }.map { $0.prepareRename?.makeModel() })
+        }
+    }
+
     package func rename(
         fileURL: URL,
         position: LanguageServerPosition,
@@ -685,6 +697,7 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
             case "hover": result.insert(.hover)
             case "completion": result.insert(.completion)
             case "rename": result.insert(.rename)
+            case "prepareRename": result.insert(.prepareRename)
             case "formatting": result.insert(.formatting)
             case "codeActions": result.insert(.codeActions)
             case "completionResolve": result.insert(.completionResolve)
@@ -1055,4 +1068,22 @@ private struct CodeActionsPayload: Decodable {
 private struct CodeActionResolvePayload: Decodable {
     let action: CodeActionPayload
     func makeModel() -> LanguageServerCodeAction { action.makeModel() }
+}
+
+private struct PrepareRenamePayload: Decodable {
+    struct Entry: Decodable {
+        let range: RangePayload?
+        let placeholder: String?
+        let defaultBehavior: Bool
+
+        func makeModel() -> LanguageServerPrepareRenameResult {
+            LanguageServerPrepareRenameResult(
+                range: range?.makeModel(),
+                placeholder: placeholder,
+                defaultBehavior: defaultBehavior
+            )
+        }
+    }
+
+    let prepareRename: Entry?
 }

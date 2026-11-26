@@ -1105,11 +1105,15 @@ The client initialization request is locked by
 `shared/fixtures/lsp/client-initialize-v1.json`, consumed by the Rust test
 `client_core_initializes_and_applies_server_capabilities`. Its `PACKAGE_VERSION`
 placeholder is replaced with the crate version before comparison. The client
-advertises `workspace.applyEdit: false` until both server-request correlation
+advertises `textDocument.rename.prepareSupport: true` (with
+`prepareSupportDefaultBehavior: 1`) and `textDocument.codeAction.dataSupport: true`,
+and `lsp.request` supports `prepareRename` (`textDocument/prepareRename`, gated by
+the server's static or dynamic `renameProvider.prepareProvider` capability). The
+client keeps `workspace.applyEdit: false` until both server-request correlation
 and the host edit transaction are implemented. Existing rename and code-action
 requests remain available; returning edits from those requests does not imply
 support for server-initiated `workspace/applyEdit` requests. Resource operations,
-transactional failure handling, and the planned refactoring capabilities remain
+transactional failure handling, and remaining planned refactoring capabilities remain
 unadvertised until their consumers are ready.
 
 

@@ -169,6 +169,63 @@ extension AppModel {
         } catch { showNotification(error.localizedDescription); completion([]) }
     }
 
+    func triggerRenameSymbol() {
+        guard let document = activeDocument, !document.isReadOnly,
+              supportsLanguageServerFeature(.rename) else { return }
+        editorChrome.requestLanguageAction(.renameSymbol, for: document.id)
+    }
+
+    func triggerFormatDocument() {
+        guard let document = activeDocument, !document.isReadOnly,
+              supportsLanguageServerFeature(.formatting) else { return }
+        requestLanguageFormatting()
+    }
+
+    func triggerSourceActions() {
+        guard let document = activeDocument, !document.isReadOnly,
+              supportsLanguageServerFeature(.codeActions) else { return }
+        editorChrome.requestLanguageAction(.sourceActions, for: document.id)
+    }
+
+    func triggerCompleteSymbol() {
+        guard let document = activeDocument, !document.isReadOnly,
+              supportsLanguageServerFeature(.completion) else { return }
+        editorChrome.requestLanguageAction(.completeSymbol, for: document.id)
+    }
+
+    func triggerQuickDocumentation() {
+        guard let document = activeDocument,
+              supportsLanguageServerFeature(.hover) else { return }
+        editorChrome.requestLanguageAction(.quickDocumentation, for: document.id)
+    }
+
+    func requestLanguagePrepareRename(
+        line: Int,
+        utf16Column: Int,
+        completion: @escaping (Result<LanguageServerPrepareRenameResult?, Error>) -> Void
+    ) {
+        guard let document = activeDocument,
+              languageToolingSessionsIfActive?.features(for: document.url).contains(.prepareRename) == true else {
+            completion(.success(nil))
+            return
+        }
+        do {
+            let context = try captureLanguageEditContext(requireSession: true)
+            try originalLanguageSession(context).prepareRename(
+                fileURL: context.requestURL,
+                position: .init(line: max(0, line), utf16Column: max(0, utf16Column))
+            ) { [weak self] result in
+                guard let self, self.isCurrentLanguageEditContext(context) else {
+                    completion(.failure(LanguageWorkspaceEditPlanner.Failure.staleSource))
+                    return
+                }
+                completion(result)
+            }
+        } catch {
+            completion(.failure(error))
+        }
+    }
+
     func requestLanguageRename(line: Int, utf16Column: Int, newName: String) {
         guard let document = activeDocument,
               languageToolingSessionsIfActive?.features(for: document.url).contains(.rename) == true else { return }
@@ -201,13 +258,26 @@ extension AppModel {
 
     func requestLanguageCodeActions(line: Int, utf16Column: Int,
                                     completion: @escaping ([LanguageServerCodeAction]) -> Void) {
+        let position = LanguageServerPosition(line: max(0, line), utf16Column: max(0, utf16Column))
+        requestLanguageCodeActions(range: .init(start: position, end: position), completion: completion)
+    }
+
+    func requestLanguageCodeActions(range: LanguageServerRange,
+                                    completion: @escaping ([LanguageServerCodeAction]) -> Void) {
         guard let document = activeDocument,
               languageToolingSessionsIfActive?.features(for: document.url).contains(.codeActions) == true else { completion([]); return }
         do {
             let context = try captureLanguageEditContext(requireSession: true)
-            let position = LanguageServerPosition(line: max(0, line), utf16Column: max(0, utf16Column))
-            try originalLanguageSession(context).codeActions(fileURL: context.requestURL,
-                range: .init(start: position, end: position), diagnostics: languageDiagnostics[context.requestURL] ?? []) { [weak self] result in
+            let normalizedRange = Self.normalizedCodeActionRange(range)
+            let relevantDiagnostics = Self.diagnosticsIntersecting(
+                languageDiagnostics[context.requestURL] ?? [],
+                range: normalizedRange
+            )
+            try originalLanguageSession(context).codeActions(
+                fileURL: context.requestURL,
+                range: normalizedRange,
+                diagnostics: relevantDiagnostics
+            ) { [weak self] result in
                 guard let self, self.isCurrentLanguageEditContext(context) else { completion([]); return }
                 switch result {
                 case .success(let actions):
@@ -217,6 +287,44 @@ extension AppModel {
                 }
             }
         } catch { showNotification(error.localizedDescription); completion([]) }
+    }
+
+    static func normalizedCodeActionRange(_ range: LanguageServerRange) -> LanguageServerRange {
+        let start = LanguageServerPosition(
+            line: max(0, range.start.line),
+            utf16Column: max(0, range.start.utf16Column)
+        )
+        let end = LanguageServerPosition(
+            line: max(0, range.end.line),
+            utf16Column: max(0, range.end.utf16Column)
+        )
+        if compare(start, end) <= 0 {
+            return LanguageServerRange(start: start, end: end)
+        }
+        return LanguageServerRange(start: end, end: start)
+    }
+
+    static func diagnosticsIntersecting(
+        _ diagnostics: [LanguageServerDiagnostic],
+        range: LanguageServerRange
+    ) -> [LanguageServerDiagnostic] {
+        diagnostics.filter { diagnostic in
+            compare(diagnostic.range.end, range.start) >= 0
+                && compare(diagnostic.range.start, range.end) <= 0
+        }
+    }
+
+    private static func compare(
+        _ lhs: LanguageServerPosition,
+        _ rhs: LanguageServerPosition
+    ) -> Int {
+        if lhs.line != rhs.line {
+            return lhs.line < rhs.line ? -1 : 1
+        }
+        if lhs.utf16Column != rhs.utf16Column {
+            return lhs.utf16Column < rhs.utf16Column ? -1 : 1
+        }
+        return 0
     }
 
     func applyLanguageCodeAction(_ action: LanguageServerCodeAction) {

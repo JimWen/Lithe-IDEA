@@ -44,6 +44,14 @@ struct LitheProjectCommands: Commands {
             items.button("Go to Implementation", .implementation)
             items.button("Find Usages", .usages)
         }
+        CommandMenu("Code") {
+            items.button("Complete Symbol", .completeSymbol)
+            items.button("Quick Documentation", .quickDocumentation)
+            Divider()
+            items.button("Rename Symbol…", .renameSymbol)
+            items.button("Format Document", .formatDocument)
+            items.button("Source Actions…", .sourceActions)
+        }
     }
 }
 

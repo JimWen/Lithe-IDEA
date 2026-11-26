@@ -15,6 +15,7 @@ enum ProjectMenuCommand: String, CaseIterable, Sendable {
     case project, commit, find, git, terminal, run, debug, tests, problems
     case mergeWindows, detachWindow, previousProject, nextProject
     case back, forward, searchEverywhere, goToLine, definition, implementation, usages
+    case renameSymbol, formatDocument, sourceActions, completeSymbol, quickDocumentation
     case findInFile, replaceInFile, findInFiles, replaceInFiles, findNext, findPrevious
     case editConfigurations, rescan, languageSettings, appearanceSettings, restartLanguageServers
     case fileHistory, projectHistory, showCommit, push, update, fetch, branches, newBranch, showLog
@@ -41,6 +42,11 @@ enum ProjectMenuCommand: String, CaseIterable, Sendable {
         case .definition: "go-to-definition"
         case .implementation: "go-to-implementation"
         case .usages: "find-usages"
+        case .renameSymbol: "rename-symbol"
+        case .formatDocument: "format-document"
+        case .sourceActions: "source-actions"
+        case .completeSymbol: "complete-symbol"
+        case .quickDocumentation: "quick-documentation"
         case .findInFile: "find-in-file"
         case .replaceInFile: "replace-in-file"
         case .findInFiles: "search-in-project"
@@ -85,7 +91,9 @@ struct ProjectCommandRequest: Equatable {
         switch command {
         case .closeEditor: return state.activeEditorItem == editorItem
         case .save, .findInFile, .replaceInFile, .goToLine, .definition,
-             .implementation, .usages, .fileHistory, .findNext, .findPrevious:
+             .implementation, .usages, .renameSymbol, .formatDocument,
+             .sourceActions, .completeSymbol, .quickDocumentation,
+             .fileHistory, .findNext, .findPrevious:
             return state.activeDocumentID == documentID
         case .push, .update, .newBranch:
             return state.currentReferenceID == referenceID

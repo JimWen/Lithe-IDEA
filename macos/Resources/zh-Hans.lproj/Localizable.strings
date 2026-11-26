@@ -2727,3 +2727,18 @@
 
 "No default web browser is available." = "没有可用的默认网页浏览器。";
 "Could not open the file in the browser." = "无法在浏览器中打开文件。";
+
+"Code" = "代码";
+"Rename Symbol" = "重命名符号";
+"Rename Symbol…" = "重命名符号…";
+"Rename the symbol at the caret across the workspace" = "在工作区内重命名光标处的符号";
+"Format Document" = "格式化文档";
+"Format the active document with the language server" = "使用语言服务器格式化当前文档";
+"Source Actions" = "源码操作";
+"Source Actions…" = "源码操作…";
+"Show quick fixes and refactoring actions at the caret" = "显示光标处的快速修复和重构操作";
+"Complete Symbol" = "补全符号";
+"Show language-server completions at the caret" = "显示光标处的语言服务器补全";
+"Quick Documentation" = "快速文档";
+"Show hover documentation for the symbol at the caret" = "显示光标处符号的悬停文档";
+"This symbol cannot be renamed" = "此位置无法重命名符号";

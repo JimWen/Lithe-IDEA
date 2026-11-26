@@ -1830,3 +1830,18 @@
 
 "No default web browser is available." = "No default web browser is available.";
 "Could not open the file in the browser." = "Could not open the file in the browser.";
+
+"Code" = "Code";
+"Rename Symbol" = "Rename Symbol";
+"Rename Symbol…" = "Rename Symbol…";
+"Rename the symbol at the caret across the workspace" = "Rename the symbol at the caret across the workspace";
+"Format Document" = "Format Document";
+"Format the active document with the language server" = "Format the active document with the language server";
+"Source Actions" = "Source Actions";
+"Source Actions…" = "Source Actions…";
+"Show quick fixes and refactoring actions at the caret" = "Show quick fixes and refactoring actions at the caret";
+"Complete Symbol" = "Complete Symbol";
+"Show language-server completions at the caret" = "Show language-server completions at the caret";
+"Quick Documentation" = "Quick Documentation";
+"Show hover documentation for the symbol at the caret" = "Show hover documentation for the symbol at the caret";
+"This symbol cannot be renamed" = "This symbol cannot be renamed";

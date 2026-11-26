@@ -248,6 +248,8 @@ pub enum LspSemanticOperation {
     Implementation,
     /// JDT LS `java/findLinks` with the `superImplementation` relation.
     JavaSuperImplementation,
+    /// `textDocument/prepareRename`.
+    PrepareRename,
     /// `textDocument/rename`.
     Rename,
     /// `textDocument/formatting`.
@@ -2707,6 +2709,7 @@ fn semantic_method(operation: LspSemanticOperation) -> &'static str {
         LspSemanticOperation::References => "textDocument/references",
         LspSemanticOperation::Implementation => "textDocument/implementation",
         LspSemanticOperation::JavaSuperImplementation => "java/findLinks",
+        LspSemanticOperation::PrepareRename => "textDocument/prepareRename",
         LspSemanticOperation::Rename => "textDocument/rename",
         LspSemanticOperation::Formatting => "textDocument/formatting",
         LspSemanticOperation::CodeActions => "textDocument/codeAction",
@@ -2731,6 +2734,7 @@ fn semantic_capability(operation: LspSemanticOperation) -> Option<&'static str> 
         LspSemanticOperation::References => Some("references"),
         LspSemanticOperation::Implementation => Some("implementation"),
         LspSemanticOperation::JavaSuperImplementation => Some("definition"),
+        LspSemanticOperation::PrepareRename => Some("prepareRename"),
         LspSemanticOperation::Rename => Some("rename"),
         LspSemanticOperation::Formatting => Some("formatting"),
         LspSemanticOperation::CodeActions => Some("codeActions"),

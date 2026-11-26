@@ -46,6 +46,7 @@ package struct LanguageServerFeatureSet: OptionSet, Hashable, Sendable {
     package static let completionResolve = Self(rawValue: 1 << 8)
     package static let codeActionResolve = Self(rawValue: 1 << 9)
     package static let executeCommand = Self(rawValue: 1 << 10)
+    package static let prepareRename = Self(rawValue: 1 << 11)
 
     package static let standardEditing: Self = [
         .definition, .references, .implementation, .hover, .completion,
@@ -378,6 +379,22 @@ package enum LanguageServerLogLevel: String, Sendable {
 /// What the editor wants from a language server, named by intent rather than by
 /// the LSP method that satisfies it. The core maps these to methods and owns the
 /// request IDs, so the UI never names a protocol method or reads a raw response.
+package struct LanguageServerPrepareRenameResult: Equatable, Sendable {
+    package let range: LanguageServerRange?
+    package let placeholder: String?
+    package let defaultBehavior: Bool
+
+    package init(
+        range: LanguageServerRange?,
+        placeholder: String?,
+        defaultBehavior: Bool
+    ) {
+        self.range = range
+        self.placeholder = placeholder
+        self.defaultBehavior = defaultBehavior
+    }
+}
+
 package enum LanguageServerOperation: String, Equatable, Sendable {
     case completion
     case hover
@@ -386,6 +403,7 @@ package enum LanguageServerOperation: String, Equatable, Sendable {
     case typeDefinition
     case references
     case implementation
+    case prepareRename
     case rename
     case formatting
     case codeActions
@@ -567,6 +585,11 @@ package protocol LanguageServerSession: AnyObject {
         position: LanguageServerPosition,
         completion: @escaping (Result<[LanguageServerLocation], Error>) -> Void
     ) throws
+    func prepareRename(
+        fileURL: URL,
+        position: LanguageServerPosition,
+        completion: @escaping (Result<LanguageServerPrepareRenameResult?, Error>) -> Void
+    ) throws
     func rename(
         fileURL: URL,
         position: LanguageServerPosition,
@@ -669,12 +692,27 @@ package extension LanguageServerSession {
     ) throws {
         completion(.failure(LanguageServerFeatureUnavailable.javaNavigation))
     }
+    func prepareRename(
+        fileURL _: URL,
+        position _: LanguageServerPosition,
+        completion: @escaping (Result<LanguageServerPrepareRenameResult?, Error>) -> Void
+    ) throws {
+        completion(.failure(LanguageServerFeatureUnavailable.prepareRename))
+    }
 }
 
 private enum LanguageServerFeatureUnavailable: LocalizedError {
     case javaNavigation
+    case prepareRename
 
-    var errorDescription: String? { "Java navigation is not supported by this language server." }
+    var errorDescription: String? {
+        switch self {
+        case .javaNavigation:
+            "Java navigation is not supported by this language server."
+        case .prepareRename:
+            "Prepare rename is not supported by this language server."
+        }
+    }
 }
 
 @MainActor

@@ -92,6 +92,11 @@ extension AppModel {
             case .definition: enabled = language && supportsLanguageServerFeature(.definition)
             case .implementation: enabled = language && supportsLanguageServerFeature(.implementation)
             case .usages: enabled = language && supportsLanguageServerFeature(.references)
+            case .renameSymbol: enabled = language && writable && supportsLanguageServerFeature(.rename)
+            case .formatDocument: enabled = language && writable && supportsLanguageServerFeature(.formatting)
+            case .sourceActions: enabled = language && writable && supportsLanguageServerFeature(.codeActions)
+            case .completeSymbol: enabled = language && writable && supportsLanguageServerFeature(.completion)
+            case .quickDocumentation: enabled = language && supportsLanguageServerFeature(.hover)
             case .findNext, .findPrevious: enabled = isFindBarVisible && findMatchCount > 0
             case .restartLanguageServers: enabled = workspace && language
             case .fileHistory: enabled = document != nil && history
@@ -156,6 +161,11 @@ extension AppModel {
         case .definition: goToDefinition()
         case .implementation: goToImplementation()
         case .usages: findReferences()
+        case .renameSymbol: triggerRenameSymbol()
+        case .formatDocument: triggerFormatDocument()
+        case .sourceActions: triggerSourceActions()
+        case .completeSymbol: triggerCompleteSymbol()
+        case .quickDocumentation: triggerQuickDocumentation()
         case .findInFile: showFindBar()
         case .replaceInFile: showReplaceBar()
         case .findInFiles: openProjectSearch()

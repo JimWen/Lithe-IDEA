@@ -48,6 +48,11 @@ enum LitheCommandCatalog {
         command("go-to-definition", "Go to Definition", "Navigate to the declaration of the selected symbol", .navigation, "b", [.command]),
         command("go-to-implementation", "Go to Implementation", "Navigate to an implementation of the selected symbol", .navigation, "b", [.option, .command]),
         command("find-usages", "Find Usages", "Find references to the selected symbol", .navigation, "u", [.option, .command]),
+        command("rename-symbol", "Rename Symbol", "Rename the symbol at the caret across the workspace", .navigation, "f6", [.shift]),
+        command("format-document", "Format Document", "Format the active document with the language server", .navigation, "l", [.option, .command]),
+        command("source-actions", "Source Actions", "Show quick fixes and refactoring actions at the caret", .navigation, "return", [.option]),
+        command("complete-symbol", "Complete Symbol", "Show language-server completions at the caret", .navigation, "space", [.control]),
+        command("quick-documentation", "Quick Documentation", "Show hover documentation for the symbol at the caret", .navigation, "f1"),
         command("search-in-project", "Find in Files", "Search text across the workspace", .navigation, "f", [.shift, .command]),
         command("replace-in-project", "Replace in Files", "Replace text across the workspace", .navigation, "r", [.shift, .command]),
 

@@ -1,6 +1,19 @@
 import Combine
 import Foundation
 
+enum EditorLanguageActionKind: Equatable, Sendable {
+    case renameSymbol
+    case sourceActions
+    case completeSymbol
+    case quickDocumentation
+}
+
+struct EditorLanguageActionRequest: Identifiable, Equatable, Sendable {
+    let id = UUID()
+    let documentID: UUID
+    let kind: EditorLanguageActionKind
+}
+
 /// Caret, selection, and Find in File chrome. These values change on arrow
 /// keys and query keystrokes, so they live off `AppModel` and must not
 /// republish the workbench tree.
@@ -14,6 +27,7 @@ final class EditorChromeModel: ObservableObject {
     @Published private(set) var findOptions = FindInFileOptions()
     @Published private(set) var isReplaceVisible = false
     @Published private(set) var findReplaceText = ""
+    @Published private(set) var languageActionRequest: EditorLanguageActionRequest?
     /// 超大文件（行数阈值见 `LitheTextViewportLayout`）不支持软换行，
     /// 编辑器据此禁用 chrome 开关与右键菜单项。
     @Published private(set) var isSoftWrapAvailable = true
@@ -88,9 +102,21 @@ final class EditorChromeModel: ObservableObject {
         updateFindState(currentIndex: 0, count: 0)
     }
 
+    func requestLanguageAction(_ kind: EditorLanguageActionKind, for documentID: UUID) {
+        languageActionRequest = EditorLanguageActionRequest(documentID: documentID, kind: kind)
+    }
+
+    func consumeLanguageActionRequest(id: UUID) {
+        guard languageActionRequest?.id == id else { return }
+        languageActionRequest = nil
+    }
+
     func reset() {
         update(caret: nil)
         update(selectedText: "")
+        if languageActionRequest != nil {
+            languageActionRequest = nil
+        }
         resetFindBar()
         setGoToLineVisible(false)
     }

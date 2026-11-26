@@ -2345,3 +2345,192 @@ fn workspace_edit_formatting_and_completion_never_drop_or_default_malformed_edit
         "Malformed edits escaped validation: {failures:#?}"
     );
 }
+
+#[test]
+fn prepare_rename_capability_and_result_shapes_are_normalized() {
+    let mut state = LspClientState::default();
+    let initialized = client_initialize(ClientInitializeRequest {
+        state,
+        root_uri: "file:///tmp/project".to_string(),
+        process_id: Some(7),
+        initialization_options: None,
+    })
+    .unwrap();
+    let init_msg: Value = serde_json::from_str(&initialized.messages[0]).unwrap();
+    assert_eq!(
+        init_msg["params"]["capabilities"]["textDocument"]["rename"]["prepareSupport"],
+        true
+    );
+    assert_eq!(
+        init_msg["params"]["capabilities"]["textDocument"]["rename"]
+            ["prepareSupportDefaultBehavior"],
+        1
+    );
+    assert_eq!(
+        init_msg["params"]["capabilities"]["textDocument"]["codeAction"]["dataSupport"],
+        true
+    );
+    state = initialized.state;
+
+    let applied = client_apply_server_message(ClientApplyServerMessageRequest {
+        state,
+        message: json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {
+                "capabilities": {
+                    "renameProvider": { "prepareProvider": true }
+                }
+            }
+        })
+        .to_string(),
+    })
+    .unwrap();
+    state = applied.state;
+    assert!(state.server_capabilities.iter().any(|c| c == "rename"));
+    assert!(state
+        .server_capabilities
+        .iter()
+        .any(|c| c == "prepareRename"));
+
+    let opened = client_open_document(ClientOpenDocumentRequest {
+        state,
+        uri: "file:///tmp/project/main.go".to_string(),
+        language_id: "go".to_string(),
+        text: "package main\nfunc greet() {}\n".to_string(),
+    })
+    .unwrap();
+    state = opened.state;
+
+    let cases = [
+        (
+            json!({
+                "start": { "line": 1, "character": 5 },
+                "end": { "line": 1, "character": 10 }
+            }),
+            json!({
+                "prepareRename": {
+                    "range": {
+                        "start": { "line": 1, "utf16Column": 5 },
+                        "end": { "line": 1, "utf16Column": 10 }
+                    },
+                    "placeholder": null,
+                    "defaultBehavior": false
+                }
+            }),
+        ),
+        (
+            json!({
+                "range": {
+                    "start": { "line": 1, "character": 5 },
+                    "end": { "line": 1, "character": 10 }
+                },
+                "placeholder": "greet"
+            }),
+            json!({
+                "prepareRename": {
+                    "range": {
+                        "start": { "line": 1, "utf16Column": 5 },
+                        "end": { "line": 1, "utf16Column": 10 }
+                    },
+                    "placeholder": "greet",
+                    "defaultBehavior": false
+                }
+            }),
+        ),
+        (
+            json!({ "defaultBehavior": true }),
+            json!({
+                "prepareRename": {
+                    "range": null,
+                    "placeholder": null,
+                    "defaultBehavior": true
+                }
+            }),
+        ),
+        (Value::Null, json!({ "prepareRename": null })),
+    ];
+
+    for (wire_result, expected) in cases {
+        let req = client_feature_request_canonical(ClientFeatureRequest {
+            state,
+            uri: "file:///tmp/project/main.go".to_string(),
+            method: "textDocument/prepareRename".to_string(),
+            position: Some(LspPosition {
+                line: 1,
+                utf16_column: 6,
+            }),
+            new_name: None,
+            range: None,
+            diagnostics: Vec::new(),
+            completion_item: None,
+            code_action: None,
+            command: None,
+        })
+        .unwrap();
+        let req_msg: Value = serde_json::from_str(&req.messages[0]).unwrap();
+        assert_eq!(req_msg["method"], "textDocument/prepareRename");
+        let req_id = req_msg["id"].as_str().unwrap().to_string();
+        state = req.state;
+
+        let resp = client_apply_server_message(ClientApplyServerMessageRequest {
+            state,
+            message: json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": wire_result
+            })
+            .to_string(),
+        })
+        .unwrap();
+        state = resp.state;
+        assert_eq!(resp.events[0].kind, "response");
+        assert_eq!(resp.events[0].result, Some(expected));
+    }
+
+    // Dynamic unregistration of textDocument/rename clears both rename and prepareRename;
+    // dynamic registration with prepareProvider restores both.
+    let unreg = client_apply_server_message(ClientApplyServerMessageRequest {
+        state,
+        message: json!({
+            "jsonrpc": "2.0",
+            "id": "srv-1",
+            "method": "client/unregisterCapability",
+            "params": {
+                "unregisterations": [{ "id": "r1", "method": "textDocument/rename" }]
+            }
+        })
+        .to_string(),
+    })
+    .unwrap();
+    state = unreg.state;
+    assert!(!state.server_capabilities.iter().any(|c| c == "rename"));
+    assert!(!state
+        .server_capabilities
+        .iter()
+        .any(|c| c == "prepareRename"));
+
+    let reg = client_apply_server_message(ClientApplyServerMessageRequest {
+        state,
+        message: json!({
+            "jsonrpc": "2.0",
+            "id": "srv-2",
+            "method": "client/registerCapability",
+            "params": {
+                "registrations": [{
+                    "id": "r2",
+                    "method": "textDocument/rename",
+                    "registerOptions": { "prepareProvider": true }
+                }]
+            }
+        })
+        .to_string(),
+    })
+    .unwrap();
+    assert!(reg.state.server_capabilities.iter().any(|c| c == "rename"));
+    assert!(reg
+        .state
+        .server_capabilities
+        .iter()
+        .any(|c| c == "prepareRename"));
+}

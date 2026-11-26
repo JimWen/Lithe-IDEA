@@ -59,7 +59,9 @@
           "dynamicRegistration": true
         },
         "rename": {
-          "dynamicRegistration": true
+          "dynamicRegistration": true,
+          "prepareSupport": true,
+          "prepareSupportDefaultBehavior": 1
         },
         "formatting": {
           "dynamicRegistration": true
@@ -86,6 +88,7 @@
         },
         "codeAction": {
           "dynamicRegistration": true,
+          "dataSupport": true,
           "resolveSupport": {
             "properties": [
               "edit",
