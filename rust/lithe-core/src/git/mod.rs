@@ -1731,6 +1731,16 @@ pub fn diff(request: GitDiffRequest) -> Result<GitDiffResponse, CoreError> {
 
     let root = validate_root(&request.root)?;
     let mut output = capture_git_with_options(&root, &arguments, None, true)?;
+    let allow_diff_exit_one = request.untracked && !include_untracked_with_reference;
+    let diff_failed = if allow_diff_exit_one {
+        output.exit_code > 1
+    } else {
+        output.exit_code != 0
+    };
+    if diff_failed {
+        return Err(CoreError::new(ErrorCode::ProcessFailed, "Git diff failed")
+            .with_details(String::from_utf8_lossy(&output.stderr).trim().to_string()));
+    }
     if include_untracked_with_reference {
         let untracked_paths = readonly_command(GitCommandRequest {
             root: root.clone(),
@@ -1967,7 +1977,7 @@ fn read_commit_log(
         "--decorate=short".to_string(),
         "-n".to_string(),
         (limit.saturating_add(1)).to_string(),
-        "--date=format:%Y/%m/%d %H:%M".to_string(),
+        "--date=format-local:%Y/%m/%d %H:%M".to_string(),
         "--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%s%x1f%D".to_string(),
     ]);
     let commit_output = readonly_command(GitCommandRequest {
@@ -1998,7 +2008,7 @@ pub fn commit(request: GitCommitRequest) -> Result<GitCommitLookupResponse, Core
         arguments: vec![
             "show".to_string(),
             "-s".to_string(),
-            "--date=format:%Y/%m/%d %H:%M".to_string(),
+            "--date=format-local:%Y/%m/%d %H:%M".to_string(),
             "--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%s%x1f%D".to_string(),
             request.commit,
         ],
@@ -2968,6 +2978,8 @@ fn resolve_operation(root: &str, operation: &str) -> Result<GitCommandResponse, 
     // editor at `true` makes Git accept the message it already prepared and exit.
     // `merge --continue` rejects extra arguments, so this must stay a config
     // override rather than a `--no-edit` flag.
+    // `GIT_EDITOR` takes precedence over `-c core.editor=...` in Git, so set
+    // both to guarantee `--continue` never launches an external or failing editor.
     let arguments = vec![
         "-c".to_string(),
         "core.editor=true".to_string(),
@@ -2975,7 +2987,13 @@ fn resolve_operation(root: &str, operation: &str) -> Result<GitCommandResponse, 
         action.to_string(),
     ];
 
-    execute_git(root, &arguments, None)
+    execute_git_with_environment(
+        root,
+        &arguments,
+        None,
+        false,
+        &[("GIT_EDITOR".to_string(), "true".to_string())],
+    )
 }
 
 /// The porcelain status pairs Git uses for an unresolved merge conflict.
@@ -3035,9 +3053,25 @@ pub fn blame(request: GitBlameRequest) -> Result<GitBlameResponse, CoreError> {
     let mut author_name = "Unknown".to_string();
     let mut author_time = 0;
     let mut final_line = 0;
-    for line in response.output.lines() {
+    for line in response.stdout.lines() {
+        // Content lines always begin with a leading tab and must be checked
+        // before commit headers so tab-indented source lines cannot be mistaken
+        // for porcelain metadata headers.
+        if line.starts_with('\t') && final_line > 0 {
+            lines.push(GitBlameLineResponse {
+                line: final_line,
+                commit_hash: commit_hash.clone(),
+                author_name: author_name.clone(),
+                author_time,
+            });
+            final_line += 1;
+            continue;
+        }
         let columns = line.split_whitespace().collect::<Vec<_>>();
-        if columns.len() >= 3 && columns[0].len() == 40 {
+        if columns.len() >= 3
+            && (columns[0].len() == 40 || columns[0].len() == 64)
+            && columns[0].bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
             if let Ok(parsed_line) = columns[2].parse::<usize>() {
                 commit_hash = columns[0].to_string();
                 final_line = parsed_line;
@@ -3046,14 +3080,6 @@ pub fn blame(request: GitBlameRequest) -> Result<GitBlameResponse, CoreError> {
             author_name = value.to_string();
         } else if let Some(value) = line.strip_prefix("author-time ") {
             author_time = value.parse::<i64>().unwrap_or_default();
-        } else if line.starts_with('\t') && final_line > 0 {
-            lines.push(GitBlameLineResponse {
-                line: final_line,
-                commit_hash: commit_hash.clone(),
-                author_name: author_name.clone(),
-                author_time,
-            });
-            final_line += 1;
         }
     }
     Ok(GitBlameResponse { lines })
@@ -4641,19 +4667,47 @@ fn discard_all(root: &str, paths: &[String]) -> Result<GitCommandResponse, CoreE
     Ok(final_response)
 }
 
+fn resolve_stash_oid(root: &str, reference: &str) -> Result<Option<String>, CoreError> {
+    let resolved = execute_git_readonly(
+        root,
+        &[
+            "rev-parse".into(),
+            "--verify".into(),
+            "--quiet".into(),
+            reference.to_string(),
+        ],
+        None,
+    )?;
+    if resolved.exit_code == 0 {
+        let oid = resolved.stdout.trim();
+        if !oid.is_empty() {
+            return Ok(Some(oid.to_string()));
+        }
+    }
+    Ok(None)
+}
+
 fn pop_stash(root: &str, reference: &str) -> Result<GitCommandResponse, CoreError> {
+    // Capture the stash commit OID before popping; positional reflog names like
+    // `stash@{0}` shift to the next remaining stash after a clean pop.
+    let target_oid = resolve_stash_oid(root, reference)?;
     let mut result = execute_git(
         root,
         &["stash".into(), "pop".into(), reference.to_string()],
         None,
     )?;
     let conflicted_paths = conflicted_paths(root)?;
-    let entry_was_kept = stash_reference_exists(root, reference)?;
-    if entry_was_kept && (!conflicted_paths.is_empty() || result.exit_code == 0) {
-        result.stash_restore = Some(GitStashRestoreResponse {
-            stash_reference: reference.to_string(),
-            conflicted_paths,
-        });
+    let kept_reference = match target_oid.as_deref() {
+        Some(oid) => stash_reference_for_oid(root, oid)?,
+        None => stash_reference_exists(root, reference)?.then(|| reference.to_string()),
+    };
+    if let Some(stash_reference) = kept_reference {
+        if !conflicted_paths.is_empty() || result.exit_code != 0 {
+            result.stash_restore = Some(GitStashRestoreResponse {
+                stash_reference,
+                conflicted_paths,
+            });
+        }
     }
     Ok(result)
 }
@@ -5765,19 +5819,25 @@ fn checkout_with_auto_stash(
             "Smart Checkout created a stash but could not locate it for restore.",
         ));
     };
+    let target_oid = resolve_stash_oid(root, &stash_reference)?;
     let mut restored = execute_git(
         root,
         &["stash".into(), "pop".into(), stash_reference.clone()],
         None,
     )?;
     let conflicted_paths = conflicted_paths(root)?;
-    let entry_was_kept = stash_reference_exists(root, &stash_reference)?;
-    if entry_was_kept && (restored.exit_code == 0 || !conflicted_paths.is_empty()) {
-        restored.exit_code = 1;
-        restored.stash_restore = Some(GitStashRestoreResponse {
-            stash_reference,
-            conflicted_paths,
-        });
+    let kept_reference = match target_oid.as_deref() {
+        Some(oid) => stash_reference_for_oid(root, oid)?,
+        None => stash_reference_exists(root, &stash_reference)?.then(|| stash_reference.clone()),
+    };
+    if let Some(kept_reference) = kept_reference {
+        if restored.exit_code != 0 || !conflicted_paths.is_empty() {
+            restored.exit_code = 1;
+            restored.stash_restore = Some(GitStashRestoreResponse {
+                stash_reference: kept_reference,
+                conflicted_paths,
+            });
+        }
     }
     Ok(restored)
 }
@@ -5982,17 +6042,21 @@ fn parse_stash(line: &str) -> Option<GitStashResponse> {
     }
     let subject = columns[1].trim();
     let lower = subject.to_ascii_lowercase();
-    let marker = lower.find("on ").or_else(|| lower.find(" on "));
-    let branch = marker.and_then(|index| {
-        let raw = &subject[index + 3..];
+    let marker = if lower.starts_with("on ") {
+        Some((0usize, 3usize))
+    } else {
+        lower.find(" on ").map(|index| (index, 4usize))
+    };
+    let branch = marker.and_then(|(index, len)| {
+        let raw = &subject[index + len..];
         raw.split_once(':')
             .or_else(|| raw.split_once(','))
             .map(|(branch, _)| branch.trim().to_string())
             .filter(|branch| !branch.is_empty())
     });
     let message = marker
-        .and_then(|index| {
-            subject[index + 3..]
+        .and_then(|(index, len)| {
+            subject[index + len..]
                 .split_once(':')
                 .map(|(_, message)| message)
         })
@@ -6053,6 +6117,10 @@ const MAX_ALIGNMENT_CELLS: usize = 4096;
 /// each other rather than an unrelated delete plus insert.
 const MIN_PAIR_SIMILARITY: f32 = 0.5;
 
+/// Maximum characters inspected per line during diff similarity alignment so
+/// minified JSON/JS/SVG lines stay bounded in time and memory.
+const MAX_SIMILARITY_CHARS: usize = 512;
+
 /// Character-bigram Dice coefficient over the trimmed lines, in [0, 1].
 ///
 /// Bigrams tolerate the reindentation and small edits that dominate real diffs,
@@ -6067,8 +6135,8 @@ fn line_similarity(left: &str, right: &str) -> f32 {
         return 0.0;
     }
 
-    let bigrams = |text: &str| -> Vec<[char; 2]> {
-        let chars: Vec<char> = text.chars().collect();
+    let collect_bigrams = |text: &str| -> Vec<[char; 2]> {
+        let chars: Vec<char> = text.chars().take(MAX_SIMILARITY_CHARS).collect();
         if chars.len() < 2 {
             // Treat a single character as one bigram against itself so short
             // lines can still match rather than always scoring zero.
@@ -6077,16 +6145,23 @@ fn line_similarity(left: &str, right: &str) -> f32 {
         chars.windows(2).map(|pair| [pair[0], pair[1]]).collect()
     };
 
-    let left_bigrams = bigrams(left);
-    let mut right_bigrams = bigrams(right);
+    let left_bigrams = collect_bigrams(left);
+    let right_bigrams = collect_bigrams(right);
     let total = left_bigrams.len() + right_bigrams.len();
 
-    // Multiset intersection: each right bigram is consumed by at most one match.
+    // Multiset intersection in O(L1 + L2) using bigram frequency counts.
+    let mut counts: std::collections::HashMap<[char; 2], usize> =
+        std::collections::HashMap::with_capacity(right_bigrams.len());
+    for bigram in right_bigrams {
+        *counts.entry(bigram).or_insert(0) += 1;
+    }
     let mut shared = 0usize;
     for bigram in &left_bigrams {
-        if let Some(position) = right_bigrams.iter().position(|other| other == bigram) {
-            right_bigrams.swap_remove(position);
-            shared += 1;
+        if let Some(remaining) = counts.get_mut(bigram) {
+            if *remaining > 0 {
+                *remaining -= 1;
+                shared += 1;
+            }
         }
     }
 
@@ -6219,14 +6294,13 @@ fn parse_hunk_header(header: &str) -> Option<(usize, usize)> {
 }
 
 fn parse_diff(patch: &str) -> (Vec<GitDiffRowResponse>, Vec<GitDiffHunkResponse>) {
+    if patch.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
     let has_trailing_newline = patch.ends_with('\n');
-    let lines = patch.split('\n').enumerate().filter_map(|(index, line)| {
-        if has_trailing_newline && index == patch.split('\n').count() - 1 {
-            None
-        } else {
-            Some(line)
-        }
-    });
+    // Strip at most one trailing newline once instead of counting all newlines
+    // on every line (which made large diffs quadratic).
+    let lines = patch.strip_suffix('\n').unwrap_or(patch).split('\n');
 
     let mut rows = Vec::new();
     let mut old_line = 0;

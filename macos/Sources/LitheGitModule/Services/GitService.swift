@@ -79,11 +79,20 @@ package protocol GitOperations: Sendable {
         limit: Int
     ) -> GitHistorySnapshot?
     func references(at rootURL: URL, operationID: String) -> GitReferenceSnapshot?
+    var supportsFilteredHistoryPage: Bool { get }
     func historyPage(
         at rootURL: URL,
         reference: GitReference?,
         cursor: String?,
         limit: Int,
+        operationID: String
+    ) -> GitHistoryPage?
+    func historyPage(
+        at rootURL: URL,
+        reference: GitReference?,
+        cursor: String?,
+        limit: Int,
+        filter: GitHistoryFilter?,
         operationID: String
     ) -> GitHistoryPage?
     func closeHistoryCursor(at rootURL: URL, cursor: String) -> Bool
@@ -235,6 +244,8 @@ package extension GitOperations {
         )
     }
 
+    var supportsFilteredHistoryPage: Bool { false }
+
     func historyPage(
         at rootURL: URL,
         reference: GitReference?,
@@ -254,6 +265,23 @@ package extension GitOperations {
             commits: page,
             nextCursor: hasMore ? String(offset + page.count) : nil,
             hasMore: hasMore
+        )
+    }
+
+    func historyPage(
+        at rootURL: URL,
+        reference: GitReference?,
+        cursor: String?,
+        limit: Int,
+        filter: GitHistoryFilter?,
+        operationID: String
+    ) -> GitHistoryPage? {
+        historyPage(
+            at: rootURL,
+            reference: reference,
+            cursor: cursor,
+            limit: limit,
+            operationID: operationID
         )
     }
 
@@ -711,15 +739,30 @@ package struct GitService: Sendable {
         }
     }
 
+    var supportsFilteredHistoryPage: Bool {
+        operations.supportsFilteredHistoryPage
+    }
+
     func historyPage(
         at repositoryRoot: URL,
         reference: GitReference?,
         cursor: String?,
         limit: Int,
+        filter: GitHistoryFilter? = nil,
         operationID: String
     ) async -> GitHistoryPage? {
         await cancellableRead(operationID: operationID) {
-            $0.historyPage(
+            if let filter, !filter.isEmpty {
+                return $0.historyPage(
+                    at: repositoryRoot,
+                    reference: reference,
+                    cursor: cursor,
+                    limit: limit,
+                    filter: filter,
+                    operationID: operationID
+                )
+            }
+            return $0.historyPage(
                 at: repositoryRoot,
                 reference: reference,
                 cursor: cursor,

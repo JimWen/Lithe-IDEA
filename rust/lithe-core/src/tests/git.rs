@@ -4766,3 +4766,132 @@ fn git_text(root: &Path, arguments: &[&str]) -> String {
     );
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
+
+#[test]
+fn filtered_history_page_finds_commit_beyond_first_page_by_hash_subject_and_path() {
+    let root = history_rewrite_repository("git-filtered-history");
+    fs::create_dir_all(root.join("pkg")).expect("pkg dir should be creatable");
+    commit_history_file(
+        &root,
+        "pkg/deep_target.go",
+        "package pkg\nfunc Target() {}\n",
+        "Target landmark commit",
+    );
+    let target_hash = git_text(&root, &["rev-parse", "HEAD"]);
+    let short_prefix = &target_hash[..8];
+    for index in 0..12 {
+        commit_history_file(
+            &root,
+            "other.txt",
+            &format!("line {index}\n"),
+            &format!("Noise commit {index}"),
+        );
+    }
+
+    let query_page = |filter: Value| -> Value {
+        serde_json::from_str(&execute_json(
+            &serde_json::json!({
+                "id": "filtered-history",
+                "command": "git.historyPage",
+                "payload": {
+                    "root": root,
+                    "limit": 3,
+                    "filter": filter
+                }
+            })
+            .to_string(),
+        ))
+        .expect("filtered history response should decode")
+    };
+
+    let by_hash = query_page(serde_json::json!({"textTerms": [short_prefix]}));
+    assert_eq!(by_hash["ok"], true, "{by_hash}");
+    let hash_commits = by_hash["data"]["commits"].as_array().unwrap();
+    assert_eq!(hash_commits.len(), 1, "{by_hash}");
+    assert_eq!(hash_commits[0]["hash"], target_hash);
+
+    let by_subject = query_page(serde_json::json!({"textTerms": ["landmark"]}));
+    assert_eq!(by_subject["ok"], true, "{by_subject}");
+    assert_eq!(by_subject["data"]["commits"][0]["hash"], target_hash);
+
+    let by_path = query_page(serde_json::json!({"paths": ["deep_target.go"]}));
+    assert_eq!(by_path["ok"], true, "{by_path}");
+    assert_eq!(by_path["data"]["commits"].as_array().unwrap().len(), 1);
+    assert_eq!(by_path["data"]["commits"][0]["hash"], target_hash);
+
+    fs::remove_dir_all(root).expect("filtered history fixture should be removable");
+}
+
+#[test]
+fn pop_stash_does_not_report_false_conflict_when_another_stash_exists() {
+    let root = history_rewrite_repository("git-pop-stash-two");
+    commit_history_file(&root, "a.txt", "base\n", "base");
+    fs::write(root.join("a.txt"), "first stash\n").unwrap();
+    assert!(history_git(&root, &["stash", "push", "-qm", "first"])
+        .status
+        .success());
+    fs::write(root.join("a.txt"), "second stash\n").unwrap();
+    assert!(history_git(&root, &["stash", "push", "-qm", "second"])
+        .status
+        .success());
+
+    let popped = git_write_request(
+        &root,
+        "stashPop",
+        serde_json::json!({"reference": "stash@{0}"}),
+    );
+    assert_eq!(popped["ok"], true, "{popped}");
+    assert_eq!(popped["data"]["exitCode"], 0, "{popped}");
+    assert!(
+        popped["data"]["stashRestore"].is_null(),
+        "clean pop must not treat shifted remaining stash as a conflict: {popped}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("a.txt")).unwrap(),
+        "second stash\n"
+    );
+
+    fs::remove_dir_all(root).expect("stash fixture should be removable");
+}
+
+#[test]
+fn blame_preserves_tab_indented_forty_char_source_lines_and_diff_reports_invalid_ref() {
+    let root = history_rewrite_repository("git-blame-diff-checks");
+    // A 40-char first token followed by an integer third token on a tab-indented Go line
+    // previously tricked line-porcelain parsing into dropping the source line.
+    let forty_char_ident = "a123456789012345678901234567890123456789";
+    let source = format!("package main\n\nfunc f() {{\n\t{forty_char_ident} := 42\n}}\n");
+    commit_history_file(&root, "main.go", &source, "add go file");
+
+    let blame: Value = serde_json::from_str(&execute_json(
+        &serde_json::json!({
+            "id": "blame-tab-line",
+            "command": "git.blame",
+            "payload": {"root": root, "path": "main.go"}
+        })
+        .to_string(),
+    ))
+    .expect("blame response should decode");
+    assert_eq!(blame["ok"], true, "{blame}");
+    let blamed_lines = blame["data"]["lines"].as_array().unwrap();
+    assert_eq!(blamed_lines.len(), 5, "{blame}");
+    assert_eq!(blamed_lines[3]["line"], 4);
+
+    let bad_diff: Value = serde_json::from_str(&execute_json(
+        &serde_json::json!({
+            "id": "bad-diff",
+            "command": "git.diff",
+            "payload": {
+                "root": root,
+                "pathspecs": ["main.go"],
+                "commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+            }
+        })
+        .to_string(),
+    ))
+    .expect("diff error response should decode");
+    assert_eq!(bad_diff["ok"], false, "{bad_diff}");
+    assert_eq!(bad_diff["error"]["code"], "process_failed");
+
+    fs::remove_dir_all(root).expect("blame/diff fixture should be removable");
+}

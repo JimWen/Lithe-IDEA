@@ -584,6 +584,8 @@ struct RustGitOperations: GitOperations, Sendable {
         core.gitReferences(at: rootURL, operationID: operationID)?.makeSnapshot()
     }
 
+    var supportsFilteredHistoryPage: Bool { true }
+
     func historyPage(
         at rootURL: URL,
         reference: GitReference?,
@@ -591,12 +593,43 @@ struct RustGitOperations: GitOperations, Sendable {
         limit: Int,
         operationID: String
     ) -> GitHistoryPage? {
-        core.gitHistoryPage(
+        historyPage(
+            at: rootURL,
+            reference: reference,
+            cursor: cursor,
+            limit: limit,
+            filter: nil,
+            operationID: operationID
+        )
+    }
+
+    func historyPage(
+        at rootURL: URL,
+        reference: GitReference?,
+        cursor: String?,
+        limit: Int,
+        filter: GitHistoryFilter?,
+        operationID: String
+    ) -> GitHistoryPage? {
+        let payloadFilter = filter.flatMap { filter -> RustCoreBridge.GitHistoryFilterPayload? in
+            guard !filter.isEmpty else { return nil }
+            return RustCoreBridge.GitHistoryFilterPayload(
+                textTerms: filter.textTerms,
+                authors: filter.authors,
+                exactAuthorName: filter.exactAuthorName,
+                exactAuthorEmail: filter.exactAuthorEmail,
+                after: filter.after,
+                before: filter.before,
+                paths: filter.paths
+            )
+        }
+        return core.gitHistoryPage(
             at: rootURL,
             reference: reference?.fullName,
             cursor: cursor,
             limit: limit,
             order: "date",
+            filter: payloadFilter,
             operationID: operationID
         )?.makePage()
     }

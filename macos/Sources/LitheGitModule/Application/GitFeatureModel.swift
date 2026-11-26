@@ -215,6 +215,18 @@ package final class GitFeatureModel: ObservableObject {
     @Published package private(set) var gitLogMatchedCommitHashes: Set<String>? {
         didSet { gitLogFilterVersion = Self.nextGitLogFilterVersion() }
     }
+    /// Backend-filtered commits when an active Git Log query runs through the
+    /// Rust filtered-history path, so commits beyond the initial page render.
+    @Published package private(set) var gitFilteredCommits: [GitCommit]? {
+        didSet { gitLogFilterVersion = Self.nextGitLogFilterVersion() }
+    }
+    package var displayedGitCommits: [GitCommit] {
+        gitFilteredCommits ?? gitCommits
+    }
+    @Published package private(set) var canLoadMoreFilteredGitHistory = false
+    package var canLoadMoreDisplayedGitHistory: Bool {
+        gitFilteredCommits != nil ? canLoadMoreFilteredGitHistory : canLoadMoreGitHistory
+    }
     /// Monotonic token for completed Git Log filter results. Rendering uses the
     /// token as a task key instead of comparing a potentially large hash set on
     /// every SwiftUI body evaluation.
@@ -287,6 +299,9 @@ package final class GitFeatureModel: ObservableObject {
     private var acquireModuleLease: (@MainActor (String) -> ModuleLease)?
     private static let gitHistoryPageSize = 100
     private var gitHistoryCursor: String?
+    private var gitFilteredHistoryCursor: String?
+    private var activeGitLogFilterQuery: GitLogQuery?
+    private var activeGitLogBackendFilter: GitHistoryFilter?
     private var gitHistoryGeneration = UUID()
     private var activeGitHistoryOperationIDs: Set<String> = []
     private var deferredSavedChanges: GitDeferredSavedChanges?
@@ -456,6 +471,11 @@ package final class GitFeatureModel: ObservableObject {
         gitGraphRepositoryCommits = []
         gitIdentity = nil
         gitLogMatchedCommitHashes = nil
+        gitFilteredCommits = nil
+        gitFilteredHistoryCursor = nil
+        activeGitLogFilterQuery = nil
+        activeGitLogBackendFilter = nil
+        canLoadMoreFilteredGitHistory = false
         isFilteringGitLog = false
         commitPathsByHash = [:]
         clearGitCommitFilesCache()
@@ -759,6 +779,11 @@ package final class GitFeatureModel: ObservableObject {
         closeBranchComparison()
         gitLogFilterGeneration = UUID()
         gitLogMatchedCommitHashes = nil
+        gitFilteredCommits = nil
+        gitFilteredHistoryCursor = nil
+        activeGitLogFilterQuery = nil
+        activeGitLogBackendFilter = nil
+        canLoadMoreFilteredGitHistory = false
         isFilteringGitLog = false
     }
 
@@ -1879,20 +1904,142 @@ package final class GitFeatureModel: ObservableObject {
     package func applyGitLogFilter(_ query: GitLogQuery) async {
         gitLogFilterGeneration = UUID()
         let generation = gitLogFilterGeneration
+        closeFilteredHistoryCursor()
+        activeGitLogFilterQuery = nil
+        activeGitLogBackendFilter = nil
+        canLoadMoreFilteredGitHistory = false
+
         guard !query.isEmpty else {
+            gitFilteredCommits = nil
             gitLogMatchedCommitHashes = nil
             isFilteringGitLog = false
             return
         }
 
         isFilteringGitLog = true
+
+        // Use backend-filtered pagination on real Git repositories so searches
+        // match commits across full history instead of only the first page.
+        if service.supportsFilteredHistoryPage, let repositoryRoot = gitRepositoryRoot {
+            guard let backendFilter = query.backendFilter(identity: gitIdentity) else {
+                guard gitLogFilterGeneration == generation else { return }
+                gitFilteredCommits = []
+                gitLogMatchedCommitHashes = []
+                isFilteringGitLog = false
+                return
+            }
+
+            let selectedReference = selectedGitReference
+            let showsAllReferences = isShowingAllGitReferences
+            let historyReference = showsAllReferences
+                ? nil
+                : (selectedReference ?? currentCheckoutHistoryReference)
+            let operationID = gitHistoryOperationID(kind: "filter", generation: generation)
+            activeGitHistoryOperationIDs.insert(operationID)
+            let page = await service.historyPage(
+                at: repositoryRoot,
+                reference: historyReference,
+                cursor: nil,
+                limit: Self.gitHistoryPageSize,
+                filter: backendFilter,
+                operationID: operationID
+            )
+            activeGitHistoryOperationIDs.remove(operationID)
+            guard gitLogFilterGeneration == generation,
+                  self.gitRepositoryRoot == repositoryRoot else {
+                if let cursor = page?.nextCursor {
+                    service.closeHistoryCursor(at: repositoryRoot, cursor: cursor)
+                }
+                return
+            }
+
+            if let page {
+                var candidates = page.commits
+                if !query.branches.isEmpty {
+                    candidates = await filterCandidatesByBranches(
+                        candidates,
+                        branches: query.branches,
+                        repositoryRoot: repositoryRoot,
+                        generation: generation
+                    )
+                    guard gitLogFilterGeneration == generation else {
+                        if let cursor = page.nextCursor {
+                            service.closeHistoryCursor(at: repositoryRoot, cursor: cursor)
+                        }
+                        return
+                    }
+                }
+                if query.paths.count > 1 {
+                    guard let pathFiltered = await filterCandidatesByPaths(
+                        candidates,
+                        query: query,
+                        repositoryRoot: repositoryRoot,
+                        generation: generation
+                    ) else {
+                        if let cursor = page.nextCursor {
+                            service.closeHistoryCursor(at: repositoryRoot, cursor: cursor)
+                        }
+                        return
+                    }
+                    candidates = pathFiltered
+                }
+                guard gitLogFilterGeneration == generation else {
+                    if let cursor = page.nextCursor {
+                        service.closeHistoryCursor(at: repositoryRoot, cursor: cursor)
+                    }
+                    return
+                }
+                gitFilteredCommits = candidates
+                gitLogMatchedCommitHashes = Set(candidates.map(\.hash))
+                gitFilteredHistoryCursor = page.nextCursor
+                canLoadMoreFilteredGitHistory = page.hasMore
+                activeGitLogFilterQuery = query
+                activeGitLogBackendFilter = backendFilter
+                isFilteringGitLog = false
+                return
+            }
+        }
+
+        gitFilteredCommits = nil
         var candidates = gitCommits.filter { query.matchesMetadata($0, identity: gitIdentity) }
 
-        for branchFilter in query.branches {
-            guard let repositoryRoot = gitRepositoryRoot else {
+        if !query.branches.isEmpty {
+            if let repositoryRoot = gitRepositoryRoot {
+                candidates = await filterCandidatesByBranches(
+                    candidates,
+                    branches: query.branches,
+                    repositoryRoot: repositoryRoot,
+                    generation: generation
+                )
+                guard gitLogFilterGeneration == generation else { return }
+            } else {
                 candidates = []
-                break
             }
+        }
+
+        if !query.paths.isEmpty, let repositoryRoot = gitRepositoryRoot {
+            guard let pathFiltered = await filterCandidatesByPaths(
+                candidates,
+                query: query,
+                repositoryRoot: repositoryRoot,
+                generation: generation
+            ) else { return }
+            candidates = pathFiltered
+        }
+
+        guard gitLogFilterGeneration == generation else { return }
+        gitLogMatchedCommitHashes = Set(candidates.map(\.hash))
+        isFilteringGitLog = false
+    }
+
+    private func filterCandidatesByBranches(
+        _ initial: [GitCommit],
+        branches: [String],
+        repositoryRoot: URL,
+        generation: UUID
+    ) async -> [GitCommit] {
+        var candidates = initial
+        for branchFilter in branches {
             let references = gitReferences.filter {
                 $0.shortName.localizedCaseInsensitiveContains(branchFilter)
                     || $0.fullName.localizedCaseInsensitiveContains(branchFilter)
@@ -1904,42 +2051,55 @@ package final class GitFeatureModel: ObservableObject {
                     reference: reference,
                     limit: 5_000
                 )
-                guard gitLogFilterGeneration == generation else { return }
+                guard gitLogFilterGeneration == generation else { return [] }
                 hashes.formUnion(snapshot.commits.map(\.hash))
             }
             candidates.removeAll { !hashes.contains($0.hash) }
         }
+        return candidates
+    }
 
-        if !query.paths.isEmpty, let repositoryRoot = gitRepositoryRoot {
-            var pathMatched: [GitCommit] = []
-            for commit in candidates {
-                let paths: Set<String>
-                if let cached = commitPathsByHash[commit.hash] {
-                    paths = cached
-                } else {
-                    let outcome = await commitFilesLoader.loadQueryFiles(
-                        for: commit,
-                        at: repositoryRoot
-                    )
-                    guard gitLogFilterGeneration == generation else { return }
-                    guard case .ready(let files) = outcome else {
-                        isFilteringGitLog = false
-                        return
-                    }
-                    paths = Set(files.map(\.path))
-                    commitPathsByHash[commit.hash] = paths
+    private func filterCandidatesByPaths(
+        _ candidates: [GitCommit],
+        query: GitLogQuery,
+        repositoryRoot: URL,
+        generation: UUID
+    ) async -> [GitCommit]? {
+        var pathMatched: [GitCommit] = []
+        for commit in candidates {
+            let paths: Set<String>
+            if let cached = commitPathsByHash[commit.hash] {
+                paths = cached
+            } else {
+                let outcome = await commitFilesLoader.loadQueryFiles(
+                    for: commit,
+                    at: repositoryRoot
+                )
+                guard gitLogFilterGeneration == generation else { return nil }
+                guard case .ready(let files) = outcome else {
+                    isFilteringGitLog = false
+                    return nil
                 }
-                if query.matchesPaths(paths) { pathMatched.append(commit) }
+                paths = Set(files.map(\.path))
+                commitPathsByHash[commit.hash] = paths
             }
-            candidates = pathMatched
+            if query.matchesPaths(paths) { pathMatched.append(commit) }
         }
+        return pathMatched
+    }
 
-        guard gitLogFilterGeneration == generation else { return }
-        gitLogMatchedCommitHashes = Set(candidates.map(\.hash))
-        isFilteringGitLog = false
+    private func closeFilteredHistoryCursor() {
+        if let gitRepositoryRoot, let cursor = gitFilteredHistoryCursor {
+            service.closeHistoryCursor(at: gitRepositoryRoot, cursor: cursor)
+        }
+        gitFilteredHistoryCursor = nil
     }
 
     package func loadMoreGitHistory() async {
+        if gitFilteredCommits != nil {
+            await loadMoreFilteredGitHistory()
+            return
+        }
         guard let gitRepositoryRoot,
               let cursor = gitHistoryCursor,
               canLoadMoreGitHistory,
@@ -1984,12 +2144,82 @@ package final class GitFeatureModel: ObservableObject {
         canLoadMoreGitHistory = page.hasMore
     }
 
+    private func loadMoreFilteredGitHistory() async {
+        guard let gitRepositoryRoot,
+              let cursor = gitFilteredHistoryCursor,
+              let filter = activeGitLogBackendFilter,
+              let query = activeGitLogFilterQuery,
+              canLoadMoreFilteredGitHistory,
+              !isLoadingGitHistory,
+              !isLoadingMoreGitHistory else { return }
+        let generation = gitLogFilterGeneration
+        let selectedReference = selectedGitReference
+        let showsAllReferences = isShowingAllGitReferences
+        let historyReference = showsAllReferences
+            ? nil
+            : (selectedReference ?? currentCheckoutHistoryReference)
+        let operationID = gitHistoryOperationID(kind: "filter-more", generation: generation)
+        activeGitHistoryOperationIDs.insert(operationID)
+        isLoadingMoreGitHistory = true
+        gitFilteredHistoryCursor = nil
+        let page = await service.historyPage(
+            at: gitRepositoryRoot,
+            reference: historyReference,
+            cursor: cursor,
+            limit: Self.gitHistoryPageSize,
+            filter: filter,
+            operationID: operationID
+        )
+        activeGitHistoryOperationIDs.remove(operationID)
+        guard gitLogFilterGeneration == generation,
+              self.gitRepositoryRoot == gitRepositoryRoot,
+              selectedGitReference == selectedReference,
+              isShowingAllGitReferences == showsAllReferences else {
+            if let cursor = page?.nextCursor {
+                service.closeHistoryCursor(at: gitRepositoryRoot, cursor: cursor)
+            }
+            return
+        }
+        isLoadingMoreGitHistory = false
+        guard let page else {
+            canLoadMoreFilteredGitHistory = false
+            return
+        }
+        var incoming = page.commits
+        if !query.branches.isEmpty {
+            incoming = await filterCandidatesByBranches(
+                incoming,
+                branches: query.branches,
+                repositoryRoot: gitRepositoryRoot,
+                generation: generation
+            )
+            guard gitLogFilterGeneration == generation else { return }
+        }
+        if query.paths.count > 1 {
+            guard let pathFiltered = await filterCandidatesByPaths(
+                incoming,
+                query: query,
+                repositoryRoot: gitRepositoryRoot,
+                generation: generation
+            ) else { return }
+            incoming = pathFiltered
+        }
+        var current = gitFilteredCommits ?? []
+        let loadedHashes = Set(current.map(\.hash))
+        current.append(contentsOf: incoming.filter { !loadedHashes.contains($0.hash) })
+        gitFilteredCommits = current
+        gitLogMatchedCommitHashes = Set(current.map(\.hash))
+        gitFilteredHistoryCursor = page.nextCursor
+        canLoadMoreFilteredGitHistory = page.hasMore
+    }
+
     package func cancelGitHistoryLoading() {
         gitHistoryGeneration = UUID()
         if let gitRepositoryRoot, let cursor = gitHistoryCursor {
             service.closeHistoryCursor(at: gitRepositoryRoot, cursor: cursor)
         }
         gitHistoryCursor = nil
+        closeFilteredHistoryCursor()
         for operationID in activeGitHistoryOperationIDs {
             service.cancel(operationID: operationID)
         }

@@ -1749,12 +1749,23 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         let root: String
     }
 
+    struct GitHistoryFilterPayload: Encodable {
+        let textTerms: [String]
+        let authors: [String]
+        let exactAuthorName: String?
+        let exactAuthorEmail: String?
+        let after: String?
+        let before: String?
+        let paths: [String]
+    }
+
     private struct GitHistoryPageRequest: Encodable {
         let root: String
         let reference: String?
         let cursor: String?
         let limit: Int
         let order: String?
+        let filter: GitHistoryFilterPayload?
     }
 
     private struct GitHistoryCursorCloseRequest: Encodable {
@@ -2572,6 +2583,7 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         cursor: String?,
         limit: Int,
         order: String? = nil,
+        filter: GitHistoryFilterPayload? = nil,
         operationID: String
     ) -> GitHistoryPagePayload? {
         execute(
@@ -2581,7 +2593,8 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
                 reference: reference,
                 cursor: cursor,
                 limit: limit,
-                order: order
+                order: order,
+                filter: filter
             ),
             operationID: operationID
         )

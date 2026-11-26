@@ -81,7 +81,7 @@ struct GitLogView: View {
         .background(model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.gitToolBackground)
         .task(id: graphProjectionIdentity) {
             let identity = graphProjectionIdentity
-            let commits = feature.gitCommits
+            let commits = hasActiveGitLogFilter ? feature.displayedGitCommits : feature.gitCommits
             let references = feature.gitReferences
             let repositoryCommits = feature.gitGraphRepositoryCommits
             let visibleHashes = visibleCommitHashes
@@ -879,7 +879,7 @@ struct GitLogView: View {
                     presentation: graphPresentation,
                     focusedHash: model.selectedGitCommit?.hash,
                     showCommitDecorations: showCommitDecorations,
-                    canLoadMore: model.canLoadMoreGitHistory,
+                    canLoadMore: feature.canLoadMoreDisplayedGitHistory,
                     isLoadingMore: model.isLoadingMoreGitHistory,
                     actions: graphRowActions,
                     onLoadMore: { Task { await model.loadMoreGitHistory() } }
@@ -1167,7 +1167,9 @@ struct GitLogView: View {
             author: selectedGitLogAuthor,
             datePreset: selectedGitLogDatePreset,
             path: gitLogPathFilter,
-            commitHashes: model.gitCommits.map(\.hash)
+            commitsVersion: feature.gitCommitsVersion,
+            selectedReferenceName: feature.selectedGitReference?.fullName,
+            showsAllReferences: feature.isShowingAllGitReferences
         )
     }
 
@@ -1607,7 +1609,9 @@ private struct GitLogFilterTaskIdentity: Hashable {
     let author: GitLogAuthorSelection?
     let datePreset: GitLogDatePreset
     let path: String
-    let commitHashes: [String]
+    let commitsVersion: Int
+    let selectedReferenceName: String?
+    let showsAllReferences: Bool
 }
 
 /// Hosts Git Log filters in an AppKit popover so they open without SwiftUI's

@@ -694,19 +694,101 @@ package struct GitLogQuery: Equatable, Sendable {
         return calendar.date(from: DateComponents(year: year, month: month, day: day))
     }
 
-    private static func parseCommitDate(_ value: String) -> Date? {
-        let iso8601 = ISO8601DateFormatter()
-        if let date = iso8601.date(from: value) { return date }
+    package func backendFilter(identity: GitIdentity?) -> GitHistoryFilter? {
+        var resolvedExactName = exactAuthor?.name
+        var resolvedExactEmail = exactAuthor?.email
+        if currentUserOnly {
+            guard let identity, !identity.isEmpty else { return nil }
+            if resolvedExactName == nil && resolvedExactEmail == nil {
+                resolvedExactName = identity.name
+                resolvedExactEmail = identity.email
+            }
+        }
+        return GitHistoryFilter(
+            textTerms: textTerms,
+            authors: authors,
+            exactAuthorName: resolvedExactName,
+            exactAuthorEmail: resolvedExactEmail,
+            after: afterDate.map(Self.formatFilterTimestamp),
+            before: beforeDate.map(Self.formatFilterTimestamp),
+            paths: paths
+        )
+    }
 
+    private static func formatFilterTimestamp(_ date: Date) -> String {
+        GitDateFormatters.formatISO8601(date)
+    }
+
+    private static func parseCommitDate(_ value: String) -> Date? {
+        GitDateFormatters.parseCommitDate(value)
+    }
+}
+
+package struct GitHistoryFilter: Equatable, Hashable, Sendable, Encodable {
+    package let textTerms: [String]
+    package let authors: [String]
+    package let exactAuthorName: String?
+    package let exactAuthorEmail: String?
+    package let after: String?
+    package let before: String?
+    package let paths: [String]
+
+    package init(
+        textTerms: [String] = [],
+        authors: [String] = [],
+        exactAuthorName: String? = nil,
+        exactAuthorEmail: String? = nil,
+        after: String? = nil,
+        before: String? = nil,
+        paths: [String] = []
+    ) {
+        self.textTerms = textTerms
+        self.authors = authors
+        self.exactAuthorName = exactAuthorName
+        self.exactAuthorEmail = exactAuthorEmail
+        self.after = after
+        self.before = before
+        self.paths = paths
+    }
+
+    package var isEmpty: Bool {
+        textTerms.isEmpty
+            && authors.isEmpty
+            && exactAuthorName == nil
+            && exactAuthorEmail == nil
+            && after == nil
+            && before == nil
+            && paths.isEmpty
+    }
+}
+
+private final class GitDateFormatters: @unchecked Sendable {
+    private static let shared = GitDateFormatters()
+    private let lock = NSLock()
+    private let iso8601 = ISO8601DateFormatter()
+    private let commitFormatters: [DateFormatter] = [
+        "EEE MMM d HH:mm:ss yyyy Z",
+        "yyyy-MM-dd HH:mm:ss Z",
+        "yyyy/MM/dd HH:mm"
+    ].map { format in
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
-        for format in [
-            "EEE MMM d HH:mm:ss yyyy Z",
-            "yyyy-MM-dd HH:mm:ss Z",
-            "yyyy/MM/dd HH:mm"
-        ] {
-            formatter.dateFormat = format
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    static func formatISO8601(_ date: Date) -> String {
+        shared.lock.lock()
+        defer { shared.lock.unlock() }
+        return shared.iso8601.string(from: date)
+    }
+
+    static func parseCommitDate(_ value: String) -> Date? {
+        shared.lock.lock()
+        defer { shared.lock.unlock() }
+        if let date = shared.iso8601.date(from: value) { return date }
+        for formatter in shared.commitFormatters {
             if let date = formatter.date(from: value) { return date }
         }
         return nil
