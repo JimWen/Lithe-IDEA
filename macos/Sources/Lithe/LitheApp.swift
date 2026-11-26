@@ -288,6 +288,7 @@ struct LitheApp: App {
     private let applicationLogWriter: MacApplicationLogWriter
 
     init() {
+        MacLoginShellEnvironmentCache.shared.warmUpIfNeeded()
         let store = MacUserDefaultsStore()
         if LithePerformanceBaseline.isEnabled {
             LitheSignpost.configureBaselineOutput { line in

@@ -280,6 +280,17 @@ struct WorkbenchView: View {
 
     private var workbenchContent: some View {
         VStack(spacing: 0) {
+            // Keep top-edge horizontal ScrollViews (projectTabBar, EditorAreaView
+            // tabs, DiffReviewView, Database tabs) 1pt below the .fullSizeContentView
+            // titlebar safe area. On macOS 26/27 a horizontal ScrollView flush with
+            // the top safe area expands HostingScrollView upward into the titlebar
+            // while leaving DocumentView's hit-test frame behind the titlebar,
+            // making tab close buttons and tab clicks unresponsive.
+            (model.workbenchBackgroundFeature.hasImage ? Color.clear : LitheTheme.titlebar)
+                .frame(height: 1)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+
             if projectSessions.openProjects.count > 1 {
                 projectTabBar
             }

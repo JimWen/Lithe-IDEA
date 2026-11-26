@@ -462,11 +462,14 @@ private struct GoProjectView: View {
     }
 
     private func diagnostics(_ items: [ProjectMetadataDiagnostic]) -> some View {
-        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-            Label(item.details, systemImage: "exclamationmark.triangle")
+        ForEach(GoDiagnosticFormatting.entries(from: items)) { entry in
+            let text = entry.count > 1 ? "\(entry.summary) (×\(entry.count))" : entry.summary
+            Label(text, systemImage: "exclamationmark.triangle")
                 .font(.system(size: 11))
                 .foregroundStyle(LitheTheme.error)
+                .lineLimit(3)
                 .textSelection(.enabled)
+                .help(entry.tooltip)
         }
     }
 }

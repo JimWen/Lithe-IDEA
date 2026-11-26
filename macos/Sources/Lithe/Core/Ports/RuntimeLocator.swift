@@ -67,6 +67,7 @@ struct DefaultRuntimeToolDiscovery: RuntimeToolDiscovery {
 
 protocol RuntimeLocator: Sendable {
     func environment() -> [String: String]
+    func prepareEnvironment() async
     func discover() -> RuntimeDiscoveryResult
     func validJavaHome(path: String) -> URL?
     func javaRuntime(at homeURL: URL) -> JavaRuntimeCandidate?
@@ -78,6 +79,7 @@ protocol RuntimeLocator: Sendable {
 }
 
 extension RuntimeLocator {
+    func prepareEnvironment() async {}
     // Default implementation for test stubs and non-macOS locators that do
     // not ship a bundled JDK.
     func bundledJdkHome() -> URL? { nil }

@@ -86,7 +86,10 @@ extension AppModel {
         guard isGoAvailable else { return }
         isGoVisible.toggle()
         guard isGoVisible else { return }
-        if goProjectFeatureIfActive?.snapshot == nil { refreshGoProject() }
+        let snapshot = goProjectFeatureIfActive?.snapshot
+        if snapshot == nil || snapshot.map(GoTreePresentation.hasDiagnosticsOrIncomplete) == true {
+            refreshGoProject()
+        }
     }
 
     /// Loads Go metadata in the background once a workspace scan is applied,
@@ -125,6 +128,7 @@ extension AppModel {
                 isGoActivating = false
                 scheduleObjectWillChangeRelay()
             }
+            await services.projectRuntimeService.prepareEnvironmentIfNeeded()
             _ = await activateExecutionModule()
             guard !Task.isCancelled, goRequestGeneration == generation,
                   currentWorkspaceIdentity == identity, isGoAvailable,

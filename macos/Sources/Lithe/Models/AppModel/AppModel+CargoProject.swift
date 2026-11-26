@@ -125,6 +125,7 @@ extension AppModel {
                 isCargoActivating = false
                 scheduleObjectWillChangeRelay()
             }
+            await services.projectRuntimeService.prepareEnvironmentIfNeeded()
             _ = await activateExecutionModule()
             guard !Task.isCancelled, cargoRequestGeneration == generation,
                   currentWorkspaceIdentity == identity, isCargoAvailable,
