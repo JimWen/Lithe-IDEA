@@ -853,3 +853,9 @@ additionalTextEdits 对光标位置的影响纳入验证。Code Action 的 comma
 Go 的四项操作通过对五个样本文件分别记录“原文、修改、恢复”核实。GoLand 还观察到保存引入独立的格式化撤销步骤，补全撤销回到 Tab 前实际输入的 `parityC`。Rust 动作分别在打包副本和安装副本各执行一次。临时标准输入输出转发器原样传递协议帧，只记录与样本代码动作有关的请求和响应，结束后恢复临时工具链。证据在 `.artifacts/parity-20261125/logs/installed-editor-transitions.jsonl` 和 `rust-source-actions.jsonl`。
 
 本次验收覆盖四个既有编辑入口及真实的延迟解析。gopls 的同类延迟编辑仍受当前未声明 `textDocument.codeAction.dataSupport` 限制。prepareRename、从实际选区请求动作以及 §11.3 的符号协议各有独立的完成条件。
+
+### 2026-11-26 B6a2 协议闭环补齐（`dataSupport`、`prepareRename` 与真实选区 Code Action）
+
+- **协商与协议层**：`client.rs` 与 `shared/fixtures/lsp/client-initialize-v1.json` 已开启 `textDocument.codeAction.dataSupport: true`、`textDocument.rename.prepareSupport: true` 与 `prepareSupportDefaultBehavior: 1`；补齐 `renameProvider.prepareProvider` 静/动态探测（含反注册清理）与 `textDocument/prepareRename` 全部 4 种返回形态规范化。`workspace.applyEdit: false` 及资源操作继续保持未声明。
+- **宿主与编辑区**：`LanguageServerFeatureSet` 新增独立 `.prepareRename` 位（不改变 `.rename` 门控）；编辑区 Rename 接入 `prepareRename` 预填与防过期守卫，`Source Actions` 改为透传真实 UTF-16 选区范围及范围相交诊断，并补齐 `⇧F6`/`⌥⌘L`/`⌥↩`/`⌃Space`/`F1` 语言动作快捷键。同时修复恢复标签页在 `captureLanguageEditContext` 中跳过未同步打开文档导致的 `staleSource` 误拒。
+- **验证**：Rust `lsp::` 122/122、`BatchELanguageActionsAndPrepareRenameTests`、`LanguageWorkspaceEditHostTests`、全量 macOS 1,630/1,630 回归及本机 `gopls` 协议冒烟通过（确认 `renameProvider.prepareProvider=true`、`codeActionProvider.resolveProvider=true`，真实 `prepareRename` 返回 `placeholder="greet"` 且跨 2 文件 `rename` 成功）。B6a1b 反向 `workspace/applyEdit`、B6b1 完整资源事务、§11.3 符号/`selectionRange` 消费者及 B6c/B6d 仍未完成。

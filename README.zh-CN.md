@@ -65,15 +65,14 @@ Codex、Claude Code 等 AI 编程工具已经可以承担大量编码工作，�
 
 ## 后续 TODO
 
-开始后续批次前，先复核当前源码与依赖。
+基于 2026-11-25 三语言工作台实测与全仓代码审查，当前按 P0 / P1 / P2 排序（完整根因与验收状态见[2026-11-25 代码审查与优先级](./docs/architecture/goland-parity-implementation.md#code-review-todo-2026-11-25)）：
 
 - [x] 2026-11-25 完成 B6a2 首个文本切片的 macOS 安装验收。Go 重命名、格式化、代码动作和补全均核实了写盘与撤销；Rust 代码动作完成真实 `codeAction/resolve` 往返。[验收记录](./docs/architecture/goland-parity-b6-refactor.md#b6-text-edit-acceptance-2026-11-25)
-- [ ] **完成语义编辑与重构：** 补齐 prepareRename、选区/符号协议和真实选区 Code Action；完成服务端反向 `workspace/applyEdit`、资源事务、预览/冲突处理及 Refactor This，复用已有事务与撤销归属。[B6](./docs/architecture/goland-parity-b6-refactor.md)
-- [ ] **接通 LSP 编辑器交互：** 参数提示、内联提示、语义着色、符号出现点高亮，以及 Structure/面包屑。L4a 不依赖语法引擎，但细案和插入顺序仍待复核。[L4a](./docs/architecture/syntax-and-completion.md#l4a-split)
-- [ ] **落地语法与补全引擎：** 增量文档状态、Go/Rust/Python 离线高亮、自动补全与过滤/文档/snippet，再补离线符号与折叠；遵循 B6b2 → L0/L1 依赖及 L2/L3/L4b 计划。[L0–L2](./docs/architecture/syntax-l0-l2-engine.md)
-- [ ] **补齐工作台体验：** 统一 Find/Replace 与最近项、剩余运行入口 gutter 交互、TODO 工具窗口，以及 Git 图最终对照；Project/Commit/PR 继续暂缓。[工作台总方案](./docs/architecture/goland-parity-implementation.md)
-- [ ] **完善语言包与格式化：** grammar/query 资源、安装/升级/回滚、常规文件格式、格式化事务和保存即格式化。[L5–L8](./docs/architecture/syntax-and-completion.md)
-- [ ] **评估编辑器扩展能力：** 跨语言 Problems、多光标/列选择、调用/类型层级、书签与覆盖率。E1 目前只是缺口清单，尚非已批准的实施方案。[E1](./docs/architecture/goland-parity-implementation.md#e1-editor-navigation-gaps)
+- [x] **P0 · 焦点交接、三语言断点调试与高频正确性修复（2026-11-26 已完成并验证）：** 修复 `⌥F12`/`⌘⇧O` 焦点失序误改源码、打通 Go/Rust/Python 断点与调试全链路（本机已通过 Rust `cargo + lldb-dap` 断点与局部变量冒烟；`dlv`/`debugpy` 待安装工具链环境复验）、补齐 Search Everywhere 非 Java 符号索引并修复 Trigram 失效及二进制文件阻塞替换 Apply、消除双 `gopls` 竞态与恢复标签重命名误拒、修复三语言及 SQL 字符串注释高亮、补齐 Git 后端搜索/本地时区/`parse_diff` O(N²)/`pop_stash` 假冲突，以及修复 `lithe-db-sidecar` Postgres 导出/SSH 隧道泄漏与 SQLite 动态类型解码。[优先级明细](./docs/architecture/goland-parity-implementation.md#code-review-todo-2026-11-25)
+- [x] **P1 · 语言动作快捷键、B6a2 协议闭环与平台加固（2026-11-26 已完成并验证）：** 注册 `⇧F6`/`⌥⌘L`/`⌥↩`/`⌃Space`/`F1` 语言动作快捷键；补齐 `codeAction.dataSupport`、真实选区 Code Action 与 `prepareRename`（含真实 `gopls` 冒烟）；加固 `MacProcessRunner` FD 竞态、密钥文件权限、Local History O(N²) 清理与 LSP 子进程回收。[B6](./docs/architecture/goland-parity-b6-refactor.md)
+- [ ] **P1 · 接通 LSP 编辑器交互（L4a）：** 参数提示、内联提示、语义着色、符号出现点高亮，以及 Structure/面包屑。L4a 不依赖语法引擎，在 B6a2 协议稳态后串行推进。[L4a](./docs/architecture/syntax-and-completion.md#l4a-split)
+- [ ] **P2 · 落地语法与补全引擎（L0–L8）与 B6 剩余重构：** 增量文档状态、Tree-sitter 离线高亮、自动补全与过滤/文档/snippet、语言包与保存即格式化；完整资源事务、反向 `workspace/applyEdit` 与 Refactor This。[L0–L2](./docs/architecture/syntax-l0-l2-engine.md)
+- [ ] **P2 · 补齐工作台体验与评估扩展能力：** 统一 Find/Replace 与最近项、剩余运行入口 gutter 交互、TODO 工具窗口、Git 图最终对照（G1）；B2 Project/Commit/PR 继续暂缓，E1（跨语言 Problems、多光标、调用/类型层级、书签、覆盖率）待排期确认。[工作台总方案](./docs/architecture/goland-parity-implementation.md)
 
 ## 核心功能
 

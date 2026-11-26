@@ -147,6 +147,51 @@ Lithe 的临时文本文件最终多出两行 `sh t`，GoLand 的同一个文件
 
 同样从临时文本文件开始，在普通 Release 按 ⌘⇧O 后立即逐键输入 `helper`。GoLand 两轮均在 Files 命中根目录的 `helper.go`，编辑文件保持原始内容。Lithe 一轮正确命中，另一轮搜索框为空，关闭搜索后在编辑文件中读到了完整的 `helper`，磁盘快照见 `search-focus-before-source.txt`。这些小样本可复现焦点交接失序，无法估算日常发生率。
 
+<a id="code-review-todo-2026-11-25"></a>
+
+## 2026-11-25 代码审查与当前 TODO 优先级
+
+结合上方 2026-11-25 三语言工作台实测与历史批次（B1–B7、L0–L8、L4a、E1、G1），按 `doris-qt` 闭环工程治理原则（严守分层边界、消除热路径 O(N²) 与竞态、先红后绿回归、全量基线验证、理性止步边界与诚实留痕）对 `rust/lithe-core`、`rust/lithe-db-sidecar`、`macos/Sources` 与 `Plugins/mac` 源码做全量审查，按「数据安全 / 日常三语言阻塞 × 收益 ÷ 成本」重排当前优先级：
+
+### P0 · 阻断项（数据安全、静默错结果与三语言核心工作流阻塞）
+
+| 编号 | 项 | 源码根因定位 | 状态 |
+| --- | --- | --- | --- |
+| **P0-1** | 快捷键焦点交接失序导致输入写入源码（`⌥F12` / `⌘⇧O` / 双 Shift） | `MacShortcutDetector.swift` 使用 `Task { @MainActor }` 异步派发快捷键且未同步 resign 第一响应者；`TerminalSurfaceView.swift` 经 `.task` → `focusRequestID` → `DispatchQueue.main.async` 三跳延迟且冷启被 `guard session.isRunning` 阻断；`SearchEverywhereView.swift` 动画 overlay + SwiftUI `@FocusState` 竞态 | 已完成并验证（2026-11-26） |
+| **P0-2** | Go / Rust / Python 断点调试全链路恢复（`⌘F8` / 装订线 / `⌃D` / Go Tools & Cargo & Gutter Debug） | 5 层断联：① Go/Rust/Python 插件声明缺 `debugModuleID` 致 `PluginLanguageProviderCatalogSource` 剥离 `.debugAdapter`；② `CodeEditorView.swift` 装订线硬编码 `fileExtension == "java"`；③ `AppModel+Development.swift` 仅放行 `.jdwpDebug`；④ `LanguagePackRegistry` 丢弃宿主默认启动器且无扩展注册路径；⑤ `DebugLaunchSourceResolver` 误回落 `javaMain`、`MacRunConfigurationStore` 丢弃非 Java `cwd`、缺 Rust build-before-debug / Python `.venv` 发现 / Go `dlv` PATH 注入、DAP 帧恢复越界（`...headerEnd.upperBound`）、适配器未纳入 `ManagedProcessRegistry` 与未等待清理及 `/tmp` 符号链接不匹配 | 已完成并验证（2026-11-26；Rust `cargo + lldb-dap` 真机断点通过，Go `dlv` / Python `debugpy` 待安装工具链环境复验） |
+| **P0-3** | Search Everywhere 非 Java Classes/Symbols 归零 + Trigram 失效 + 二进制文件阻塞项目替换 Apply | `search_index.rs:452` 仅调 `java_symbols` 致 Go/Rust/Python 符号全空；`has_non_ascii_text = !text.is_ascii()` 致含非 ASCII 字符文件每次不区分大小写搜索全量绕过 trigram；`scoped_replacement.rs` 把 `unindexed_content_ids()` 中的二进制文件标成 `parse_failed` → `incomplete` 永久禁掉 `canApplyReplacementPreview`；`files.rs:269` 漏检 `content_limit`、未排序即截断、刷新清空索引 | 已完成并验证（2026-11-26） |
+| **P0-4** | 双 `gopls` 进程并发派生（`ModuleRuntime.activate` 竞态）+ 恢复标签页 Go 重命名误拒 | `ModuleRuntime.swift:121-179` 复制值类型 `Entry` 跨 `await` 且无在途去重，冷启并发激活构造两份 `LanguageToolingSessionManager` 泄漏孤儿 `gopls`；`onCandidatesChanged` / `restartLanguageServers` 仅同步 `activeDocument`，`captureLanguageEditContext` 跳过未同步打开标签致 `LanguageWorkspaceEditPlanner` 抛 `staleSource` | 已完成并验证（2026-11-26） |
+| **P0-5** | 三语言及 SQL 字符串/注释语法高亮错乱 | `GenericSyntaxHighlightingAdapter.swift` 与 `SQLSyntaxHighlighter` 多趟正则覆盖，注释正则无条件覆盖引号内 `//`/`#`/`--` 及 Rust `#[derive]`、Go raw string、Rust lifetime/raw string、Python 三引号 | 已完成并验证（2026-11-26） |
+| **P0-6** | Git 历史搜索仅滤内存前 100 条 + 作者时区偏差 + `parse_diff` O(N²) + `pop_stash` 假冲突 | `GitFeatureModel.applyGitLogFilter` 仅过滤内存前 100 条且空结果隐藏 `Load more`、`path:` 引发 N+1 子进程；4 处 `--date=format:` 输出作者原时区并偏移本地日期过滤；`git/mod.rs:6224` 循环内逐行重算 `patch.split('\n').count()` 且 `line_similarity` 无行长上限；`pop_stash` / `checkout_with_auto_stash` 按 `stash@{0}` 位置判冲突；`diff` 吞非零退出码、`blame` 误解析 Go 制表符缩进行 | 已完成并验证（2026-11-26） |
+| **P0-7** | `lithe-db-sidecar` Postgres 导出语法错、SSH 隧道泄漏与注入、SQLite 动态类型 `<unsupported>` | `postgres_sequence_sql` 少右括号 `)`；`SshTunnel` 缺 `Drop` 在 MongoDB/SQLServer/错误路径泄漏 `ssh -N` 且 `ProxyCommand` 存在 shell/参数注入；`row_json` 与 `sqlite_value` 动态类型列仍报 `<unsupported>`；`sql_literal` 漏转义 MySQL 反斜杠并损坏 decimal 导出；`mutation_sql` 对 `NULL` 生成 `= ?`；SQL Server 中途失败缺 `ROLLBACK` | 已完成并验证（2026-11-26） |
+
+### P1 · 高价值体验与稳定性加固
+
+| 编号 | 项 | 范围与定位 | 状态 |
+| --- | --- | --- | --- |
+| **P1-1** | 语言动作快捷键 + B6a2 核心协议闭环 | 在 `LitheCommandCatalog` 注册 `⇧F6` Rename、`⌥⌘L` Format、`⌥↩` Source Actions、`⌃Space` Complete、`F1` Quick Doc；开启 `textDocument.codeAction.dataSupport: true` 解锁 `gopls` 延迟 resolve；传递真实 UTF-16 选区与范围过滤诊断给 Code Actions；实现 `textDocument/prepareRename`（含嵌套 `renameProvider.prepareProvider` 探测与预填占位符，保持 `.rename` 门控） | 已完成并验证（2026-11-26） |
+| **P1-2** | 平台与核心稳定性/性能加固 | `MacProcessRunner` 修复 `inputPipe` 双线程重复关闭 FD 竞态与单非法 UTF-8 字节丢全量输出；`MacLocalSecretStore` 消除 `0o644→0o600` TOCTOU；`project/history.rs` 节流 O(N²) `prune_expired` 与修正 nonce 单位溢出；`lsp/lightweight/symbols.rs` 消除 O(N²) 位置回扫、`lsp/interface/process.rs` 补 `Drop`/`wait()` 防僵尸进程 | 已完成并验证（2026-11-26） |
+| **P1-3** | L4a LSP 直通交互（`inlayHint` / `signatureHelp` / `documentHighlight` / `documentSymbol`→Structure / `semanticTokens`） | 串行于 B6a2 之后推进；其中 `inlayHint` 在 Rust Core 已完备，其余需补协议与编辑区/面板消费 | 下一阶段（需先定 L4a 细案） |
+
+#### 2026-11-26 验证记录（P0-1–P0-7、P1-1–P1-2）
+
+- **Rust 全工作区定时套件（564/564 通过）**：`lithe-core` 535、`lithe-db-sidecar` 19、`lithe-db-mcp` 4、`lithe-git-host` 6，报告见 `.artifacts/test-stability/goal-rust-*.json`。
+- **macOS 全量 Swift 定时套件（1,630/1,630 通过，193 suites，47.056s）**：覆盖全部新增回归套件（`ModuleRuntimeConcurrencyTests`、`GitLogBackendFilterTests`、`BatchCHardeningTests`、`BatchDMultiLanguageDebugTests`、`BatchELanguageActionsAndPrepareRenameTests`、`LanguageWorkspaceEditHostTests`），报告见 `.artifacts/test-stability/goal-macos-full.json` 与 `.artifacts/test-stability/index.html`。
+- **全套仓库门禁通过**：`cargo fmt --all --check`、`verify-rust-core-comments.sh`、`verify-rust-core-layout.sh`、`verify-service-boundaries.sh`、`verify-module-boundaries.sh`、`verify-shared-contracts.sh`、`verify-test-stability.sh`、`verify-core.sh`、`verify-git-graph.sh`、`verify-official-plugins.sh`（重构并验证 `GoSupport.bundle` 含 `.languageDebugExtension("go")`）及 `verify-rust-core.sh`（含 `ProjectMetadataOperationsTests` 18/18、`test-git-execution.py` 及 12/12 桥接集成测试）。
+- **ARM64 Release 打包校验**：`LITHE_ARCH=arm64 ./scripts/package-app.sh` 产出 `dist/Lithe-arm64.app`，通过可执行文件、Sparkle、`lithe-db-sidecar`/`lithe-db-mcp`、`GoSupport.bundle`、强符号、`lipo -verify_arch arm64` 与 `codesign --verify --deep --strict` 校验（未修改系统 `/Applications`）。
+- **本机真实工具链冒烟**：
+  - `gopls`：使用更新后的 `client-initialize-v1.json` 协商，确认返回 `renameProvider.prepareProvider=true` 与 `codeActionProvider.resolveProvider=true`，并完成真实 `textDocument/prepareRename`（返回占位符 `greet`）与跨 2 文件 `textDocument/rename`。
+  - Rust `cargo build --message-format=json-render-diagnostics` + `lldb-dap`：命中 `src/main.rs:4` 已验证断点，读取局部变量 `count=21, result=42`，继续运行后以 `exitCode=0` 正常退出。
+  - 打包版 `dist/Lithe-arm64.app/Contents/Helpers/lithe-db-sidecar`：执行 SQLite 动态表达式查询 `SELECT sum(v) AS parity_sum, NULL AS empty_val, 3.5 AS ratio, 'ok' AS label FROM sample`，返回精确类型值且无 `<unsupported>`。
+- **诚实限制**：当前主机未安装 `dlv`、`debugpy`、`pyright`，Go/Python 的真机调试器暂停体验留待有对应工具链的环境复验；本轮未替换系统安装副本或运行桌面 GUI 自动化录制，打包产物保留于 `dist/Lithe-arm64.app`。
+
+### P2 · 中长期演进与显式暂缓/待确认边界
+
+- **B6 剩余项**：B6a1b 反向 `workspace/applyEdit`（按具体动作必要性触发）、B6b1 完整资源事务（create/rename/delete 文件）、B6c 内联 Rename UI、B6d Extract/Inline/Change Signature。
+- **L0–L8 语法与补全引擎**：增量 Tree-sitter 文档状态、离线三语言高亮/折叠/结构、自动补全 Popup/Snippet/文档面板、语言资源包、保存即格式化（保持 B6b2 → L0/L1 → L2/L3 依赖顺序）。
+- **工作台其余批次**：B3c/B3d、B4 其余设置与 Keymap 导入、B5 主题资源、B7b 剩余 gutter 协议、TODO 工具窗、G1 Git 图最终对照，以及 `.http` 请求客户端评估。
+- **显式暂缓 / 待用户确认**：B2 Project/Commit/PR（按用户要求继续暂缓）、E1 扩展能力（统一 Problems、多光标、调用/类型层级、书签、覆盖率；批次号与排期待用户确认）、Windows / Java 生态 / Linux.do / Monaco 编辑器迁移（继续永久排除或暂缓）。
+
 ## 功能文档导航
 
 功能文档统一命名为 `goland-parity-<批次号>-<功能块>[-done].md`。
