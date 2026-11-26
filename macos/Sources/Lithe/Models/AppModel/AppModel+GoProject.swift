@@ -59,6 +59,7 @@ extension AppModel {
         selectedGoManifestURL = url
         goTreePresentation.reset()
         goProjectFeatureIfActive?.invalidateWorkspace()
+        _ = refreshProjectEnvironmentSnapshot()
         refreshGoProject()
     }
 
@@ -69,6 +70,7 @@ extension AppModel {
         selectedGoManifestURL = nil
         goTreePresentation.reset()
         goProjectFeatureIfActive?.invalidateWorkspace()
+        _ = refreshProjectEnvironmentSnapshot()
         refreshGoProject()
     }
 

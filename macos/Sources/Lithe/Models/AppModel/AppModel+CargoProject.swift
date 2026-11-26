@@ -59,6 +59,7 @@ extension AppModel {
         selectedCargoManifestURL = url
         cargoTreePresentation.reset()
         cargoProjectFeatureIfActive?.invalidateWorkspace()
+        _ = refreshProjectEnvironmentSnapshot()
         refreshCargoProject()
     }
 
@@ -69,6 +70,7 @@ extension AppModel {
         selectedCargoManifestURL = nil
         cargoTreePresentation.reset()
         cargoProjectFeatureIfActive?.invalidateWorkspace()
+        _ = refreshProjectEnvironmentSnapshot()
         refreshCargoProject()
     }
 

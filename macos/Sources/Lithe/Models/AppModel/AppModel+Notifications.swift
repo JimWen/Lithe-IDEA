@@ -54,6 +54,8 @@ extension AppModel {
             showSettings(category: .go)
         case .configureRustRuntime:
             showSettings(category: .rust)
+        case .configurePythonRuntime:
+            showSettings(category: .python)
         }
     }
 

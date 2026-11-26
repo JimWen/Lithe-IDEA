@@ -144,6 +144,9 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     @Published var gitLogSearchQuery = ""
     @Published var commitEditorRequestVersion = 0
     @Published var sessionLanguageIntelligenceModeOverride: LanguageIntelligenceMode?
+    @Published var projectEnvironmentSnapshot = ProjectEnvironmentSnapshot()
+    var projectEnvironmentRefreshTask: Task<Void, Never>?
+    var projectEnvironmentGeneration: UInt64 = 0
     var observedGlobalLanguageIntelligenceMode: LanguageIntelligenceMode = .lightweight
     var appliedLanguageIntelligenceMode: LanguageIntelligenceMode = .lightweight
     private var languageIntelligenceModeObservation: AnyCancellable?
@@ -788,15 +791,19 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         shortcutDetector?.stop()
         let pendingSidebarRefresh = sidebarRefreshTask
         sidebarRefreshTask = nil
+        let pendingEnvRefresh = projectEnvironmentRefreshTask
+        projectEnvironmentRefreshTask = nil
         let pendingMenuCommands = Array(menuCommandTasks.values)
         menuCommandTasks.removeAll()
         // Cancel every producer before yielding: a pending menu action can
         // otherwise create a new sidebar refresh while teardown awaits it.
         pendingSidebarRefresh?.cancel()
+        pendingEnvRefresh?.cancel()
         pendingMenuCommands.forEach { $0.cancel() }
         await languageEditTask?.value
         _ = await services.workspaceTextEditUndoController.waitForCurrentOperation()
         await pendingSidebarRefresh?.value
+        await pendingEnvRefresh?.value
         for task in pendingMenuCommands { await task.value }
         commandStateFeatureStorage?.stop()
         commandStateFeatureStorage = nil
@@ -1051,6 +1058,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         sessionLanguageIntelligenceModeOverride = nil
         observedGlobalLanguageIntelligenceMode = settings.languageIntelligenceMode
         appliedLanguageIntelligenceMode = settings.languageIntelligenceMode
+        resetProjectEnvironmentSnapshot()
         languageToolingSessionsIfActive?.stopAll()
         reloadLanguageProviderCatalog(for: normalizedURL)
         stopTerminalSessions()
@@ -1183,6 +1191,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         sessionLanguageIntelligenceModeOverride = nil
         observedGlobalLanguageIntelligenceMode = settings.languageIntelligenceMode
         appliedLanguageIntelligenceMode = settings.languageIntelligenceMode
+        resetProjectEnvironmentSnapshot()
         languageToolingSessionsIfActive?.stopAll()
         languageTestServiceIfActive?.reset()
         runtimeFeature.closeProject()

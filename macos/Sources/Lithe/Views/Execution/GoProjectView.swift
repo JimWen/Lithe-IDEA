@@ -173,6 +173,8 @@ private struct GoProjectView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var feature: GoProjectFeatureModel
     @ObservedObject var presentation: GoTreePresentation
+    @State private var isDependenciesExpanded = true
+    @State private var isIndirectDependenciesExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -247,6 +249,9 @@ private struct GoProjectView: View {
                 }
                 ForEach(layout.modules, id: \.id) { member in
                     moduleRow(member)
+                }
+                if let goEnv = model.projectEnvironmentSnapshot.go, !goEnv.dependencies.isEmpty {
+                    goDependenciesGroup(goEnv)
                 }
             } label: {
                 HStack(spacing: 7) {
@@ -467,6 +472,84 @@ private struct GoProjectView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(LitheTheme.error)
                 .textSelection(.enabled)
+        }
+    }
+
+    private func goDependenciesGroup(_ goEnv: GoProjectEnvironmentSnapshot) -> some View {
+        DisclosureGroup(isExpanded: $isDependenciesExpanded) {
+            ForEach(goEnv.directDependencies) { dep in
+                goDependencyRow(dep)
+            }
+            if !goEnv.indirectDependencies.isEmpty {
+                DisclosureGroup(isExpanded: $isIndirectDependenciesExpanded) {
+                    ForEach(goEnv.indirectDependencies) { dep in
+                        goDependencyRow(dep)
+                    }
+                } label: {
+                    Label("Indirect (\(goEnv.indirectDependencies.count))", systemImage: "tray.2")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(LitheTheme.secondaryText)
+                }
+                .tag("deps:indirect")
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Label("Dependencies (\(goEnv.directDependencies.count)/\(goEnv.dependencies.count))", systemImage: "books.vertical")
+                    .font(.system(size: 12))
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .contextMenu {
+                if let manifestURL = goEnv.manifestURL {
+                    Button("Open go.mod") { model.openFile(manifestURL) }
+                }
+                Button("Configure Go…") { model.showSettings(category: .go) }
+                Button("Refresh Dependencies") { _ = model.refreshProjectEnvironmentSnapshot() }
+            }
+        }
+        .tag("deps:root")
+    }
+
+    private func goDependencyRow(_ dep: ProjectDependencyItem) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: dep.isDirect ? "shippingbox" : "shippingbox.fill")
+                .foregroundStyle(dep.sourceDirectoryURL != nil ? LitheTheme.accent : LitheTheme.tertiaryText)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(dep.name)
+                    .font(.system(size: 11.5))
+                    .lineLimit(1)
+                if !dep.displaySubtitle.isEmpty {
+                    Text(dep.displaySubtitle)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(LitheTheme.secondaryText)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .tag("dep:" + dep.id)
+        .help(dep.sourceDirectoryURL?.path ?? "\(dep.name) \(dep.version)")
+        .onTapGesture(count: 2) { openDependency(dep) }
+        .contextMenu {
+            if let dirURL = dep.sourceDirectoryURL {
+                Button("Open Cached go.mod (Read-Only)") { openDependency(dep) }
+                Button("Reveal in Finder") { model.revealProjectItemInFinder(dirURL) }
+            }
+            if let manifestURL = dep.manifestURL {
+                Button("Open Project go.mod") { model.openFile(manifestURL) }
+            }
+        }
+    }
+
+    private func openDependency(_ dep: ProjectDependencyItem) {
+        if let dirURL = dep.sourceDirectoryURL {
+            let cachedMod = dirURL.appendingPathComponent("go.mod")
+            model.openExternalLibraryFile(cachedMod, displayPrefix: "\(dep.name)@\(dep.version)")
+            return
+        }
+        if let manifestURL = dep.manifestURL {
+            model.openFile(manifestURL)
         }
     }
 }

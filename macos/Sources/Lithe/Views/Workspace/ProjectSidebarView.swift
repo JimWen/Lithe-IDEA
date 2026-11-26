@@ -60,6 +60,11 @@ struct ProjectSidebarView: View {
                                     contextMenuPath: $contextMenuPath
                                 )
                                 .equatable()
+
+                                ExternalLibrariesSidebarSection(
+                                    availableWidth: geometry.size.width,
+                                    rowHeight: rowHeight
+                                )
                             }
                             .padding(.vertical, LitheTheme.Metrics.projectTreeContentVerticalInset)
                             .frame(

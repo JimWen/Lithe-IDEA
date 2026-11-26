@@ -1863,3 +1863,15 @@
 "Enable Precision LSP" = "Enable Precision LSP";
 "Lightweight" = "Lightweight";
 "Precision LSP" = "Precision LSP";
+"Configure Go" = "Configure Go";
+"Configure Rust" = "Configure Rust";
+"Configure Python" = "Configure Python";
+"Project Languages" = "Project Languages";
+"External Libraries" = "External Libraries";
+"Open Cached go.mod (Read-Only)" = "Open Cached go.mod (Read-Only)";
+"Open Crate lib.rs (Read-Only)" = "Open Crate lib.rs (Read-Only)";
+"Open Project go.mod" = "Open Project go.mod";
+"Refresh Dependencies" = "Refresh Dependencies";
+"Configure Go…" = "Configure Go…";
+"Configure Rust…" = "Configure Rust…";
+"Configure Python…" = "Configure Python…";

@@ -2760,3 +2760,15 @@
 "Enable Precision LSP" = "启用精确 LSP";
 "Lightweight" = "轻量模式";
 "Precision LSP" = "精确 LSP";
+"Configure Go" = "配置 Go";
+"Configure Rust" = "配置 Rust";
+"Configure Python" = "配置 Python";
+"Project Languages" = "项目语言环境";
+"External Libraries" = "外部库";
+"Open Cached go.mod (Read-Only)" = "只读打开缓存的 go.mod";
+"Open Crate lib.rs (Read-Only)" = "只读打开 Crate lib.rs";
+"Open Project go.mod" = "打开项目 go.mod";
+"Refresh Dependencies" = "刷新依赖";
+"Configure Go…" = "配置 Go…";
+"Configure Rust…" = "配置 Rust…";
+"Configure Python…" = "配置 Python…";

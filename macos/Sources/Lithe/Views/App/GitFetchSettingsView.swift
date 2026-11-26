@@ -9,7 +9,8 @@ struct GitFetchSettingsView: View {
             GitFetchPolicyControls(options: $options)
             Text("Credentials use your existing Git helper and SSH configuration.")
                 .font(LitheTheme.smallFont).foregroundStyle(LitheTheme.secondaryText)
-            Button("Reset Fetch defaults") { options = GitFetchOptions() }.lithePointer()
+            Button("Reset Fetch defaults") { options = GitFetchOptions() }
+                .buttonStyle(LitheSecondaryButtonStyle())
         }
     }
 }

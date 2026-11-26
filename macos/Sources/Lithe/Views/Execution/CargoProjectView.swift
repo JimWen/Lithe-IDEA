@@ -173,6 +173,7 @@ private struct CargoProjectView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var feature: CargoProjectFeatureModel
     @ObservedObject var presentation: CargoTreePresentation
+    @State private var isDependenciesExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -254,6 +255,9 @@ private struct CargoProjectView: View {
                 }
                 if snapshot.members.isEmpty {
                     Text("No workspace members.").foregroundStyle(LitheTheme.secondaryText)
+                }
+                if let rustEnv = model.projectEnvironmentSnapshot.rust, !rustEnv.dependencies.isEmpty {
+                    cargoDependenciesGroup(rustEnv)
                 }
             } label: {
                 HStack(spacing: 7) {
@@ -413,6 +417,68 @@ private struct CargoProjectView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(LitheTheme.error)
                 .textSelection(.enabled)
+        }
+    }
+
+    private func cargoDependenciesGroup(_ rustEnv: RustProjectEnvironmentSnapshot) -> some View {
+        DisclosureGroup(isExpanded: $isDependenciesExpanded) {
+            ForEach(rustEnv.dependencies) { dep in
+                HStack(spacing: 6) {
+                    Image(systemName: dep.isDirect ? "shippingbox" : "shippingbox.fill")
+                        .foregroundStyle(dep.sourceDirectoryURL != nil ? LitheTheme.accent : LitheTheme.tertiaryText)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(dep.name)
+                            .font(.system(size: 11.5))
+                            .lineLimit(1)
+                        if !dep.displaySubtitle.isEmpty {
+                            Text(dep.displaySubtitle)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(LitheTheme.secondaryText)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+                .tag("dep:" + dep.id)
+                .help(dep.sourceDirectoryURL?.path ?? "\(dep.name) \(dep.version)")
+                .onTapGesture(count: 2) { openCargoDependency(dep) }
+                .contextMenu {
+                    if let dirURL = dep.sourceDirectoryURL {
+                        Button("Open Crate lib.rs (Read-Only)") { openCargoDependency(dep) }
+                        Button("Reveal in Finder") { model.revealProjectItemInFinder(dirURL) }
+                    }
+                    if let manifestURL = dep.manifestURL {
+                        Button("Open Cargo.toml") { model.openFile(manifestURL) }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Label("Dependencies (\(rustEnv.dependencies.count))", systemImage: "books.vertical")
+                    .font(.system(size: 12))
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .contextMenu {
+                if let manifestURL = rustEnv.manifestURL {
+                    Button("Open Cargo.toml") { model.openFile(manifestURL) }
+                }
+                Button("Configure Rust…") { model.showSettings(category: .rust) }
+                Button("Refresh Dependencies") { _ = model.refreshProjectEnvironmentSnapshot() }
+            }
+        }
+        .tag("deps:cargo")
+    }
+
+    private func openCargoDependency(_ dep: ProjectDependencyItem) {
+        if let dirURL = dep.sourceDirectoryURL {
+            let libRS = dirURL.appendingPathComponent("src/lib.rs")
+            model.openExternalLibraryFile(libRS, displayPrefix: "\(dep.name)-\(dep.version)")
+            return
+        }
+        if let manifestURL = dep.manifestURL {
+            model.openFile(manifestURL)
         }
     }
 }

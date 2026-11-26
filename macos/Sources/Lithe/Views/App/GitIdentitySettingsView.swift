@@ -50,7 +50,8 @@ private struct GitIdentitySettingsPane: View {
                 Text("Save each field separately. Switching scope reloads the saved values.")
                     .font(LitheTheme.smallFont).foregroundStyle(LitheTheme.secondaryText)
                 Button("Reload Git Configuration") { Task { await editor.load(at: root, scope: scope) } }
-                    .disabled(editor.isBusy).lithePointer()
+                    .buttonStyle(LitheSecondaryButtonStyle())
+                    .disabled(editor.isBusy)
             } else {
                 Text("Open a project to configure Git identity.").foregroundStyle(LitheTheme.secondaryText)
             }
@@ -71,9 +72,14 @@ private struct GitIdentitySettingsPane: View {
             HStack {
                 TextField(title, text: draft).textFieldStyle(.roundedBorder)
                 Button("Save") { save(field) }
+                    .buttonStyle(LithePrimaryButtonStyle(
+                        backgroundColor: LitheTheme.settingsPrimaryAction,
+                        restingOpacity: 1
+                    ))
                     .disabled(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.wrappedValue == configured)
-                    .lithePointer()
-                Button("Clear Override") { save(field, clear: true) }.disabled(configured == nil).lithePointer()
+                Button("Clear Override") { save(field, clear: true) }
+                    .buttonStyle(LitheSecondaryButtonStyle())
+                    .disabled(configured == nil)
             }
             .disabled(editor.isBusy || editor.state == nil || (scope == .local && editor.state?.isRepository != true))
             if let effective, !effective.isEmpty {

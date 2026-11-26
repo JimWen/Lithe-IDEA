@@ -88,9 +88,30 @@ struct SettingsView: View {
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
 
             ScrollView {
-                VStack(spacing: 1) {
-                    ForEach(filteredCategories) { category in
+                VStack(alignment: .leading, spacing: 1) {
+                    let workbenchCategories = filteredCategories.filter { $0.languageProviderID == nil }
+                    let projectLanguageCategories = filteredCategories.filter { $0.languageProviderID != nil }
+
+                    ForEach(workbenchCategories) { category in
                         categoryButton(category)
+                    }
+
+                    if !projectLanguageCategories.isEmpty {
+                        HStack(spacing: 6) {
+                            Text(settings.language == .simplifiedChinese ? "项目语言环境" : "Project Languages")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(LitheTheme.tertiaryText)
+                            Rectangle()
+                                .fill(LitheTheme.divider)
+                                .frame(height: 1)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.top, 10)
+                        .padding(.bottom, 4)
+
+                        ForEach(projectLanguageCategories) { category in
+                            categoryButton(category, showsProjectBadge: true)
+                        }
                     }
 
                     if filteredCategories.isEmpty {
@@ -118,7 +139,7 @@ struct SettingsView: View {
         LitheSettingsSearchField("Search settings", text: $viewState.searchQuery)
     }
 
-    private func categoryButton(_ category: SettingsCategory) -> some View {
+    private func categoryButton(_ category: SettingsCategory, showsProjectBadge: Bool = false) -> some View {
         let isSelected = viewState.selection == category
         return Button {
             viewState.selection = category
@@ -130,6 +151,11 @@ struct SettingsView: View {
                 Text(LocalizedStringKey(category.rawValue))
                     .font(.system(size: 12.5, weight: .regular))
                 Spacer(minLength: 8)
+                if showsProjectBadge {
+                    Circle()
+                        .fill(isSelected ? Color.white.opacity(0.85) : LitheTheme.accent)
+                        .frame(width: 6, height: 6)
+                }
             }
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -159,19 +185,19 @@ struct SettingsView: View {
         case .general:
             ["General", "Appearance", "Color theme", "Appearance mode", "Language", "Projects", "Files", "Version control", "Logs", "Log directory"]
         case .editor:
-            ["Editor", "Display", "Editor tabs", "Font size", "File tree row height", "Indentation", "Tab width"]
+            ["Editor", "Display", "Editor tabs", "Font size", "File tree row height", "Indentation", "Tab width", "Inlay hints", "Format on save", "Code vision"]
         case .keymap:
             ["Keymap", "Keyboard shortcuts", "Shortcuts", "Actions"]
         case .terminal:
             ["Terminal", "Shell", "Default shell", "Terminal font", "Font family", "Font size", "Line height", "Fallback fonts", "History", "Cursor", "Input and scrolling", "Selection and links", "Copy on selection", "Detect links", "Arguments", "Working directory", "Environment variables"]
         case .lsp:
-            ["LSP", "Language server", "Language Support"]
+            ["LSP", "Language server", "Language Support", "Lightweight", "Precision LSP", "Code Intelligence"]
         case .go:
-            ["Go", "GOROOT", "SDK", "gopls", "Toolchain"]
+            ["Go", "GOROOT", "GOPATH", "GOMODCACHE", "GOPROXY", "GOPRIVATE", "go.mod", "SDK", "gopls", "Toolchain", "External Libraries"]
         case .rust:
-            ["Rust", "Cargo", "rust-analyzer", "Toolchain"]
+            ["Rust", "Cargo", "rustc", "rustup", "CARGO_HOME", "RUSTUP_TOOLCHAIN", "sysroot", "rust-src", "Cargo.toml", "rust-analyzer", "Toolchain", "External Libraries"]
         case .python:
-            ["Python", "Interpreter", "Virtual environment", "Language server"]
+            ["Python", "Interpreter", "Virtual environment", "venv", "site-packages", "PYTHONPATH", "pyproject.toml", "requirements.txt", "basedpyright", "Language server", "External Libraries"]
         case .ai:
             ["AI & Commit", "AI provider", "Model", "API key", "Commit message"]
         case .git:

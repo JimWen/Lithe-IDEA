@@ -75,6 +75,7 @@ enum WorkbenchNotificationAction: Equatable {
     case identifyRunConfiguration
     case configureGoRuntime
     case configureRustRuntime
+    case configurePythonRuntime
 
     var title: String {
         switch self {
@@ -83,6 +84,7 @@ enum WorkbenchNotificationAction: Equatable {
         case .identifyRunConfiguration: "Configure"
         case .configureGoRuntime: "Configure Go"
         case .configureRustRuntime: "Configure Rust"
+        case .configurePythonRuntime: "Configure Python"
         }
     }
 }
