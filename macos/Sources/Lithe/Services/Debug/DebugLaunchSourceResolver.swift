@@ -11,9 +11,17 @@ struct DebugLaunchSourceResolver {
     func configurationForDebug(
         selected: RunConfiguration,
         activeDocumentText: String?,
-        configurations: [RunConfiguration]
+        configurations: [RunConfiguration],
+        activeDocumentURL: URL? = nil
     ) -> RunConfiguration {
         guard selected.usesCurrentEditorFile else {
+            return selected
+        }
+        // Only redirect a non-main Java file to a project `.javaMain` target.
+        // Non-Java files (Go, Rust, Python, Node) must keep `.currentFile` so
+        // debugging launches their own language adapter instead of Java.
+        if let ext = activeDocumentURL?.pathExtension.lowercased(),
+           !ext.isEmpty, ext != "java" {
             return selected
         }
         if activeDocumentText.map(containsJavaMainMethod) == true {
@@ -36,6 +44,66 @@ struct DebugLaunchSourceResolver {
             return activeDocumentURL?.standardizedFileURL
         }
 
+        switch configuration.kind.languageID {
+        case "java":
+            return resolveJava(
+                configuration: configuration,
+                activeDocumentURL: activeDocumentURL,
+                projectFiles: projectFiles,
+                workspaceURL: workspaceURL
+            )
+        case "go":
+            return resolveLanguageSource(
+                extensions: ["go"],
+                preferredFileNames: ["main.go"],
+                configuration: configuration,
+                activeDocumentURL: activeDocumentURL,
+                projectFiles: projectFiles,
+                workspaceURL: workspaceURL
+            )
+        case "rust":
+            return resolveLanguageSource(
+                extensions: ["rs"],
+                preferredFileNames: ["\(configuration.name).rs", "main.rs"],
+                configuration: configuration,
+                activeDocumentURL: activeDocumentURL,
+                projectFiles: projectFiles,
+                workspaceURL: workspaceURL
+            )
+        case "python":
+            return resolveLanguageSource(
+                extensions: ["py", "pyw"],
+                preferredFileNames: [
+                    configuration.name,
+                    "\(configuration.name).py",
+                    "main.py",
+                    "app.py"
+                ],
+                configuration: configuration,
+                activeDocumentURL: activeDocumentURL,
+                projectFiles: projectFiles,
+                workspaceURL: workspaceURL
+            )
+        case "node":
+            return resolveLanguageSource(
+                extensions: ["ts", "tsx", "js", "jsx", "mjs", "cjs"],
+                preferredFileNames: ["index.ts", "index.js", "server.ts", "server.js", "main.ts", "main.js"],
+                configuration: configuration,
+                activeDocumentURL: activeDocumentURL,
+                projectFiles: projectFiles,
+                workspaceURL: workspaceURL
+            )
+        default:
+            return nil
+        }
+    }
+
+    private func resolveJava(
+        configuration: RunConfiguration,
+        activeDocumentURL: URL?,
+        projectFiles: [URL],
+        workspaceURL: URL
+    ) -> URL? {
         let javaFiles = projectFiles
             .map(\.standardizedFileURL)
             .filter { $0.pathExtension.lowercased() == "java" }
@@ -58,6 +126,40 @@ struct DebugLaunchSourceResolver {
         if let activeDocumentURL = activeDocumentURL?.standardizedFileURL,
            preferredFiles.contains(activeDocumentURL) {
             return activeDocumentURL
+        }
+        return preferredFiles.first
+    }
+
+    private func resolveLanguageSource(
+        extensions: Set<String>,
+        preferredFileNames: [String],
+        configuration: RunConfiguration,
+        activeDocumentURL: URL?,
+        projectFiles: [URL],
+        workspaceURL: URL
+    ) -> URL? {
+        let matchingFiles = projectFiles
+            .map(\.standardizedFileURL)
+            .filter { extensions.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.path < $1.path }
+        if let active = activeDocumentURL?.standardizedFileURL,
+           extensions.contains(active.pathExtension.lowercased()) {
+            let scoped = filesInSelectedModule([active], modulePath: configuration.modulePath, workspaceURL: workspaceURL)
+            if !scoped.isEmpty || matchingFiles.isEmpty {
+                return active
+            }
+        }
+        guard !matchingFiles.isEmpty else { return nil }
+        let moduleFiles = filesInSelectedModule(
+            matchingFiles,
+            modulePath: configuration.modulePath,
+            workspaceURL: workspaceURL
+        )
+        let preferredFiles = moduleFiles.isEmpty ? matchingFiles : moduleFiles
+        for fileName in preferredFileNames {
+            if let hit = preferredFiles.first(where: { $0.lastPathComponent == fileName }) {
+                return hit
+            }
         }
         return preferredFiles.first
     }

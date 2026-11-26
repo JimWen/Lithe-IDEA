@@ -4,8 +4,15 @@ import LitheCoreContracts
 @MainActor
 public final class GoExecutionCapability: NSObject,
     ProjectToolActionProviding,
-    LanguageTestExtensionProviding {
+    LanguageTestExtensionProviding,
+    LanguageDebugExtensionProviding {
     public let languageID = goLanguageID
+    public let debugAdapterLaunch = LanguageDebugAdapterLaunch(
+        adapterID: "go",
+        transport: .dlvServer,
+        executableNames: ["dlv"],
+        arguments: ["dap", "--listen=127.0.0.1:0"]
+    )
     private let sessionFactory: @MainActor () -> any LanguageExecutionSession
 
     public init(executionSession: any LanguageExecutionSession) {

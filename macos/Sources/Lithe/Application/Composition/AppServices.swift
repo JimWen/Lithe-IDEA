@@ -21,6 +21,7 @@ final class AppServices {
     let languageProviderCatalog: LanguageProviderCatalog
     let workspaceLanguageServerPreferences: any WorkspaceLanguageServerPreferencesStoring
     let debugLaunchConfigurationResolver: DebugLaunchConfigurationResolver
+    let rustDebugBuildService: RustDebugBuildService?
     let debugPortAvailabilityChecker: any DebugPortAvailabilityChecking
     let javaTestDebugLaunchService: JavaTestDebugLaunchService
     let debugBreakpointPersistence: (any DebugBreakpointPersisting)?
@@ -65,6 +66,7 @@ final class AppServices {
         workspaceLanguageServerPreferences: any WorkspaceLanguageServerPreferencesStoring,
         languageProviderCatalogSnapshot: LanguageProviderCatalogSnapshot? = nil,
         debugLaunchConfigurationResolver: DebugLaunchConfigurationResolver? = nil,
+        rustDebugBuildService: RustDebugBuildService? = nil,
         debugPortAvailabilityChecker: (any DebugPortAvailabilityChecking)? = nil,
         javaTestResultServerFactory: @escaping @MainActor () -> any JavaTestResultServing,
         debugBreakpointPersistence: (any DebugBreakpointPersisting)? = nil,
@@ -110,6 +112,7 @@ final class AppServices {
         self.languageProviderCatalog = resolvedCatalog
         self.debugLaunchConfigurationResolver = debugLaunchConfigurationResolver
             ?? DebugLaunchConfigurationResolver(fileStorage: fileStorage)
+        self.rustDebugBuildService = rustDebugBuildService
         self.debugPortAvailabilityChecker = debugPortAvailabilityChecker
             ?? AlwaysAvailableDebugPortChecker()
         self.javaTestDebugLaunchService = JavaTestDebugLaunchService(

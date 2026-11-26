@@ -60,6 +60,24 @@ struct MacRuntimeToolDiscovery: RuntimeToolDiscovery {
             ] {
                 add(root.appendingPathComponent(relativePath), source: .project, detail: relativePath)
             }
+            if shouldSearchPythonVirtualEnvironment(for: command) {
+                for relativeVenv in [".venv", "venv", ".env", "env"] {
+                    add(
+                        root.appendingPathComponent("\(relativeVenv)/bin/\(command)"),
+                        source: .project,
+                        detail: "\(relativeVenv)/bin/\(command)"
+                    )
+                }
+            }
+        }
+        if shouldSearchPythonVirtualEnvironment(for: command),
+           let virtualEnv = environment["VIRTUAL_ENV"],
+           !virtualEnv.isEmpty {
+            add(
+                URL(fileURLWithPath: virtualEnv).appendingPathComponent("bin/\(command)"),
+                source: .environment,
+                detail: "VIRTUAL_ENV"
+            )
         }
 
         // Go's own environment is authoritative when it is available.  Keep
@@ -144,6 +162,11 @@ struct MacRuntimeToolDiscovery: RuntimeToolDiscovery {
         // Xcode and Command Line Tools may expose lldb-dap through xcrun even
         // when the GUI application's PATH does not include Developer/bin.
         if command == "lldb-dap" {
+            add(
+                homeDirectoryURL.appendingPathComponent(".swiftly/bin/lldb-dap"),
+                source: .environment,
+                detail: "Swiftly toolchain"
+            )
             for url in [
                 "/usr/bin/lldb-dap",
                 "/Library/Developer/CommandLineTools/usr/bin/lldb-dap",
@@ -279,6 +302,15 @@ struct MacRuntimeToolDiscovery: RuntimeToolDiscovery {
     private func shouldSearchRustUserBin(for command: String) -> Bool {
         switch command {
         case "cargo", "rustc", "rustup":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func shouldSearchPythonVirtualEnvironment(for command: String) -> Bool {
+        switch command {
+        case "python", "python3", "pytest", "basedpyright-langserver", "pyright-langserver":
             return true
         default:
             return false

@@ -37,7 +37,8 @@
       "providedCapabilities": [
         "dev.lithe.capability.language.go.execution",
         "dev.lithe.capability.language.go.testing",
-        "dev.lithe.capability.language.go.project-tools"
+        "dev.lithe.capability.language.go.project-tools",
+        "dev.lithe.capability.language.go.debug"
       ],
       "contributions": [
         {
@@ -89,7 +90,8 @@
       ],
       "languageServerModuleID": "dev.lithe.language.go.language-server",
       "executionModuleID": "dev.lithe.language.go.execution",
-      "testingModuleID": "dev.lithe.language.go.execution"
+      "testingModuleID": "dev.lithe.language.go.execution",
+      "debugModuleID": "dev.lithe.language.go.execution"
     }
   ]
 }

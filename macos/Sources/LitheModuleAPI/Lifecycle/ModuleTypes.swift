@@ -307,4 +307,8 @@ public extension ModuleCapabilityID {
     static func languageTestingExtension(_ languageID: String) -> ModuleCapabilityID {
         ModuleCapabilityID("dev.lithe.capability.language.\(languageID).testing")
     }
+
+    static func languageDebugExtension(_ languageID: String) -> ModuleCapabilityID {
+        ModuleCapabilityID("dev.lithe.capability.language.\(languageID).debug")
+    }
 }

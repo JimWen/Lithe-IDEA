@@ -2,8 +2,131 @@ import Foundation
 
 /// Performs a conservative, language-aware preflight before a source
 /// breakpoint is sent to a debug adapter. The adapter remains authoritative;
-/// this only prevents obviously non-executable Java gutter locations.
+/// this only prevents obviously non-executable gutter locations.
 public enum DebugBreakpointLocationValidator {
+    public static func isCandidateLine(source: String, line: Int, languageID: String) -> Bool {
+        switch languageID.lowercased() {
+        case "java":
+            return isExecutableJavaLine(source: source, line: line)
+        case "go", "rust", "rs", "node", "js", "jsx", "ts", "tsx", "mjs", "cjs":
+            return isExecutableCStyleLine(source: source, line: line, languageID: languageID.lowercased())
+        case "python", "py", "pyw":
+            return isExecutablePythonLine(source: source, line: line)
+        default:
+            guard line > 0 else { return false }
+            let lines = source.components(separatedBy: .newlines)
+            guard line <= lines.count else { return false }
+            return !lines[line - 1].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    private static func isExecutableCStyleLine(source: String, line: Int, languageID: String) -> Bool {
+        guard line > 0 else { return false }
+        let lines = source.components(separatedBy: .newlines)
+        guard line <= lines.count else { return false }
+
+        var inBlockComment = false
+        for (index, rawLine) in lines.enumerated() {
+            let code = codeWithoutJavaCommentsAndStrings(
+                rawLine,
+                inBlockComment: &inBlockComment
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard index + 1 == line else { continue }
+            guard !code.isEmpty,
+                  !Self.nonExecutableOnlyLines.contains(code) else { return false }
+            if languageID == "go",
+               (code.hasPrefix("package ") || code.hasPrefix("import ") || code == "import" || code == "import (" || code == ")") {
+                return false
+            }
+            if (languageID == "rust" || languageID == "rs"),
+               (code.hasPrefix("#[") || code.hasPrefix("#![")
+                || code.hasPrefix("use ") || code.hasPrefix("pub use ")
+                || code.hasPrefix("mod ") || code.hasPrefix("pub mod ")) {
+                return false
+            }
+            return code.contains(where: { $0.isLetter || $0.isNumber || $0 == "_" })
+        }
+        return false
+    }
+
+    private static func isExecutablePythonLine(source: String, line: Int) -> Bool {
+        guard line > 0 else { return false }
+        let lines = source.components(separatedBy: .newlines)
+        guard line <= lines.count else { return false }
+
+        var tripleDelimiter: String?
+        for (index, rawLine) in lines.enumerated() {
+            let code = codeWithoutPythonCommentsAndStrings(
+                rawLine,
+                tripleDelimiter: &tripleDelimiter
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard index + 1 == line else { continue }
+            guard !code.isEmpty,
+                  !code.hasPrefix("@"),
+                  !Self.nonExecutableOnlyLines.contains(code) else { return false }
+            return code.contains(where: { $0.isLetter || $0.isNumber || $0 == "_" })
+        }
+        return false
+    }
+
+    private static func codeWithoutPythonCommentsAndStrings(
+        _ line: String,
+        tripleDelimiter: inout String?
+    ) -> String {
+        var result = ""
+        let chars = Array(line)
+        var i = 0
+        var inQuote: Character?
+        while i < chars.count {
+            if let delim = tripleDelimiter {
+                let q = delim.first!
+                if chars[i] == "\\", i + 1 < chars.count {
+                    i += 2
+                    continue
+                }
+                if i + 2 < chars.count, chars[i] == q, chars[i + 1] == q, chars[i + 2] == q {
+                    tripleDelimiter = nil
+                    result.append(" ")
+                    i += 3
+                } else {
+                    i += 1
+                }
+                continue
+            }
+            if let q = inQuote {
+                if chars[i] == "\\", i + 1 < chars.count {
+                    i += 2
+                } else if chars[i] == q {
+                    inQuote = nil
+                    result.append(" ")
+                    i += 1
+                } else {
+                    i += 1
+                }
+                continue
+            }
+            if chars[i] == "#" {
+                break
+            }
+            if (chars[i] == "\"" || chars[i] == "'") {
+                let q = chars[i]
+                if i + 2 < chars.count, chars[i + 1] == q, chars[i + 2] == q {
+                    tripleDelimiter = String(repeating: q, count: 3)
+                    result.append(" ")
+                    i += 3
+                } else {
+                    inQuote = q
+                    result.append(" ")
+                    i += 1
+                }
+                continue
+            }
+            result.append(chars[i])
+            i += 1
+        }
+        return result
+    }
+
     public static func isExecutableJavaLine(source: String, line: Int) -> Bool {
         guard line > 0 else { return false }
         let lines = source.components(separatedBy: .newlines)

@@ -76,6 +76,7 @@ struct DebugLaunchConfigurationResolver {
         configurations: [RunConfiguration],
         selectedConfiguration: RunConfiguration?,
         javaTarget: JavaDebugLaunchTarget? = nil,
+        preBuiltRustExecutableURL: URL? = nil,
         options: (RunConfiguration) -> RunOptions
     ) throws -> DebugLaunchConfiguration {
         switch provider.id {
@@ -92,14 +93,12 @@ struct DebugLaunchConfigurationResolver {
                 options: options
             )
         case "python":
-            return DebugLaunchConfiguration(
-                name: documentURL.lastPathComponent,
-                request: .launch,
-                arguments: [
-                    "program": .string(documentURL.standardizedFileURL.path),
-                    "console": .string("internalConsole"),
-                    "justMyCode": .bool(true)
-                ]
+            return pythonConfiguration(
+                documentURL: documentURL,
+                workspaceURL: workspaceURL,
+                configurations: configurations,
+                selectedConfiguration: selectedConfiguration,
+                options: options
             )
         case "rust":
             return try rustConfiguration(
@@ -107,6 +106,7 @@ struct DebugLaunchConfigurationResolver {
                 workspaceURL: workspaceURL,
                 configurations: configurations,
                 selectedConfiguration: selectedConfiguration,
+                preBuiltExecutableURL: preBuiltRustExecutableURL,
                 options: options
             )
         case "go":
@@ -114,7 +114,8 @@ struct DebugLaunchConfigurationResolver {
                 documentURL: documentURL,
                 workspaceURL: workspaceURL,
                 configurations: configurations,
-                selectedConfiguration: selectedConfiguration
+                selectedConfiguration: selectedConfiguration,
+                options: options
             )
         case "node":
             return nodeConfiguration(
@@ -260,11 +261,60 @@ struct DebugLaunchConfigurationResolver {
         )
     }
 
+    private func pythonConfiguration(
+        documentURL: URL,
+        workspaceURL: URL,
+        configurations: [RunConfiguration],
+        selectedConfiguration: RunConfiguration?,
+        options: (RunConfiguration) -> RunOptions
+    ) -> DebugLaunchConfiguration {
+        let pythonConfigurations = configurations.filter {
+            $0.kind.providerID == "python"
+        }
+        let configuration: RunConfiguration?
+        if let selectedConfiguration, selectedConfiguration.kind.providerID == "python" {
+            configuration = selectedConfiguration
+        } else {
+            configuration = pythonConfigurations
+                .filter { contains(documentURL, inModule: $0.modulePath, workspaceURL: workspaceURL) }
+                .max { moduleDepth($0.modulePath) < moduleDepth($1.modulePath) }
+        }
+        let runOptions = configuration.map(options) ?? selectedConfiguration.map(options)
+        let workingDirectory = resolvedWorkingDirectory(
+            runOptions: runOptions,
+            fallback: configuration?.modulePath.flatMap { path in
+                path.isEmpty ? nil : workspaceURL.appendingPathComponent(path, isDirectory: true)
+            } ?? workspaceURL,
+            workspaceURL: workspaceURL
+        )
+        var arguments: [String: ToolingJSONValue] = [
+            "program": .string(documentURL.standardizedFileURL.path),
+            "cwd": .string(workingDirectory.path),
+            "console": .string("internalConsole"),
+            "justMyCode": .bool(true)
+        ]
+        if let runOptions {
+            let programArguments = RunArgumentParser.parse(runOptions.arguments)
+            if !programArguments.isEmpty {
+                arguments["args"] = .array(programArguments.map(ToolingJSONValue.string))
+            }
+            if !runOptions.environment.isEmpty {
+                arguments["env"] = .object(runOptions.environment.mapValues(ToolingJSONValue.string))
+            }
+        }
+        return DebugLaunchConfiguration(
+            name: configuration?.name ?? documentURL.lastPathComponent,
+            request: .launch,
+            arguments: arguments
+        )
+    }
+
     private func goConfiguration(
         documentURL: URL,
         workspaceURL: URL,
         configurations: [RunConfiguration],
-        selectedConfiguration: RunConfiguration?
+        selectedConfiguration: RunConfiguration?,
+        options: (RunConfiguration) -> RunOptions
     ) -> DebugLaunchConfiguration {
         let goConfigurations = configurations.filter {
             $0.kind.providerID == "go" && $0.execution == .application
@@ -286,25 +336,41 @@ struct DebugLaunchConfigurationResolver {
             programURL = documentURL.deletingLastPathComponent()
         }
         let normalizedProgram = programURL.standardizedFileURL
+        let runOptions = configuration.map(options) ?? selectedConfiguration.map(options)
+        let workingDirectory = resolvedWorkingDirectory(
+            runOptions: runOptions,
+            fallback: normalizedProgram,
+            workspaceURL: workspaceURL
+        )
+        var arguments: [String: ToolingJSONValue] = [
+            "mode": .string("debug"),
+            "program": .string(normalizedProgram.path),
+            "cwd": .string(workingDirectory.path),
+            "stopOnEntry": .bool(false)
+        ]
+        if let runOptions {
+            let programArguments = RunArgumentParser.parse(runOptions.arguments)
+            if !programArguments.isEmpty {
+                arguments["args"] = .array(programArguments.map(ToolingJSONValue.string))
+            }
+            if !runOptions.environment.isEmpty {
+                arguments["env"] = .object(runOptions.environment.mapValues(ToolingJSONValue.string))
+            }
+        }
         return DebugLaunchConfiguration(
             name: configuration?.name ?? documentURL.lastPathComponent,
             request: .launch,
-            arguments: [
-                "mode": .string("debug"),
-                "program": .string(normalizedProgram.path),
-                "cwd": .string(normalizedProgram.path),
-                "stopOnEntry": .bool(false)
-            ]
+            arguments: arguments
         )
     }
 
-    private func rustConfiguration(
+    func rustBinaryTarget(
         documentURL: URL,
         workspaceURL: URL,
         configurations: [RunConfiguration],
         selectedConfiguration: RunConfiguration?,
         options: (RunConfiguration) -> RunOptions
-    ) throws -> DebugLaunchConfiguration {
+    ) -> (configuration: RunConfiguration, moduleURL: URL, runOptions: RunOptions)? {
         let cargoConfigurations = configurations.filter {
             $0.kind.providerID == "cargo" && $0.execution == .application
         }
@@ -319,44 +385,106 @@ struct DebugLaunchConfigurationResolver {
                 .max { moduleDepth($0.modulePath) < moduleDepth($1.modulePath) }
                 ?? cargoConfigurations.first
         }
-        guard let configuration else {
-            throw DebugLaunchConfigurationResolutionError.noRustBinaryConfiguration
-        }
-
+        guard let configuration else { return nil }
         let moduleURL = workspaceURL
             .appendingPathComponent(configuration.modulePath ?? "", isDirectory: true)
             .standardizedFileURL
-        let runOptions = options(configuration)
-        let targetRoot: URL
-        if let configured = runOptions.environment["CARGO_TARGET_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !configured.isEmpty {
-            if configured.hasPrefix("/") {
-                targetRoot = URL(fileURLWithPath: configured, isDirectory: true)
-            } else {
-                targetRoot = moduleURL.appendingPathComponent(configured, isDirectory: true)
-            }
-        } else {
-            targetRoot = moduleURL.appendingPathComponent("target", isDirectory: true)
+        return (configuration, moduleURL, options(configuration))
+    }
+
+    private func rustConfiguration(
+        documentURL: URL,
+        workspaceURL: URL,
+        configurations: [RunConfiguration],
+        selectedConfiguration: RunConfiguration?,
+        preBuiltExecutableURL: URL?,
+        options: (RunConfiguration) -> RunOptions
+    ) throws -> DebugLaunchConfiguration {
+        guard let target = rustBinaryTarget(
+            documentURL: documentURL,
+            workspaceURL: workspaceURL,
+            configurations: configurations,
+            selectedConfiguration: selectedConfiguration,
+            options: options
+        ) else {
+            throw DebugLaunchConfigurationResolutionError.noRustBinaryConfiguration
         }
-        let executableURL = targetRoot
-            .appendingPathComponent("debug", isDirectory: true)
-            .appendingPathComponent(configuration.name + executableSuffix)
-            .standardizedFileURL
-        guard fileExists(executableURL) else {
-            throw DebugLaunchConfigurationResolutionError.rustExecutableNotBuilt(
-                executableURL,
-                binary: configuration.name
-            )
+        let configuration = target.configuration
+        let moduleURL = target.moduleURL
+        let runOptions = target.runOptions
+
+        let executableURL: URL
+        if let preBuiltExecutableURL, fileExists(preBuiltExecutableURL.standardizedFileURL) {
+            executableURL = preBuiltExecutableURL.standardizedFileURL
+        } else {
+            let targetRoot: URL
+            if let configured = runOptions.environment["CARGO_TARGET_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !configured.isEmpty {
+                if configured.hasPrefix("/") {
+                    targetRoot = URL(fileURLWithPath: configured, isDirectory: true)
+                } else {
+                    targetRoot = moduleURL.appendingPathComponent(configured, isDirectory: true)
+                }
+            } else {
+                targetRoot = moduleURL.appendingPathComponent("target", isDirectory: true)
+            }
+            let primaryCandidate = targetRoot
+                .appendingPathComponent("debug", isDirectory: true)
+                .appendingPathComponent(configuration.name + executableSuffix)
+                .standardizedFileURL
+            let workspaceCandidate = workspaceURL
+                .appendingPathComponent("target", isDirectory: true)
+                .appendingPathComponent("debug", isDirectory: true)
+                .appendingPathComponent(configuration.name + executableSuffix)
+                .standardizedFileURL
+            if fileExists(primaryCandidate) {
+                executableURL = primaryCandidate
+            } else if fileExists(workspaceCandidate) {
+                executableURL = workspaceCandidate
+            } else {
+                throw DebugLaunchConfigurationResolutionError.rustExecutableNotBuilt(
+                    primaryCandidate,
+                    binary: configuration.name
+                )
+            }
+        }
+
+        let workingDirectory = resolvedWorkingDirectory(
+            runOptions: runOptions,
+            fallback: moduleURL,
+            workspaceURL: workspaceURL
+        )
+        var arguments: [String: ToolingJSONValue] = [
+            "program": .string(executableURL.path),
+            "cwd": .string(workingDirectory.path),
+            "stopOnEntry": .bool(false)
+        ]
+        let programArguments = RunArgumentParser.parse(runOptions.arguments)
+        if !programArguments.isEmpty {
+            arguments["args"] = .array(programArguments.map(ToolingJSONValue.string))
+        }
+        if !runOptions.environment.isEmpty {
+            arguments["env"] = .object(runOptions.environment.mapValues(ToolingJSONValue.string))
         }
         return DebugLaunchConfiguration(
             name: configuration.name,
             request: .launch,
-            arguments: [
-                "program": .string(executableURL.path),
-                "cwd": .string(moduleURL.path),
-                "stopOnEntry": .bool(false)
-            ]
+            arguments: arguments
         )
+    }
+
+    private func resolvedWorkingDirectory(
+        runOptions: RunOptions?,
+        fallback: URL,
+        workspaceURL: URL
+    ) -> URL {
+        let configured = runOptions?.workingDirectoryPath
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !configured.isEmpty else { return fallback.standardizedFileURL }
+        return URL(
+            fileURLWithPath: configured,
+            relativeTo: workspaceURL
+        ).standardizedFileURL
     }
 
     private func contains(_ fileURL: URL, inModule modulePath: String?, workspaceURL: URL) -> Bool {

@@ -1,5 +1,6 @@
 import Foundation
 import LitheCoreContracts
+import LitheModuleAPI
 
 public struct GenericDebugBreakpoint: Identifiable, Equatable, Sendable {
     public let fileURL: URL
@@ -1874,13 +1875,26 @@ public final class GenericDebugFeatureModel: ObservableObject, GenericDebugFeatu
                 return
             }
             guard let sourceURL = resolved.sourceURL, let line = resolved.line else { return }
+            let normalizedSource = sourceURL.resolvingSymlinksInPath().standardizedFileURL
             if let index = breakpoints.firstIndex(where: {
-                $0.fileURL.standardizedFileURL == sourceURL.standardizedFileURL && $0.line == line
+                $0.fileURL.resolvingSymlinksInPath().standardizedFileURL == normalizedSource && $0.line == line
             }) {
                 breakpoints[index].verified = resolved.verified
                 breakpoints[index].message = resolved.message
             }
         }
+    }
+
+    @discardableResult
+    public func registerLanguageDebugExtension(
+        _ provider: any LanguageDebugExtensionProviding,
+        support: LanguageSupportDeclaration
+    ) -> Bool {
+        sessions.registerLanguageDebugExtension(provider, support: support)
+    }
+
+    public func unregisterLanguageDebugExtension(languageID: String) {
+        sessions.unregisterLanguageDebugExtension(languageID: languageID)
     }
 
     private func loadStoppedContext(

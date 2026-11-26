@@ -735,8 +735,9 @@ public final class DebugAdapterProtocolSession: DebugAdapterControllingSession {
                     .first(where: { $0.lowercased().hasPrefix("content-length:") })?
                     .split(separator: ":", maxSplits: 1)
                     .last
-                    .flatMap({ Int($0.trimmingCharacters(in: .whitespaces)) }) else {
-                readBuffer.removeSubrange(...headerEnd.upperBound)
+                    .flatMap({ Int($0.trimmingCharacters(in: .whitespaces)) }),
+                  contentLength >= 0 else {
+                readBuffer.removeSubrange(..<headerEnd.upperBound)
                 continue
             }
             let bodyStart = headerEnd.upperBound
@@ -816,7 +817,14 @@ public final class DebugAdapterProtocolSession: DebugAdapterControllingSession {
         case "continued":
             state = .running
             onEvent?(.continued(threadID: body["threadId"] as? Int))
-        case "terminated", "exited":
+        case "terminated":
+            state = .terminated
+            onEvent?(.terminated(exitCode: body["exitCode"] as? Int))
+            if transport.isRunning {
+                sendRequest(command: "disconnect", arguments: ["terminateDebuggee": false]) { _ in }
+                transport.stop()
+            }
+        case "exited":
             state = .terminated
             onEvent?(.terminated(exitCode: body["exitCode"] as? Int))
         case "breakpoint":

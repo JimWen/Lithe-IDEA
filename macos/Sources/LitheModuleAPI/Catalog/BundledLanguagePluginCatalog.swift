@@ -10,6 +10,7 @@ public struct BundledLanguagePluginSpecification: Sendable {
     public let validationArguments: [String]
     public let languageIdentifier: String
     public let supportsExecution: Bool
+    public let supportsDebug: Bool
 
     /// A language-server module is only real when the host has at least one
     /// executable candidate it can launch through the generic LSP runtime.
@@ -26,7 +27,8 @@ public struct BundledLanguagePluginSpecification: Sendable {
         arguments: [String] = [],
         validationArguments: [String] = [],
         languageIdentifier: String? = nil,
-        supportsExecution: Bool = false
+        supportsExecution: Bool = false,
+        supportsDebug: Bool = false
     ) {
         self.id = id
         self.displayName = displayName
@@ -37,6 +39,7 @@ public struct BundledLanguagePluginSpecification: Sendable {
         self.validationArguments = validationArguments
         self.languageIdentifier = languageIdentifier ?? id
         self.supportsExecution = supportsExecution
+        self.supportsDebug = supportsDebug
     }
 }
 
@@ -45,9 +48,9 @@ public struct BundledLanguagePluginSpecification: Sendable {
 /// official native package and is therefore not duplicated here.
 public enum BundledLanguagePluginCatalog {
     public static let specifications: [BundledLanguagePluginSpecification] = [
-        .init(id: "python", displayName: "Python", fileExtensions: ["py", "pyw"], executableNames: ["basedpyright-langserver", "pyright-langserver"], arguments: ["--stdio"], supportsExecution: true),
-        .init(id: "node", displayName: "Node.js", fileExtensions: ["js", "jsx", "ts", "tsx", "mjs", "cjs"], executableNames: ["typescript-language-server"], arguments: ["--stdio"], languageIdentifier: "javascript", supportsExecution: true),
-        .init(id: "rust", displayName: "Rust", fileExtensions: ["rs"], executableNames: ["rust-analyzer"], validationArguments: ["--version"], supportsExecution: true),
+        .init(id: "python", displayName: "Python", fileExtensions: ["py", "pyw"], executableNames: ["basedpyright-langserver", "pyright-langserver"], arguments: ["--stdio"], supportsExecution: true, supportsDebug: true),
+        .init(id: "node", displayName: "Node.js", fileExtensions: ["js", "jsx", "ts", "tsx", "mjs", "cjs"], executableNames: ["typescript-language-server"], arguments: ["--stdio"], languageIdentifier: "javascript", supportsExecution: true, supportsDebug: true),
+        .init(id: "rust", displayName: "Rust", fileExtensions: ["rs"], executableNames: ["rust-analyzer"], validationArguments: ["--version"], supportsExecution: true, supportsDebug: true),
         .init(id: "clangd", displayName: "C/C++/Objective-C", fileExtensions: ["c", "h", "hh", "hpp", "hxx", "cpp", "cc", "cxx", "m", "mm"], executableNames: ["clangd"], languageIdentifier: "cpp"),
         .init(id: "csharp", displayName: "C#", fileExtensions: ["cs", "csx"]),
         .init(id: "fsharp", displayName: "F#", fileExtensions: ["fs", "fsi", "fsx"]),
@@ -167,6 +170,9 @@ public enum BundledLanguagePluginCatalog {
                 : nil,
             testingModuleID: specification.supportsExecution
                 ? .languageExecutionExtension(specification.id)
+                : nil,
+            debugModuleID: specification.supportsExecution && specification.supportsDebug
+                ? .languageExecutionExtension(specification.id)
                 : nil
         )
     }
@@ -185,7 +191,17 @@ public enum BundledLanguagePluginCatalog {
     }
 
     private static func executionManifest(_ specification: BundledLanguagePluginSpecification) -> ModuleManifest {
-        ModuleManifest(
+        var capabilities: Set<ModuleCapabilityID> = [
+            .languageExecutionExtension(specification.id),
+            .languageTestingExtension(specification.id)
+        ]
+        if specification.id == "rust" || specification.id == "go" {
+            capabilities.insert(.languageProjectTools(specification.id))
+        }
+        if specification.supportsDebug {
+            capabilities.insert(.languageDebugExtension(specification.id))
+        }
+        return ModuleManifest(
             id: .languageExecutionExtension(specification.id),
             displayName: "\(specification.displayName) Execution",
             scope: .workspace,
@@ -193,11 +209,7 @@ public enum BundledLanguagePluginCatalog {
             activationPolicy: .onDemand,
             sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
             dependencies: [.module(.workspace)],
-            providedCapabilities: Set<ModuleCapabilityID>([
-                .languageExecutionExtension(specification.id),
-                .languageTestingExtension(specification.id)
-            ]).union(specification.id == "rust" || specification.id == "go"
-                ? [.languageProjectTools(specification.id)] : [])
+            providedCapabilities: capabilities
         )
     }
 }

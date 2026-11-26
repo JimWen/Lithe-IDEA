@@ -390,32 +390,6 @@ final class MacServiceContainer {
                                 core: rustCore,
                                 deadlineScheduler: MacDebugOperationDeadlineScheduler()
                             )
-                        },
-                        "go": {
-                            guard let executable = runtimeService.executableOnPath("dlv") else { return nil }
-                            return DebugAdapterProtocolSession(
-                                adapterID: "go",
-                                transport: MacDlvDebugAdapterTransport(
-                                    executableURL: executable,
-                                    environment: runtimeService.processEnvironment(),
-                                    process: MacRawProcessSession()
-                                )
-                            )
-                        },
-                        "node": {
-                            guard let executable = runtimeService.executableOnPath("node") else { return nil }
-                            let environment = runtimeService.processEnvironment()
-                            return DebugAdapterProtocolSession(
-                                adapterID: "pwa-node",
-                                transport: MacNodeDebugAdapterTransport(
-                                    nodeExecutableURL: executable,
-                                    locator: MacJavaScriptDebugAdapterLocator(
-                                        environment: environment,
-                                        executableOnPath: { runtimeService.executableOnPath($0) }
-                                    ),
-                                    process: MacRawProcessSession()
-                                )
-                            )
                         }
                     ]
                     let debugRuntimeFactory = DebugAdapterRuntimeFactory(
@@ -425,11 +399,37 @@ final class MacServiceContainer {
                                 executableURL: executableURL,
                                 arguments: arguments,
                                 environment: environment,
-                                process: MacRawProcessSession()
+                                process: MacRawProcessSession(
+                                    processRegistry: processRegistry,
+                                    ownerModuleID: .debug
+                                )
                             )
                         },
                         launches: debugLaunches,
-                        sessionFactories: debugFactories
+                        sessionFactories: debugFactories,
+                        dlvTransportFactory: { executable, environment in
+                            MacDlvDebugAdapterTransport(
+                                executableURL: executable,
+                                environment: environment,
+                                process: MacRawProcessSession(
+                                    processRegistry: processRegistry,
+                                    ownerModuleID: .debug
+                                )
+                            )
+                        },
+                        nodeTransportFactory: { executable, environment in
+                            MacNodeDebugAdapterTransport(
+                                nodeExecutableURL: executable,
+                                locator: MacJavaScriptDebugAdapterLocator(
+                                    environment: environment,
+                                    executableOnPath: { runtimeService.executableOnPath($0) }
+                                ),
+                                process: MacRawProcessSession(
+                                    processRegistry: processRegistry,
+                                    ownerModuleID: .debug
+                                )
+                            )
+                        }
                     )
                     let adapterSessions = DebugAdapterSessionManager(
                         providers: languageProviderCatalog.debugProviders,
@@ -440,6 +440,12 @@ final class MacServiceContainer {
                             )
                         }
                     )
+                    adapterSessions.onRegisterLanguageDebugExtension = { provider, support in
+                        debugRuntimeFactory.registerExtension(provider, support: support)
+                    }
+                    adapterSessions.onUnregisterLanguageDebugExtension = { languageID in
+                        debugRuntimeFactory.unregisterExtension(languageID: languageID)
+                    }
                     let graph = DebugFeatureGraph(
                         adapterSessions: adapterSessions,
                         breakpointPersistence: debugBreakpointStore,
@@ -548,6 +554,10 @@ final class MacServiceContainer {
             debugLaunchConfigurationResolver: DebugLaunchConfigurationResolver(
                 fileStorage: fileStorage,
                 javaTestLaunchResolver: rustCore
+            ),
+            rustDebugBuildService: RustDebugBuildService(
+                processRunner: processRunner,
+                runtimeService: runtimeService
             ),
             debugPortAvailabilityChecker: MacDebugPortAvailabilityChecker(),
             javaTestResultServerFactory: { MacJavaTestResultServer() },

@@ -87,6 +87,25 @@ package enum RunConfigurationKind: Hashable, Identifiable, Sendable {
         }
     }
 
+    /// Maps build-tool provider namespaces (`cargo`, `npm`) to their language
+    /// catalog ID (`rust`, `node`) for plugin and debug adapter routing.
+    package var languageID: String {
+        switch providerID {
+        case "cargo": "rust"
+        case "npm": "node"
+        default: providerID
+        }
+    }
+
+    package var supportsDebug: Bool {
+        switch self {
+        case .currentFile, .javaMain:
+            return true
+        case .process:
+            return ["go", "rust", "python", "node"].contains(languageID)
+        }
+    }
+
     package var capabilities: RunConfigurationCapabilities {
         switch self {
         case .currentFile, .javaMain:

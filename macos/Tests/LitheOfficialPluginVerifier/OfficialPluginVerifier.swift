@@ -123,6 +123,19 @@ struct OfficialPluginVerifier {
               let lsp = OfficialPluginCatalog.moduleManifest(for: lspID) else {
             throw VerificationError.manifestMismatch
         }
+        let legacySupports = (current.languageSupports ?? []).map { support in
+            LanguageSupportDeclaration(
+                id: support.id,
+                displayName: support.displayName,
+                fileExtensions: support.fileExtensions,
+                fileNames: support.fileNames,
+                projectFileNames: support.projectFileNames,
+                languageServerModuleID: support.languageServerModuleID,
+                executionModuleID: support.executionModuleID,
+                testingModuleID: support.testingModuleID,
+                debugModuleID: nil
+            )
+        }
         return PluginManifest(
             schemaVersion: 1, id: current.id, displayName: current.displayName,
             version: PluginVersion(major: 0, minor: 3, patch: 0), apiVersion: 1,
@@ -132,7 +145,7 @@ struct OfficialPluginVerifier {
             ),
             vendor: current.vendor, entrypoint: current.entrypoint,
             modules: [PluginModuleDeclaration(manifest: execution), PluginModuleDeclaration(manifest: lsp)],
-            languageSupports: current.languageSupports ?? []
+            languageSupports: legacySupports
         )
     }
 
@@ -203,6 +216,13 @@ struct OfficialPluginVerifier {
         guard let tools = try await runtime.activateCapability(.languageProjectTools("go"))
             as? any LanguageProjectToolsProviding, tools.languageID == "go" else {
             throw VerificationError.behavior("The new capture capability is unavailable")
+        }
+        guard let debug = try await runtime.activateCapability(.languageDebugExtension("go"))
+            as? any LanguageDebugExtensionProviding,
+              debug.languageID == "go",
+              debug.debugAdapterLaunch.adapterID == "go",
+              debug.debugAdapterLaunch.transport == .dlvServer else {
+            throw VerificationError.behavior("The Go debug extension capability is unavailable")
         }
         // This reference and the actual capture call exercise host-linked Support
         // symbols that the separately compiled plugin resolves dynamically.

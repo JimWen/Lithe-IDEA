@@ -2418,9 +2418,10 @@ struct CodeEditorView: NSViewRepresentable {
                         verified: previous?.verified == true || breakpoint.verified
                     )
                 }
+            let resolvedDocumentURL = url.resolvingSymlinksInPath().standardizedFileURL
             let debugBreakpointMessages = Dictionary(
                 model.genericDebugFeatureIfActive?.breakpoints
-                    .filter { $0.fileURL.standardizedFileURL == url }
+                    .filter { $0.fileURL.resolvingSymlinksInPath().standardizedFileURL == resolvedDocumentURL }
                     .compactMap { breakpoint in
                         breakpoint.message.map { (breakpoint.line, $0) }
                     } ?? [],
@@ -2428,7 +2429,7 @@ struct CodeEditorView: NSViewRepresentable {
             )
             let currentExecutionLine: Int? = {
                 guard let frame = model.genericDebugFeatureIfActive?.selectedFrame,
-                      frame.sourceURL?.standardizedFileURL == url else { return nil }
+                      frame.sourceURL?.resolvingSymlinksInPath().standardizedFileURL == resolvedDocumentURL else { return nil }
                 return frame.line
             }()
             let isRunToCursorEnabled = model.genericDebugFeatureIfActive?.state == .paused
@@ -2464,12 +2465,14 @@ struct CodeEditorView: NSViewRepresentable {
                             line: EditorDebugBreakpointLocation.productLine(forEditorLine: line)
                         )
                     },
-                    canAdd: { [weak textView, fileExtension] line in
-                        guard fileExtension.lowercased() == "java",
+                    canAdd: { [weak model, weak textView, fileExtension] line in
+                        guard let model,
+                              model.canSetDebugBreakpoint(in: url),
                               let textView else { return false }
-                        return DebugBreakpointLocationValidator.isExecutableJavaLine(
+                        return DebugBreakpointLocationValidator.isCandidateLine(
                             source: textView.string,
-                            line: EditorDebugBreakpointLocation.productLine(forEditorLine: line)
+                            line: EditorDebugBreakpointLocation.productLine(forEditorLine: line),
+                            languageID: model.languageProviderID(for: url) ?? fileExtension
                         )
                     },
                     onEdit: { [weak model] line in
@@ -5961,8 +5964,8 @@ final class LineNumberGutterView: NSView {
         }
         guard canAddDebugBreakpoint?(line) == true else {
             // A tooltip here is intentional: it explains why the same gutter
-            // gesture works on a method line but not on a comment or brace.
-            toolTip = "Line \(line + 1): Cannot set a Java breakpoint here"
+            // gesture works on an executable line but not on a comment or brace.
+            toolTip = "Line \(line + 1): Cannot set a breakpoint here"
             return
         }
         toolTip = "Line \(line + 1): Click to set breakpoint"

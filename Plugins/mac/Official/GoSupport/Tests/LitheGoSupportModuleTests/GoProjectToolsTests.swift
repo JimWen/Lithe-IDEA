@@ -23,7 +23,8 @@ struct GoProjectToolsTests {
         #expect(GoExecutionModule.moduleManifest.defaultState == .enabled)
         #expect(GoLanguageServerModule.moduleManifest.defaultState == .enabled)
         #expect(GoExecutionModule.moduleManifest.providedCapabilities == legacy.providedCapabilities.union([
-            .languageProjectTools("go")
+            .languageProjectTools("go"),
+            .languageDebugExtension("go")
         ]))
         let packageURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

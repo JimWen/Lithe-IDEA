@@ -1,5 +1,6 @@
 import Foundation
 import LitheCoreContracts
+import LitheModuleAPI
 
 /// Identifies one independently managed debug adapter session.
 public struct DebugSessionID: Hashable, Codable, Sendable, CustomStringConvertible {
@@ -69,6 +70,10 @@ public final class DebugAdapterSessionManager: ObservableObject {
     public var onEvent: ((String, DebugAdapterEvent) -> Void)?
     public var onSessionStateChange: ((DebugSessionID, String, DebugAdapterState) -> Void)?
     public var onSessionEvent: ((DebugSessionID, String, DebugAdapterEvent) -> Void)?
+    public var onRegisterLanguageDebugExtension: (
+        @MainActor (any LanguageDebugExtensionProviding, LanguageSupportDeclaration) -> Bool
+    )?
+    public var onUnregisterLanguageDebugExtension: (@MainActor (String) -> Void)?
     public var onRunInTerminalRequest: DebugRunInTerminalRequestHandler? {
         didSet {
             for managed in sessions.values {
@@ -133,6 +138,18 @@ public final class DebugAdapterSessionManager: ObservableObject {
 
     public func provider(for fileURL: URL) -> DebugProviderDescriptor? {
         providers.first { $0.matches(fileURL) }
+    }
+
+    @discardableResult
+    public func registerLanguageDebugExtension(
+        _ provider: any LanguageDebugExtensionProviding,
+        support: LanguageSupportDeclaration
+    ) -> Bool {
+        onRegisterLanguageDebugExtension?(provider, support) ?? false
+    }
+
+    public func unregisterLanguageDebugExtension(languageID: String) {
+        onUnregisterLanguageDebugExtension?(languageID)
     }
 
     @discardableResult

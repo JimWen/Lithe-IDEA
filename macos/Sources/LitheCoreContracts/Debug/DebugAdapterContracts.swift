@@ -1,5 +1,56 @@
 import Foundation
 
+/// Transport family used by a language plugin's Debug Adapter Protocol launch.
+public enum LanguageDebugAdapterTransportKind: String, Codable, Equatable, Hashable, Sendable {
+    /// Adapter communicates DAP directly over child-process stdin/stdout.
+    case stdio
+    /// Delve (`dlv dap --listen=127.0.0.1:0`) announces a local TCP endpoint on stdout.
+    case dlvServer
+    /// Node.js `js-debug` DAP server listens on a local TCP port.
+    case nodeServer
+}
+
+/// Fallback executable prefix tried when primary adapter executables are absent.
+public struct LanguageDebugAdapterLaunchFallback: Equatable, Hashable, Sendable {
+    public let executableName: String
+    public let argumentPrefix: [String]
+
+    public init(executableName: String, argumentPrefix: [String]) {
+        self.executableName = executableName
+        self.argumentPrefix = argumentPrefix
+    }
+}
+
+/// Declarative DAP adapter launch specification exported by a language plugin.
+public struct LanguageDebugAdapterLaunch: Equatable, Hashable, Sendable {
+    public let adapterID: String
+    public let transport: LanguageDebugAdapterTransportKind
+    public let executableNames: [String]
+    public let arguments: [String]
+    public let fallbacks: [LanguageDebugAdapterLaunchFallback]
+
+    public init(
+        adapterID: String,
+        transport: LanguageDebugAdapterTransportKind,
+        executableNames: [String],
+        arguments: [String] = [],
+        fallbacks: [LanguageDebugAdapterLaunchFallback] = []
+    ) {
+        self.adapterID = adapterID
+        self.transport = transport
+        self.executableNames = executableNames
+        self.arguments = arguments
+        self.fallbacks = fallbacks
+    }
+}
+
+/// Capability exported by language plugins that provide breakpoint debugging.
+@MainActor
+public protocol LanguageDebugExtensionProviding: AnyObject {
+    var languageID: String { get }
+    var debugAdapterLaunch: LanguageDebugAdapterLaunch { get }
+}
+
 @MainActor
 public protocol DebugAdapterSession: AnyObject {
     var isRunning: Bool { get }

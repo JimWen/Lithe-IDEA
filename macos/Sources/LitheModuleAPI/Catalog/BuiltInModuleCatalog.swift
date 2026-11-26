@@ -242,7 +242,8 @@ public enum OfficialPluginCatalog {
         sleepPolicy: goExecutionManifestV1.sleepPolicy,
         dependencies: goExecutionManifestV1.dependencies,
         providedCapabilities: goExecutionManifestV1.providedCapabilities.union([
-            .languageProjectTools(goLanguageID)
+            .languageProjectTools(goLanguageID),
+            .languageDebugExtension(goLanguageID)
         ])
     )
 
@@ -287,7 +288,8 @@ public enum OfficialPluginCatalog {
                 projectFileNames: ["go.mod", "go.work"],
                 languageServerModuleID: .languageServerExtension(goLanguageID),
                 executionModuleID: .languageExecutionExtension(goLanguageID),
-                testingModuleID: .languageExecutionExtension(goLanguageID)
+                testingModuleID: .languageExecutionExtension(goLanguageID),
+                debugModuleID: .languageExecutionExtension(goLanguageID)
             )]
         )
     ]

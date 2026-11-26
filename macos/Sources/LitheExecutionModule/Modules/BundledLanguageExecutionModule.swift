@@ -72,6 +72,9 @@ public final class BundledLanguageExecutionModule: LitheModule {
         if let capability {
             result[.languageExecutionExtension(languageID)] = capability
             result[.languageTestingExtension(languageID)] = capability
+            if manifest.providedCapabilities.contains(.languageDebugExtension(languageID)) {
+                result[.languageDebugExtension(languageID)] = capability
+            }
         }
         if let projectTools { result[.languageProjectTools(languageID)] = projectTools }
         return result
@@ -81,8 +84,46 @@ public final class BundledLanguageExecutionModule: LitheModule {
 @MainActor
 public final class BundledLanguageExecutionCapability: NSObject,
     LanguageRunExtensionProviding,
-    LanguageTestExtensionProviding {
+    LanguageTestExtensionProviding,
+    LanguageDebugExtensionProviding {
     public let languageID: String
+    public var debugAdapterLaunch: LanguageDebugAdapterLaunch {
+        switch languageID {
+        case "python":
+            return LanguageDebugAdapterLaunch(
+                adapterID: "python",
+                transport: .stdio,
+                executableNames: ["python3", "python"],
+                arguments: ["-m", "debugpy.adapter"]
+            )
+        case "rust":
+            return LanguageDebugAdapterLaunch(
+                adapterID: "lldb",
+                transport: .stdio,
+                executableNames: ["lldb-dap"],
+                arguments: [],
+                fallbacks: [
+                    LanguageDebugAdapterLaunchFallback(
+                        executableName: "xcrun",
+                        argumentPrefix: ["lldb-dap"]
+                    )
+                ]
+            )
+        case "node":
+            return LanguageDebugAdapterLaunch(
+                adapterID: "pwa-node",
+                transport: .nodeServer,
+                executableNames: ["node"],
+                arguments: []
+            )
+        default:
+            return LanguageDebugAdapterLaunch(
+                adapterID: languageID,
+                transport: .stdio,
+                executableNames: []
+            )
+        }
+    }
     private let sessionFactory: @MainActor () -> any LanguageExecutionSession
 
     init(

@@ -84,13 +84,15 @@ struct MacRunConfigurationStore: RunConfigurationOperations, @unchecked Sendable
         let configurations: [EffectiveRunConfiguration] = payload.configurations.map { value in
             let kind = configurationKind(value.provider)
             let java = value.extensions?.java
+            let rawModulePath = java?.module ?? value.cwd
+            let modulePath = (rawModulePath == "." || rawModulePath?.isEmpty == true) ? nil : rawModulePath
             return EffectiveRunConfiguration(
                 configuration: RunConfiguration(
                     id: value.id,
                     name: value.name,
                     kind: kind,
                     execution: value.execution.flatMap(RunConfigurationExecution.init(rawValue:)),
-                    modulePath: java?.module == "." ? nil : java?.module,
+                    modulePath: modulePath,
                     mainClass: java?.mainClass,
                     debugAdapter: value.debug?.adapter,
                     disabled: value.disabled

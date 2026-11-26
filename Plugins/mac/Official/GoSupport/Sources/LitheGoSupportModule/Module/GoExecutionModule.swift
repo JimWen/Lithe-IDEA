@@ -79,6 +79,7 @@ public final class GoExecutionModule: LitheModule {
         if let capability {
             values[.languageExecutionExtension(goLanguageID)] = capability
             values[.languageTestingExtension(goLanguageID)] = capability
+            values[.languageDebugExtension(goLanguageID)] = capability
         }
         if let projectToolCapability {
             values[.languageProjectTools(goLanguageID)] = projectToolCapability

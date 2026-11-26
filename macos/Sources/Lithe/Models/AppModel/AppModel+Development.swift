@@ -353,11 +353,27 @@ extension AppModel {
                 return
             }
             let applicationExecution: RunConfigurationExecution = .application
+            let fileDirectoryPath = fileURL.deletingLastPathComponent().standardizedFileURL.path
             let configuration = feature.configurations.first {
                 $0.name == runnable.displayName
                     && $0.execution == applicationExecution
                     && ($0.modulePath == nil || fileURL.path.contains($0.modulePath ?? ""))
-            } ?? feature.configurations.first { $0.name == runnable.displayName && $0.execution == applicationExecution }
+            } ?? feature.configurations.first {
+                $0.name == runnable.displayName && $0.execution == applicationExecution
+            } ?? feature.configurations.first { config in
+                guard config.execution == applicationExecution,
+                      config.kind.languageID == languageProviderID(for: fileURL) else {
+                    return false
+                }
+                guard let modulePath = config.modulePath, !modulePath.isEmpty else {
+                    return fileDirectoryPath == identity.url.standardizedFileURL.path
+                }
+                let configDirectory = identity.url
+                    .appendingPathComponent(modulePath, isDirectory: true)
+                    .standardizedFileURL.path
+                return fileDirectoryPath == configDirectory
+                    || fileDirectoryPath.hasPrefix(configDirectory + "/")
+            }
             guard let configuration else {
                 showNotification("未找到该入口的运行配置，请先重新生成运行配置。", severity: .error, title: runnable.displayName)
                 return
@@ -867,7 +883,7 @@ extension AppModel {
             )
         }
         guard let ownership = services.pluginCatalog.languageSupports[
-            configuration.kind.providerID
+            configuration.kind.languageID
         ] else {
             return true
         }
@@ -875,6 +891,54 @@ extension AppModel {
             ownership.declaration,
             runFeature: runFeature
         )
+    }
+
+    private func activateLanguageDebugExtensionIfNeeded(
+        for fileURL: URL,
+        debugFeature: GenericDebugFeatureModel
+    ) async -> Bool {
+        guard let ownership = services.pluginCatalog.languageSupport(for: fileURL) else {
+            return true
+        }
+        return await activateLanguageDebugExtension(
+            ownership.declaration,
+            debugFeature: debugFeature
+        )
+    }
+
+    private func activateLanguageDebugExtension(
+        _ support: LanguageSupportDeclaration,
+        debugFeature: GenericDebugFeatureModel
+    ) async -> Bool {
+        guard support.debugModuleID != nil else {
+            debugFeature.unregisterLanguageDebugExtension(languageID: support.id)
+            showNotification("\(support.displayName) does not provide debugging support")
+            return false
+        }
+        do {
+            let value = try await services.moduleRuntime.activateCapability(
+                .languageDebugExtension(support.id)
+            )
+            guard let provider = value as? any LanguageDebugExtensionProviding,
+                  debugFeature.registerLanguageDebugExtension(provider, support: support) else {
+                debugFeature.unregisterLanguageDebugExtension(languageID: support.id)
+                showNotification("\(support.displayName) returned an invalid debug provider")
+                return false
+            }
+            return true
+        } catch ModuleRuntimeError.moduleDisabled {
+            debugFeature.unregisterLanguageDebugExtension(languageID: support.id)
+            showNotification(
+                "\(support.displayName) plugin is disabled. Enable it in Settings → Plugins to debug \(support.displayName) files.",
+                severity: .warning,
+                title: "Debug"
+            )
+            return false
+        } catch {
+            debugFeature.unregisterLanguageDebugExtension(languageID: support.id)
+            showNotification(error.localizedDescription)
+            return false
+        }
     }
 
     private func activateLanguageRunExtension(
@@ -1033,7 +1097,8 @@ extension AppModel {
         let configuration = DebugLaunchSourceResolver().configurationForDebug(
             selected: selectedConfiguration,
             activeDocumentText: activeDocument?.text,
-            configurations: runFeature.configurations
+            configurations: runFeature.configurations,
+            activeDocumentURL: activeDocument?.url
         )
         runFeature.select(configuration)
 
@@ -1044,14 +1109,14 @@ extension AppModel {
                 return
             }
             sourceURL = document.url
-        } else if configuration.kind.capabilities.contains(.jdwpDebug) {
+        } else if configuration.kind.supportsDebug || configuration.debugAdapter != nil {
             guard let resolved = DebugLaunchSourceResolver().resolve(
                 configuration: configuration,
                 activeDocumentURL: activeDocument?.url,
                 projectFiles: projectFiles,
                 workspaceURL: workspaceURL
             ) else {
-                showNotification("Could not find the Java source for \(configuration.name)", severity: .error)
+                showNotification("Could not find a debuggable source file for \(configuration.name)", severity: .error)
                 return
             }
             sourceURL = resolved
@@ -1432,26 +1497,38 @@ extension AppModel {
         toggleDebugBreakpoint(fileURL: document.url, line: caret.line + 1)
     }
 
+    func canSetDebugBreakpoint(in fileURL: URL) -> Bool {
+        languageProviderCatalog.provider(for: fileURL)?
+            .capabilities.contains(.debugAdapter) == true
+    }
+
+    func languageProviderID(for fileURL: URL) -> String? {
+        languageProviderCatalog.provider(for: fileURL)?.id
+    }
+
     func toggleDebugBreakpoint(fileURL: URL, line: Int) {
-        if languageProviderCatalog.provider(for: fileURL)?.id == "java",
-           let document = openDocuments.first(where: {
-               $0.url.standardizedFileURL == fileURL.standardizedFileURL
-           }),
-           !DebugBreakpointLocationValidator.isExecutableJavaLine(
-               source: document.text,
-               line: line
-           ) {
-            showNotification("This line cannot hold a Java breakpoint")
+        guard let provider = languageProviderCatalog.provider(for: fileURL),
+              provider.capabilities.contains(.debugAdapter) else {
+            showNotification("Debugging is not supported for this file type")
             return
         }
-        if languageProviderCatalog.provider(for: fileURL)?
-            .capabilities.contains(.debugAdapter) == true {
-            Task { [weak self] in
-                guard let feature = await self?.activateDebugModule()?.genericFeature else { return }
-                feature.toggleBreakpoint(fileURL: fileURL, line: line)
-            }
-        } else {
-            showNotification("Debugging is not supported for this file type")
+        if let document = openDocuments.first(where: {
+            $0.url.standardizedFileURL == fileURL.standardizedFileURL
+        }),
+           !DebugBreakpointLocationValidator.isCandidateLine(
+               source: document.text,
+               line: line,
+               languageID: provider.id
+           ) {
+            let message = provider.id == "java"
+                ? "This line cannot hold a Java breakpoint"
+                : "This line cannot hold a breakpoint"
+            showNotification(message)
+            return
+        }
+        Task { [weak self] in
+            guard let feature = await self?.activateDebugModule()?.genericFeature else { return }
+            feature.toggleBreakpoint(fileURL: fileURL, line: line)
         }
     }
 
@@ -1573,6 +1650,14 @@ extension AppModel {
             return
         }
         guard isCurrentWorkspace(identity), !Task.isCancelled else { return }
+        guard await activateLanguageDebugExtensionIfNeeded(
+            for: fileURL,
+            debugFeature: genericDebugFeature
+        ) else {
+            isDebugVisible = true
+            return
+        }
+        guard isCurrentWorkspace(identity), !Task.isCancelled else { return }
         let selectedConfiguration = runFeature.selectedConfiguration
         let configurations = runFeature.configurations
         let selectedOptions = selectedConfiguration.map { runFeature.options(for: $0) }
@@ -1621,6 +1706,26 @@ extension AppModel {
             } else {
                 javaTarget = nil
             }
+            let preBuiltRustExecutableURL: URL?
+            if provider.id == "rust",
+               let rustBuilder = services.rustDebugBuildService,
+               let target = debugLaunchConfigurationResolver.rustBinaryTarget(
+                   documentURL: fileURL,
+                   workspaceURL: workspaceURL,
+                   configurations: configurations,
+                   selectedConfiguration: selectedConfiguration,
+                   options: { [runFeature] in
+                       $0 == selectedConfiguration ? (selectedOptions ?? RunOptions()) : runFeature.options(for: $0)
+                   }
+               ) {
+                preBuiltRustExecutableURL = try await rustBuilder.buildDebugExecutable(
+                    binaryName: target.configuration.name,
+                    workingDirectory: target.moduleURL,
+                    environmentOverrides: target.runOptions.environment
+                )
+            } else {
+                preBuiltRustExecutableURL = nil
+            }
             try Task.checkCancellation()
             configuration = try debugLaunchConfigurationResolver.resolve(
                 provider: provider,
@@ -1629,6 +1734,7 @@ extension AppModel {
                 configurations: configurations,
                 selectedConfiguration: selectedConfiguration,
                 javaTarget: javaTarget,
+                preBuiltRustExecutableURL: preBuiltRustExecutableURL,
                 options: { [runFeature] in
                     $0 == selectedConfiguration ? (selectedOptions ?? RunOptions()) : runFeature.options(for: $0)
                 }

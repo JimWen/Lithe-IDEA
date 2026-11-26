@@ -24,4 +24,12 @@ protocol RawProcessSession: AnyObject, Sendable {
     func start(_ request: ProcessRequest) throws
     func send(_ input: Data) throws
     func stop()
+    func stopAndWait() async -> Bool
+}
+
+extension RawProcessSession {
+    func stopAndWait() async -> Bool {
+        stop()
+        return !isRunning
+    }
 }

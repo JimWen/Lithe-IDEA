@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import LitheModuleAPI
 
 final class MacRawProcessSession: RawProcessSession, @unchecked Sendable {
     private static let forcedTerminationDelay: Duration = .milliseconds(200)
@@ -10,6 +11,9 @@ final class MacRawProcessSession: RawProcessSession, @unchecked Sendable {
     var onTermination: (@Sendable (Int32) -> Void)?
     var onStateChange: (@Sendable (ProcessLifecycleEvent) -> Void)?
 
+    private let processRegistry: ManagedProcessRegistry?
+    private let ownerModuleID: ModuleID?
+    private var registryToken: UUID?
     private var process: MacManagedProcess?
     private var inputPipe: Pipe?
     private var outputPipe: Pipe?
@@ -20,6 +24,14 @@ final class MacRawProcessSession: RawProcessSession, @unchecked Sendable {
     // termination callback queued on the process-source queue.  Keep a
     // generation token so that callback cannot clear or report the new run.
     private var processGeneration = UUID()
+
+    init(
+        processRegistry: ManagedProcessRegistry? = nil,
+        ownerModuleID: ModuleID? = nil
+    ) {
+        self.processRegistry = processRegistry
+        self.ownerModuleID = ownerModuleID
+    }
 
     func start(_ request: ProcessRequest) throws {
         stop()
@@ -73,6 +85,7 @@ final class MacRawProcessSession: RawProcessSession, @unchecked Sendable {
             guard let self,
                   self.process === terminatedProcess,
                   self.processGeneration == currentGeneration else { return }
+            self.unregisterManagedProcess()
             self.outputPipe?.fileHandleForReading.readabilityHandler = nil
             self.errorPipe?.fileHandleForReading.readabilityHandler = nil
             self.process = nil
@@ -97,6 +110,13 @@ final class MacRawProcessSession: RawProcessSession, @unchecked Sendable {
         self.errorPipe = errorPipe
         do {
             try process.run()
+            if let processRegistry, process.processIdentifier > 0 {
+                registryToken = processRegistry.registerOwnedProcess(
+                    pid: process.processIdentifier,
+                    category: .service,
+                    moduleID: ownerModuleID ?? .debug
+                )
+            }
             try? inputPipe?.fileHandleForReading.close()
             try? outputPipe.fileHandleForWriting.close()
             try? errorPipe.fileHandleForWriting.close()
@@ -151,11 +171,53 @@ final class MacRawProcessSession: RawProcessSession, @unchecked Sendable {
             ))
             process.terminate()
         }
+        unregisterManagedProcess()
         closePipes()
         process = nil
         activeOperationID = nil
         // Invalidate callbacks that may still be queued for the stopped run.
         processGeneration = UUID()
+    }
+
+    func stopAndWait() async -> Bool {
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        outputPipe?.fileHandleForReading.readabilityHandler = nil
+        errorPipe?.fileHandleForReading.readabilityHandler = nil
+        let activeProcess = process
+        let operationID = activeOperationID
+        closePipes()
+        process = nil
+        activeOperationID = nil
+        processGeneration = UUID()
+        guard let activeProcess, activeProcess.isRunning else {
+            unregisterManagedProcess()
+            return true
+        }
+        onStateChange?(ProcessLifecycleEvent(
+            operationID: operationID,
+            state: .stopping,
+            exitCode: nil,
+            message: "Process stopped"
+        ))
+        let exited = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let terminated = activeProcess.terminateAndWait(
+                    gracePeriod: 0.2,
+                    forcedTerminationTimeout: 1.0
+                )
+                continuation.resume(returning: terminated)
+            }
+        }
+        unregisterManagedProcess()
+        return exited
+    }
+
+    private func unregisterManagedProcess() {
+        if let token = registryToken {
+            registryToken = nil
+            processRegistry?.unregisterOwnedProcess(token)
+        }
     }
 
     private func closePipes() {
