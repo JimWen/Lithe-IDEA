@@ -39,4 +39,12 @@ final class RuntimeSettingsFeatureModel: ObservableObject {
         try service.setCustomExecutablePath(path, for: command)
         objectWillChange.send()
     }
+    func customEnvironmentValue(for key: String) -> String? { service.customEnvironmentValue(for: key) }
+    var customEnvironmentOverrides: [String: String] { service.customEnvironmentOverrides }
+    func setCustomEnvironmentValue(_ value: String, for key: String) throws {
+        try service.setCustomEnvironmentValue(value, for: key)
+        objectWillChange.send()
+    }
+    func processEnvironment() -> [String: String] { service.processEnvironment() }
+    func executableOnPath(_ command: String) -> URL? { service.executableOnPath(command) }
 }

@@ -430,22 +430,45 @@ final class DocumentFeatureModel: ObservableObject {
         }
 
         guard let workspaceURLProvider,
-              let openingWorkspaceURL = workspaceURLProvider(),
-              let relativePath = workspaceRelativePath(for: normalizedURL, root: openingWorkspaceURL) else {
+              let openingWorkspaceURL = workspaceURLProvider() else {
             notify?("This file is outside the current workspace")
             return
         }
 
-        let operations = self.operations
-        let text = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(
-                    returning: operations.readFile(
-                        at: openingWorkspaceURL,
-                        relativePath: relativePath
+        let text: String?
+        if let relativePath = workspaceRelativePath(for: normalizedURL, root: openingWorkspaceURL) {
+            let operations = self.operations
+            text = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(
+                        returning: operations.readFile(
+                            at: openingWorkspaceURL,
+                            relativePath: relativePath
+                        )
                     )
-                )
+                }
             }
+        } else if isReadOnly {
+            // Read-only external library files (Go SDK, GOMODCACHE, Cargo crates, Python stdlib/site-packages)
+            // are allowed outside the workspace strictly in read-only mode through the bounded file-storage port.
+            let fileStorage = self.fileStorage
+            let standaloneResult = await Task.detached(priority: .userInitiated) {
+                Self.readStandaloneFile(at: normalizedURL, using: fileStorage)
+            }.value
+            switch standaloneResult {
+            case .success(let content):
+                text = content
+            case .failure(let failure):
+                guard !Task.isCancelled, workspaceURLProvider() == openingWorkspaceURL,
+                      pendingFileOpenRequests[filePath]?.id == requestID else { return }
+                if pendingFileOpenRequests[filePath]?.isPreview != true {
+                    notify?(failure.localizedDescription)
+                }
+                return
+            }
+        } else {
+            notify?("This file is outside the current workspace")
+            return
         }
         guard !Task.isCancelled, workspaceURLProvider() == openingWorkspaceURL,
               pendingFileOpenRequests[filePath]?.id == requestID else { return }

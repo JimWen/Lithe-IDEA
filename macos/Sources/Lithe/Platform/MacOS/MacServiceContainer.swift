@@ -84,7 +84,8 @@ final class MacServiceContainer {
         runExecutableResolver providedRunExecutableResolver: (any RunExecutableResolving)? = nil,
         pluginRuntimeRecovery: MacPluginRuntimeRecoveryCoordinator? = nil,
         platformUI providedPlatformUI: (any PlatformUI)? = nil,
-        gitPerformanceLogger: (any GitPerformanceLogger)? = nil
+        gitPerformanceLogger: (any GitPerformanceLogger)? = nil,
+        projectEnvironmentInspector providedProjectEnvironmentInspector: (any ProjectEnvironmentInspecting)? = nil
     ) {
         let gitExecutionJournal = GitExecutionJournal()
         let rustCore = RustCoreBridge(gitPreferences: settings.gitExecutionPreferences,
@@ -574,6 +575,7 @@ final class MacServiceContainer {
             workspaceTextEditFileOperations: MacWorkspaceTextEditFileOperations(),
             binaryFileViewerRegistry: binaryFileViewerRegistry,
             projectRuntimeService: runtimeService,
+            projectEnvironmentInspector: providedProjectEnvironmentInspector ?? MacProjectEnvironmentInspector(processRunner: processRunner),
             gitWatchContextProvider: gitWatchContextProvider,
             githubService: githubService,
             secureStore: secureStore,

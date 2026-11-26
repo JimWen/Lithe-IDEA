@@ -41,6 +41,7 @@ final class AppServices {
     /// Empty by default; binary support exists only after an explicit registration.
     let binaryFileViewerRegistry: BinaryFileViewerRegistry
     let projectRuntimeService: ProjectRuntimeService
+    let projectEnvironmentInspector: any ProjectEnvironmentInspecting
     let gitWatchContextProvider: any GitWatchContextProviding
     let githubService: GitHubService
     let secureStore: any SecureStore
@@ -83,6 +84,7 @@ final class AppServices {
         workspaceTextEditUndoManager: UndoManager = UndoManager(),
         binaryFileViewerRegistry: BinaryFileViewerRegistry,
         projectRuntimeService: ProjectRuntimeService,
+        projectEnvironmentInspector: any ProjectEnvironmentInspecting = UnavailableProjectEnvironmentInspector(),
         gitWatchContextProvider: any GitWatchContextProviding,
         githubService: GitHubService,
         secureStore: any SecureStore,
@@ -138,6 +140,7 @@ final class AppServices {
         )
         self.binaryFileViewerRegistry = binaryFileViewerRegistry
         self.projectRuntimeService = projectRuntimeService
+        self.projectEnvironmentInspector = projectEnvironmentInspector
         self.gitWatchContextProvider = gitWatchContextProvider
         self.githubService = githubService
         self.secureStore = secureStore

@@ -26,6 +26,11 @@ struct ProcessResult: Sendable {
 
 protocol ProcessRunner: Sendable {
     func run(_ request: ProcessRequest) -> ProcessResult
+    func cancel(operationID: String)
+}
+
+extension ProcessRunner {
+    func cancel(operationID _: String) {}
 }
 
 protocol GitCommandRunner: Sendable {

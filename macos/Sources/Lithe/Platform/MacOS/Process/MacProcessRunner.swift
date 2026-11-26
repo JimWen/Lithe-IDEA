@@ -8,8 +8,35 @@ final class MacProcessRunner: ProcessRunner, @unchecked Sendable {
     private static let terminationGracePeriod: TimeInterval = 0.2
     private static let forcedTerminationGracePeriod: TimeInterval = 1
     static let maxOutputBytes = 32 * 1024 * 1024
+    private let cancellationLock = NSLock()
+    private var cancelledOperationIDs: Set<String> = []
+
+    func cancel(operationID: String) {
+        cancellationLock.lock()
+        cancelledOperationIDs.insert(operationID)
+        cancellationLock.unlock()
+    }
+
+    private func isCancelled(operationID: String?) -> Bool {
+        guard let operationID else { return false }
+        cancellationLock.lock()
+        let cancelled = cancelledOperationIDs.contains(operationID)
+        cancellationLock.unlock()
+        return cancelled
+    }
+
+    private func clearCancellation(operationID: String?) {
+        guard let operationID else { return }
+        cancellationLock.lock()
+        cancelledOperationIDs.remove(operationID)
+        cancellationLock.unlock()
+    }
 
     func run(_ request: ProcessRequest) -> ProcessResult {
+        defer { clearCancellation(operationID: request.operationID) }
+        if isCancelled(operationID: request.operationID) {
+            return ProcessResult(output: "", exitCode: -15)
+        }
         let outputPipe = Pipe()
         let inputPipe = request.standardInput.map { _ in Pipe() }
         let process = MacManagedProcess(
@@ -67,6 +94,14 @@ final class MacProcessRunner: ProcessRunner, @unchecked Sendable {
             }
             var timedOut = false
             while process.isRunning {
+                if isCancelled(operationID: request.operationID) {
+                    timedOut = true
+                    process.terminateAndWait(
+                        gracePeriod: Self.terminationGracePeriod,
+                        forcedTerminationTimeout: Self.forcedTerminationGracePeriod
+                    )
+                    break
+                }
                 if let deadline, Date() >= deadline {
                     timedOut = true
                     process.terminateAndWait(

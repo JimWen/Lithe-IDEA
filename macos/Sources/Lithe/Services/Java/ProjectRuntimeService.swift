@@ -21,6 +21,7 @@ extension ProjectRuntimeService: LanguageToolRuntimePort {
 final class ProjectRuntimeService: ObservableObject {
     private struct ProjectRuntimeFile: Codable {
         var executables: [String: String]
+        var environment: [String: String]?
     }
     enum JavaLanguageServerRuntimePreparation: Equatable {
         case unprepared
@@ -38,8 +39,12 @@ final class ProjectRuntimeService: ObservableObject {
     private let store: any KeyValueStore
     private let fileStorage: (any FileStorage)?
     private var executableOverrides: [String: String] = [:]
+    private var environmentOverrides: [String: String] = [:]
     private var executableOverridesKey: String? {
         projectURL.map { "lithe.project-runtime-executables." + $0.standardizedFileURL.path }
+    }
+    private var environmentOverridesKey: String? {
+        projectURL.map { "lithe.project-runtime-environment." + $0.standardizedFileURL.path }
     }
     private var projectRuntimeFileURL: URL? {
         projectURL?.appendingPathComponent(".lithe/runtime.json")
@@ -70,9 +75,14 @@ final class ProjectRuntimeService: ObservableObject {
         activeDiscoveryID = nil
         let normalizedURL = url.standardizedFileURL
         projectURL = normalizedURL
-        executableOverrides = fileStorage == nil
-            ? (executableOverridesKey.flatMap { store.object(forKey: $0) as? [String: String] } ?? [:])
-            : (loadProjectRuntimeFile() ?? [:])
+        if fileStorage == nil {
+            executableOverrides = executableOverridesKey.flatMap { store.object(forKey: $0) as? [String: String] } ?? [:]
+            environmentOverrides = environmentOverridesKey.flatMap { store.object(forKey: $0) as? [String: String] } ?? [:]
+        } else {
+            let loaded = loadProjectRuntimeFile()
+            executableOverrides = loaded?.executables ?? [:]
+            environmentOverrides = loaded?.environment ?? [:]
+        }
         javaRuntimes = []
         javaEnvironmentReport = .checking(for: normalizedURL)
         javaLanguageServerRuntimePreparation = .unprepared
@@ -85,6 +95,7 @@ final class ProjectRuntimeService: ObservableObject {
         activeDiscoveryID = nil
         projectURL = nil
         executableOverrides = [:]
+        environmentOverrides = [:]
         javaRuntimes = []
         javaEnvironmentReport = nil
         isDiscovering = false
@@ -237,10 +248,14 @@ final class ProjectRuntimeService: ObservableObject {
         return environment
     }
 
-    /// Base environment for language-neutral processes such as Go, Python and
-    /// Node. Overrides are layered on top without injecting Java variables.
+    /// Base environment for language-neutral processes such as Go, Rust, Python and
+    /// Node. Project environment overrides and explicit caller overrides are layered
+    /// on top without injecting Java variables.
     func processEnvironment(overrides: [String: String] = [:]) -> [String: String] {
         var environment = runtimeLocator.environment()
+        for (key, value) in environmentOverrides where !value.isEmpty {
+            environment[key] = value
+        }
         var directories: [String] = []
         for command in executableOverrides.keys.sorted() {
             guard let path = executableOverrides[command], let url = executableURL(at: path) else { continue }
@@ -254,6 +269,8 @@ final class ProjectRuntimeService: ObservableObject {
     }
 
     func customExecutablePath(for command: String) -> String? { executableOverrides[command] }
+    func customEnvironmentValue(for key: String) -> String? { environmentOverrides[key] }
+    var customEnvironmentOverrides: [String: String] { environmentOverrides }
 
     /// Store project-local tool choices through the injected persistence port.
     /// Run, debug and language tools all resolve through this same service.
@@ -269,21 +286,47 @@ final class ProjectRuntimeService: ObservableObject {
             }
             nextOverrides[command] = url.path
         }
-        try persistProjectRuntimeFile(nextOverrides)
+        try persistProjectRuntimeFile(executables: nextOverrides, environment: environmentOverrides)
         executableOverrides = nextOverrides
         store.set(executableOverrides, forKey: key)
     }
 
-    private func loadProjectRuntimeFile() -> [String: String]? {
+    /// Store project-local language environment variables (e.g. `GOPATH`, `GOMODCACHE`,
+    /// `GOPROXY`, `CARGO_HOME`, `RUSTUP_TOOLCHAIN`, `PYTHONPATH`) in `.lithe/runtime.json`.
+    func setCustomEnvironmentValue(_ value: String, for envKey: String) throws {
+        guard let key = environmentOverridesKey else { return }
+        let normalizedKey = envKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedKey.isEmpty,
+              normalizedKey.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else { return }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        var nextEnv = environmentOverrides
+        if trimmed.isEmpty {
+            nextEnv[normalizedKey] = nil
+        } else {
+            nextEnv[normalizedKey] = trimmed
+        }
+        try persistProjectRuntimeFile(executables: executableOverrides, environment: nextEnv)
+        environmentOverrides = nextEnv
+        store.set(environmentOverrides, forKey: key)
+    }
+
+    private func loadProjectRuntimeFile() -> ProjectRuntimeFile? {
         guard let fileStorage, let url = projectRuntimeFileURL,
               let data = try? fileStorage.readData(from: url, options: []),
               let file = try? JSONDecoder().decode(ProjectRuntimeFile.self, from: data) else { return nil }
-        return file.executables
+        return file
     }
 
-    private func persistProjectRuntimeFile(_ overrides: [String: String]) throws {
+    private func persistProjectRuntimeFile(
+        executables: [String: String],
+        environment: [String: String]
+    ) throws {
         guard let fileStorage, let url = projectRuntimeFileURL else { return }
-        let data = try JSONEncoder().encode(ProjectRuntimeFile(executables: overrides))
+        let payload = ProjectRuntimeFile(
+            executables: executables,
+            environment: environment.isEmpty ? nil : environment
+        )
+        let data = try JSONEncoder().encode(payload)
         try fileStorage.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fileStorage.writeData(data, to: url, options: .atomic)
     }

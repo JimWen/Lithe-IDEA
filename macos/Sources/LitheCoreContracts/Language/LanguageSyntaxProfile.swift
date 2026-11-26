@@ -92,6 +92,34 @@ public struct LanguageSyntaxProfile: Equatable, Codable, Sendable {
 }
 
 public extension LanguageSyntaxProfile {
+    static let goMod = LanguageSyntaxProfile(
+        languageID: "gomod",
+        displayName: "Go Module",
+        fileExtensions: [],
+        fileNames: ["go.mod", "go.work"],
+        supportsSlashComments: true,
+        supportsBlockComments: false,
+        supportsNestedBlockComments: false,
+        supportsHashComments: false,
+        supportsBacktickMultilineStrings: true,
+        backtickAllowsEscape: false,
+        supportsTripleQuotedStrings: false,
+        supportsRustSyntax: false,
+        supportsAtAnnotations: false,
+        singleQuoteAllowsEscape: false,
+        lineCommentPrefix: "//",
+        blockCommentStart: nil,
+        blockCommentEnd: nil,
+        keywords: [
+            "module", "go", "toolchain", "require", "exclude", "replace",
+            "retract", "use", "godebug", "indirect"
+        ],
+        builtinTypes: [],
+        completionKeywords: [
+            "module", "go", "toolchain", "require", "exclude", "replace", "retract", "use"
+        ]
+    )
+
     static let go = LanguageSyntaxProfile(
         languageID: "go",
         displayName: "Go",
@@ -394,7 +422,7 @@ public extension LanguageSyntaxProfile {
     )
 
     static let builtInProfiles: [LanguageSyntaxProfile] = [
-        .go, .rust, .python, .swift, .kotlin, .javaScript, .typeScript,
+        .go, .goMod, .rust, .python, .swift, .kotlin, .javaScript, .typeScript,
         .cFamily, .shellScript, .hashScript, .sql, .lua
     ]
 
