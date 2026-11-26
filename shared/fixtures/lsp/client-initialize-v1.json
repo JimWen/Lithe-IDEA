@@ -43,6 +43,19 @@
             "plaintext"
           ]
         },
+        "signatureHelp": {
+          "dynamicRegistration": true,
+          "signatureInformation": {
+            "documentationFormat": [
+              "markdown",
+              "plaintext"
+            ],
+            "parameterInformation": {
+              "labelOffsetSupport": true
+            },
+            "activeParameterSupport": true
+          }
+        },
         "definition": {
           "dynamicRegistration": true
         },
@@ -57,6 +70,89 @@
         },
         "references": {
           "dynamicRegistration": true
+        },
+        "documentHighlight": {
+          "dynamicRegistration": true
+        },
+        "documentSymbol": {
+          "dynamicRegistration": true,
+          "hierarchicalDocumentSymbolSupport": true,
+          "symbolKind": {
+            "valueSet": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26
+            ]
+          }
+        },
+        "semanticTokens": {
+          "dynamicRegistration": true,
+          "requests": {
+            "full": true
+          },
+          "tokenTypes": [
+            "namespace",
+            "type",
+            "class",
+            "enum",
+            "interface",
+            "struct",
+            "typeParameter",
+            "parameter",
+            "variable",
+            "property",
+            "enumMember",
+            "event",
+            "function",
+            "method",
+            "macro",
+            "keyword",
+            "modifier",
+            "comment",
+            "string",
+            "number",
+            "regexp",
+            "operator",
+            "decorator"
+          ],
+          "tokenModifiers": [
+            "declaration",
+            "definition",
+            "readonly",
+            "static",
+            "deprecated",
+            "abstract",
+            "async",
+            "modification",
+            "documentation",
+            "defaultLibrary"
+          ],
+          "formats": [
+            "relative"
+          ]
         },
         "rename": {
           "dynamicRegistration": true,

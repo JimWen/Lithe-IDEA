@@ -55,11 +55,49 @@ pub fn client_initialize(request: ClientInitializeRequest) -> Result<LspClientRe
                         "dynamicRegistration": true,
                         "contentFormat": ["markdown", "plaintext"]
                     },
+                    "signatureHelp": {
+                        "dynamicRegistration": true,
+                        "signatureInformation": {
+                            "documentationFormat": ["markdown", "plaintext"],
+                            "parameterInformation": {
+                                "labelOffsetSupport": true
+                            },
+                            "activeParameterSupport": true
+                        }
+                    },
                     "definition": { "dynamicRegistration": true },
                     "declaration": { "dynamicRegistration": true },
                     "typeDefinition": { "dynamicRegistration": true },
                     "implementation": { "dynamicRegistration": true },
                     "references": { "dynamicRegistration": true },
+                    "documentHighlight": { "dynamicRegistration": true },
+                    "documentSymbol": {
+                        "dynamicRegistration": true,
+                        "hierarchicalDocumentSymbolSupport": true,
+                        "symbolKind": {
+                            "valueSet": [
+                                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+                                14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26
+                            ]
+                        }
+                    },
+                    "semanticTokens": {
+                        "dynamicRegistration": true,
+                        "requests": {
+                            "full": true
+                        },
+                        "tokenTypes": [
+                            "namespace", "type", "class", "enum", "interface", "struct",
+                            "typeParameter", "parameter", "variable", "property", "enumMember",
+                            "event", "function", "method", "macro", "keyword", "modifier",
+                            "comment", "string", "number", "regexp", "operator", "decorator"
+                        ],
+                        "tokenModifiers": [
+                            "declaration", "definition", "readonly", "static", "deprecated",
+                            "abstract", "async", "modification", "documentation", "defaultLibrary"
+                        ],
+                        "formats": ["relative"]
+                    },
                     "rename": {
                         "dynamicRegistration": true,
                         "prepareSupport": true,
@@ -433,11 +471,11 @@ pub fn client_apply_server_message(
                 .and_then(Value::as_object)
                 .filter(|result| result.get("capabilities").is_some_and(Value::is_object))
             {
-                state.server_capabilities = feature_names_from_capabilities(
-                    result.get("capabilities").unwrap_or(&Value::Null),
-                );
-                state.text_document_sync =
-                    text_document_sync_kind(result.get("capabilities").unwrap_or(&Value::Null));
+                let capabilities = result.get("capabilities").unwrap_or(&Value::Null);
+                state.server_capabilities = feature_names_from_capabilities(capabilities);
+                state.text_document_sync = text_document_sync_kind(capabilities);
+                state.semantic_tokens_legend =
+                    semantic_tokens_legend_from_capabilities(capabilities);
                 state.initialized = true;
                 responses.push(json_rpc_notification("initialized", json!({}))?);
             }
@@ -450,12 +488,17 @@ pub fn client_apply_server_message(
             state.open_documents.clear();
             state.diagnostics.clear();
             state.diagnostic_versions.clear();
+            state.semantic_tokens_legend = None;
             responses.push(json_rpc_message_without_params(None, "exit")?);
         }
         let (result, result_error) = if message.get("error").is_some() {
             (None, None)
         } else {
-            match lsp_feature_result_for_method(pending.as_deref(), message.get("result")) {
+            match lsp_feature_result_for_method(
+                pending.as_deref(),
+                message.get("result"),
+                state.semantic_tokens_legend.as_ref(),
+            ) {
                 Ok(result) => (result, None),
                 Err(error) => (None, Some(error)),
             }
@@ -580,11 +623,15 @@ fn validate_lsp_method(method: &str) -> Result<(), CoreError> {
     match method {
         "textDocument/completion"
         | "textDocument/hover"
+        | "textDocument/signatureHelp"
         | "textDocument/definition"
         | "textDocument/declaration"
         | "textDocument/typeDefinition"
         | "textDocument/implementation"
         | "textDocument/references"
+        | "textDocument/documentHighlight"
+        | "textDocument/documentSymbol"
+        | "textDocument/semanticTokens/full"
         | "textDocument/prepareRename"
         | "textDocument/rename"
         | "textDocument/formatting"
@@ -609,10 +656,12 @@ fn feature_request_params(request: &ClientFeatureRequest) -> Result<Value, CoreE
     match request.method.as_str() {
         "textDocument/completion"
         | "textDocument/hover"
+        | "textDocument/signatureHelp"
         | "textDocument/definition"
         | "textDocument/declaration"
         | "textDocument/typeDefinition"
         | "textDocument/implementation"
+        | "textDocument/documentHighlight"
         | "textDocument/prepareRename" => Ok(json!({
             "textDocument": text_document,
             "position": lsp_position_json(required_position(request)?)
@@ -641,7 +690,10 @@ fn feature_request_params(request: &ClientFeatureRequest) -> Result<Value, CoreE
             "textDocument": text_document,
             "range": lsp_range_json(required_range(request)?)
         })),
-        "textDocument/foldingRange" | "textDocument/codeLens" => Ok(json!({
+        "textDocument/foldingRange"
+        | "textDocument/codeLens"
+        | "textDocument/documentSymbol"
+        | "textDocument/semanticTokens/full" => Ok(json!({
             "textDocument": text_document
         })),
         "textDocument/codeAction" => Ok(json!({
@@ -836,6 +888,7 @@ fn parse_lsp_position(value: &Value) -> Option<LspPositionResponse> {
 fn lsp_feature_result_for_method(
     method: Option<&str>,
     result: Option<&Value>,
+    semantic_tokens_legend: Option<&LspSemanticTokensLegend>,
 ) -> Result<Option<Value>, WorkspaceEditParseError> {
     let Some(result) = result else {
         return Ok(None);
@@ -851,6 +904,18 @@ fn lsp_feature_result_for_method(
         }),
         Some("textDocument/hover") => Some(json!({
             "hover": parse_hover(result)
+        })),
+        Some("textDocument/signatureHelp") => Some(json!({
+            "signatureHelp": parse_signature_help(result)
+        })),
+        Some("textDocument/documentHighlight") => Some(json!({
+            "highlights": parse_document_highlights(result)
+        })),
+        Some("textDocument/documentSymbol") => Some(json!({
+            "symbols": parse_document_symbols(result)
+        })),
+        Some("textDocument/semanticTokens/full") => Some(json!({
+            "tokens": parse_semantic_tokens(result, semantic_tokens_legend)
         })),
         Some("textDocument/prepareRename") => Some(json!({
             "prepareRename": parse_prepare_rename(result)
@@ -934,6 +999,8 @@ fn parse_completion_item(item: &Value) -> Result<Option<Value>, WorkspaceEditPar
     Ok(Some(json!({
         "label": label,
         "insertText": insert_text,
+        "insertTextFormat": item.get("insertTextFormat").and_then(Value::as_i64),
+        "preselect": item.get("preselect").and_then(Value::as_bool).unwrap_or(false),
         "kind": item.get("kind").and_then(Value::as_i64),
         "detail": item.get("detail").and_then(Value::as_str),
         "documentation": completion_documentation(item.get("documentation")),
@@ -1094,6 +1161,216 @@ fn parse_code_lenses(result: &Value) -> Vec<LspCodeLensResponse> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn parse_signature_help(result: &Value) -> Option<LspSignatureHelpResponse> {
+    if result.is_null() {
+        return None;
+    }
+    let signatures = result
+        .get("signatures")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|signature| {
+                    let label = signature.get("label")?.as_str()?.to_string();
+                    let parameters = signature
+                        .get("parameters")
+                        .and_then(Value::as_array)
+                        .map(|params| {
+                            params
+                                .iter()
+                                .filter_map(|param| parse_signature_parameter(param, &label))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Some(LspSignatureInformationResponse {
+                        label,
+                        documentation: completion_documentation(signature.get("documentation")),
+                        parameters,
+                        active_parameter: signature.get("activeParameter").and_then(Value::as_i64),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if signatures.is_empty() {
+        return None;
+    }
+    Some(LspSignatureHelpResponse {
+        signatures,
+        active_signature: result.get("activeSignature").and_then(Value::as_i64),
+        active_parameter: result.get("activeParameter").and_then(Value::as_i64),
+    })
+}
+
+fn parse_signature_parameter(
+    param: &Value,
+    signature_label: &str,
+) -> Option<LspParameterInformationResponse> {
+    let label_value = param.get("label")?;
+    let (label, label_start, label_end) = match label_value {
+        Value::String(text) => (text.clone(), None, None),
+        Value::Array(offsets) if offsets.len() == 2 => {
+            let start = offsets[0].as_i64()?;
+            let end = offsets[1].as_i64()?;
+            if start < 0 || end < start {
+                return None;
+            }
+            let slice = utf16_slice(signature_label, start as usize, end as usize)?;
+            (slice, Some(start), Some(end))
+        }
+        _ => return None,
+    };
+    Some(LspParameterInformationResponse {
+        label,
+        label_start,
+        label_end,
+        documentation: completion_documentation(param.get("documentation")),
+    })
+}
+
+fn utf16_slice(text: &str, start_utf16: usize, end_utf16: usize) -> Option<String> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    if end_utf16 > units.len() || start_utf16 > end_utf16 {
+        return None;
+    }
+    String::from_utf16(&units[start_utf16..end_utf16]).ok()
+}
+
+fn parse_document_highlights(result: &Value) -> Vec<LspDocumentHighlightResponse> {
+    result
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|highlight| {
+                    Some(LspDocumentHighlightResponse {
+                        range: parse_lsp_range(highlight.get("range")?)?,
+                        kind: highlight.get("kind").and_then(Value::as_i64).unwrap_or(1),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_document_symbols(result: &Value) -> Vec<LspDocumentSymbolResponse> {
+    let Some(values) = result.as_array() else {
+        return Vec::new();
+    };
+    values
+        .iter()
+        .filter_map(parse_document_symbol_node)
+        .collect()
+}
+
+fn parse_document_symbol_node(value: &Value) -> Option<LspDocumentSymbolResponse> {
+    let name = value.get("name")?.as_str()?.to_string();
+    let kind = value.get("kind")?.as_i64()?;
+    if let Some(range) = value.get("range").and_then(parse_lsp_range) {
+        let selection_range = value
+            .get("selectionRange")
+            .and_then(parse_lsp_range)
+            .unwrap_or(range);
+        let children = value
+            .get("children")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(parse_document_symbol_node)
+                    .collect()
+            })
+            .unwrap_or_default();
+        return Some(LspDocumentSymbolResponse {
+            name,
+            detail: value
+                .get("detail")
+                .and_then(Value::as_str)
+                .filter(|detail| !detail.is_empty())
+                .map(str::to_string),
+            kind,
+            range,
+            selection_range,
+            children,
+        });
+    }
+    let location_range = value
+        .get("location")
+        .and_then(|location| location.get("range"))
+        .and_then(parse_lsp_range)?;
+    Some(LspDocumentSymbolResponse {
+        name,
+        detail: value
+            .get("containerName")
+            .and_then(Value::as_str)
+            .filter(|container| !container.is_empty())
+            .map(str::to_string),
+        kind,
+        range: location_range,
+        selection_range: location_range,
+        children: Vec::new(),
+    })
+}
+
+fn parse_semantic_tokens(
+    result: &Value,
+    legend: Option<&LspSemanticTokensLegend>,
+) -> Vec<LspSemanticTokenResponse> {
+    let Some(legend) = legend else {
+        return Vec::new();
+    };
+    let Some(data) = result.get("data").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut tokens = Vec::with_capacity(data.len() / 5);
+    let mut current_line: i64 = 0;
+    let mut current_col: i64 = 0;
+    for chunk in data.chunks_exact(5) {
+        let Some(delta_line) = chunk[0].as_i64() else {
+            continue;
+        };
+        let Some(delta_start) = chunk[1].as_i64() else {
+            continue;
+        };
+        let Some(length) = chunk[2].as_i64() else {
+            continue;
+        };
+        let Some(token_type_index) = chunk[3].as_u64() else {
+            continue;
+        };
+        let Some(modifiers_bits) = chunk[4].as_u64() else {
+            continue;
+        };
+        if delta_line < 0 || delta_start < 0 || length <= 0 {
+            continue;
+        }
+        current_line += delta_line;
+        current_col = if delta_line == 0 {
+            current_col + delta_start
+        } else {
+            delta_start
+        };
+        let Some(token_type) = legend.token_types.get(token_type_index as usize) else {
+            continue;
+        };
+        let mut token_modifiers = Vec::new();
+        for (bit_index, modifier) in legend.token_modifiers.iter().enumerate() {
+            if bit_index < 64 && (modifiers_bits & (1u64 << bit_index)) != 0 {
+                token_modifiers.push(modifier.clone());
+            }
+        }
+        tokens.push(LspSemanticTokenResponse {
+            line: current_line,
+            utf16_column: current_col,
+            length,
+            token_type: token_type.clone(),
+            token_modifiers,
+        });
+    }
+    tokens
 }
 
 fn parse_locations(result: &Value) -> Vec<Value> {
@@ -1330,6 +1607,27 @@ fn feature_names_from_capabilities(capabilities: &Value) -> Vec<String> {
     add_capability(
         &mut values,
         capabilities,
+        "signatureHelpProvider",
+        "signatureHelp",
+    );
+    add_capability(
+        &mut values,
+        capabilities,
+        "documentHighlightProvider",
+        "documentHighlight",
+    );
+    add_capability(
+        &mut values,
+        capabilities,
+        "documentSymbolProvider",
+        "documentSymbol",
+    );
+    if semantic_tokens_full_supported(capabilities.get("semanticTokensProvider")) {
+        insert_unique(&mut values, "semanticTokens");
+    }
+    add_capability(
+        &mut values,
+        capabilities,
         "completionProvider",
         "completion",
     );
@@ -1441,6 +1739,21 @@ fn apply_dynamic_registration(state: &mut LspClientState, message: &Value) {
         {
             insert_unique(&mut state.server_capabilities, "prepareRename");
         }
+        if matches!(
+            registration.get("method").and_then(Value::as_str),
+            Some("textDocument/semanticTokens" | "textDocument/semanticTokens/full")
+        ) {
+            if let Some(options) = registration.get("registerOptions") {
+                if let Some(legend) = parse_semantic_tokens_legend(options.get("legend")) {
+                    state.semantic_tokens_legend = Some(legend);
+                }
+                if !semantic_tokens_full_supported(Some(options)) {
+                    state
+                        .server_capabilities
+                        .retain(|existing| existing != "semanticTokens");
+                }
+            }
+        }
     }
 }
 
@@ -1478,7 +1791,66 @@ fn apply_dynamic_unregistration(state: &mut LspClientState, message: &Value) {
                 .server_capabilities
                 .retain(|existing| existing != "codeActionResolve");
         }
+        if matches!(
+            method,
+            Some("textDocument/semanticTokens" | "textDocument/semanticTokens/full")
+        ) {
+            state.semantic_tokens_legend = None;
+        }
     }
+}
+
+fn semantic_tokens_full_supported(provider: Option<&Value>) -> bool {
+    let Some(provider) = provider else {
+        return false;
+    };
+    matches!(
+        provider.get("full"),
+        Some(Value::Bool(true)) | Some(Value::Object(_))
+    )
+}
+
+fn semantic_tokens_legend_from_capabilities(
+    capabilities: &Value,
+) -> Option<LspSemanticTokensLegend> {
+    parse_semantic_tokens_legend(
+        capabilities
+            .get("semanticTokensProvider")
+            .and_then(|provider| provider.get("legend")),
+    )
+}
+
+fn parse_semantic_tokens_legend(value: Option<&Value>) -> Option<LspSemanticTokensLegend> {
+    let object = value?.as_object()?;
+    let token_types = object
+        .get("tokenTypes")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let token_modifiers = object
+        .get("tokenModifiers")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if token_types.is_empty() && token_modifiers.is_empty() {
+        return None;
+    }
+    Some(LspSemanticTokensLegend {
+        token_types,
+        token_modifiers,
+    })
 }
 
 fn feature_name_for_method(method: &str) -> Option<&'static str> {
@@ -1489,6 +1861,12 @@ fn feature_name_for_method(method: &str) -> Option<&'static str> {
         "textDocument/implementation" => Some("implementation"),
         "textDocument/references" => Some("references"),
         "textDocument/hover" => Some("hover"),
+        "textDocument/signatureHelp" => Some("signatureHelp"),
+        "textDocument/documentHighlight" => Some("documentHighlight"),
+        "textDocument/documentSymbol" => Some("documentSymbol"),
+        "textDocument/semanticTokens" | "textDocument/semanticTokens/full" => {
+            Some("semanticTokens")
+        }
         "textDocument/completion" => Some("completion"),
         "textDocument/rename" => Some("rename"),
         "textDocument/formatting" => Some("formatting"),

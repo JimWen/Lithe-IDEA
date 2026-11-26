@@ -19,8 +19,9 @@ use crate::languages::{
 };
 use crate::project::MarkdownRenderRequest;
 use crate::project::{
-    self, DocumentLifecycleRequest, FileReadRequest, FileWriteRequest, ReplacementPreviewRequest,
-    SearchIndexRequest, SearchIndexUpdateRequest, SearchRequest, WorkspaceSnapshotRequest,
+    self, DocumentLifecycleRequest, DocumentSymbolsRequest, FileReadRequest, FileWriteRequest,
+    ReplacementPreviewRequest, SearchIndexRequest, SearchIndexUpdateRequest, SearchRequest,
+    WorkspaceSnapshotRequest,
 };
 use crate::project::{
     HistoryContentRequest, HistoryDeleteRequest, HistoryEntriesRequest, HistoryRecordRequest,
@@ -191,6 +192,24 @@ fn execute(request: &str) -> CoreResponse {
                 Ok(data) => CoreResponse::success(
                     id,
                     serde_json::to_value(data).expect("search everywhere should encode"),
+                ),
+                Err(error) => CoreResponse::failure(id, error),
+            }
+        }
+        CoreCommand::WorkspaceDocumentSymbols => {
+            match serde_json::from_value::<DocumentSymbolsRequest>(parsed.payload)
+                .map_err(|error| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "Invalid document symbols request",
+                    )
+                    .with_details(error.to_string())
+                })
+                .and_then(project::document_symbols)
+            {
+                Ok(data) => CoreResponse::success(
+                    id,
+                    serde_json::to_value(data).expect("document symbols should encode"),
                 ),
                 Err(error) => CoreResponse::failure(id, error),
             }
@@ -727,6 +746,24 @@ fn execute(request: &str) -> CoreResponse {
                 Err(error) => CoreResponse::failure(id, error),
             }
         }
+        CoreCommand::EditorFoldRegions => {
+            match serde_json::from_value::<crate::editor::EditorFoldRegionsRequest>(parsed.payload)
+                .map_err(|error| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "Invalid editor fold regions request",
+                    )
+                    .with_details(error.to_string())
+                })
+                .map(crate::editor::fold_regions)
+            {
+                Ok(data) => CoreResponse::success(
+                    id,
+                    serde_json::to_value(data).expect("Editor fold regions should encode"),
+                ),
+                Err(error) => CoreResponse::failure(id, error),
+            }
+        }
         CoreCommand::LspPlainSnippet => {
             match serde_json::from_value::<crate::lsp::PlainSnippetRequest>(parsed.payload).map_err(
                 |error| {
@@ -768,6 +805,24 @@ fn execute(request: &str) -> CoreResponse {
                 Ok(data) => CoreResponse::success(
                     id,
                     serde_json::to_value(data).expect("LSP hover response should encode"),
+                ),
+                Err(error) => CoreResponse::failure(id, error),
+            }
+        }
+        CoreCommand::LspBuiltinSignatureHelp => {
+            match serde_json::from_value::<crate::lsp::BuiltinRequest>(parsed.payload)
+                .map_err(|error| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "Invalid LSP signature help request",
+                    )
+                    .with_details(error.to_string())
+                })
+                .and_then(crate::lsp::builtin_signature_help)
+            {
+                Ok(data) => CoreResponse::success(
+                    id,
+                    serde_json::to_value(data).expect("LSP signature help response should encode"),
                 ),
                 Err(error) => CoreResponse::failure(id, error),
             }

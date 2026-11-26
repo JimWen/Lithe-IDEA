@@ -674,3 +674,180 @@ fn shared_fixture_cases_match_core_outcomes() {
         assert_eq!(outcome, case_value["expected"], "case {name}");
     }
 }
+
+// MARK: Multi-language fold regions
+
+#[test]
+fn fold_regions_handles_go_imports_structs_funcs_and_comments() {
+    let source = concat!(
+        "package main\n",
+        "\n",
+        "import (\n",
+        "\t\"fmt\"\n",
+        "\t\"os\"\n",
+        ")\n",
+        "\n",
+        "// Line 1\n",
+        "// Line 2\n",
+        "// Line 3\n",
+        "type Server struct {\n",
+        "\tAddr string\n",
+        "}\n",
+        "\n",
+        "func (s *Server) Start() {\n",
+        "\traw := `{\n",
+        "\t\tnot a brace block\n",
+        "\t}`\n",
+        "\tfmt.Println(raw, os.Args)\n",
+        "}\n",
+    );
+    let raw = crate::execute_json(
+        &json!({
+            "command": "editor.foldRegions",
+            "payload": {
+                "path": "cmd/server.go",
+                "source": source
+            }
+        })
+        .to_string(),
+    );
+    let parsed: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(parsed["ok"], true);
+    let regions = parsed["data"]["foldRegions"].as_array().unwrap();
+    assert!(regions
+        .iter()
+        .any(|r| r["kind"] == "imports" && r["startLine"] == 2 && r["endLine"] == 5));
+    assert!(regions
+        .iter()
+        .any(|r| r["kind"] == "comment" && r["startLine"] == 7 && r["endLine"] == 9));
+    assert!(regions
+        .iter()
+        .any(|r| r["kind"] == "type" && r["startLine"] == 10 && r["endLine"] == 12));
+    assert!(regions
+        .iter()
+        .any(|r| r["kind"] == "method" && r["startLine"] == 14 && r["endLine"] == 19));
+    // Raw string `{ ... }` must not create a spurious fold region.
+    assert!(!regions.iter().any(|r| r["startLine"] == 15));
+}
+
+#[test]
+fn fold_regions_handles_rust_lifetimes_nested_comments_and_raw_strings() {
+    let source = concat!(
+        "use std::fs;\n",
+        "use std::io;\n",
+        "\n",
+        "/* outer\n",
+        "   /* inner */\n",
+        "   end */\n",
+        "pub struct Holder<'a> {\n",
+        "    data: &'a str,\n",
+        "}\n",
+        "\n",
+        "impl<'a> Holder<'a> {\n",
+        "    pub fn label(&'a self) -> &'static str {\n",
+        "        let _raw = r#\"{\n",
+        "            ignored\n",
+        "        }\"#;\n",
+        "        self.data\n",
+        "    }\n",
+        "}\n",
+    );
+    let response = super::fold_regions(super::EditorFoldRegionsRequest {
+        path: "src/lib.rs".to_string(),
+        source: source.to_string(),
+    });
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "imports" && r.start_line == 0 && r.end_line == 1));
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "comment" && r.start_line == 3 && r.end_line == 5));
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "type" && r.start_line == 6 && r.end_line == 8));
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "type" && r.start_line == 10 && r.end_line == 17));
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "method" && r.start_line == 11 && r.end_line == 16));
+    // Raw string braces must not produce a fold.
+    assert!(!response.fold_regions.iter().any(|r| r.start_line == 12));
+}
+
+#[test]
+fn fold_regions_handles_python_indentation_docstrings_and_imports() {
+    let source = concat!(
+        "import os\n",
+        "import sys\n",
+        "\n",
+        "class Engine:\n",
+        "    \"\"\"Engine doc\n",
+        "    line two\n",
+        "    \"\"\"\n",
+        "    def run(self, x: int) -> int:\n",
+        "        if x > 0:\n",
+        "            return x + 1\n",
+        "        return 0\n",
+        "\n",
+        "def top() -> None:\n",
+        "    pass\n",
+    );
+    let response = super::fold_regions(super::EditorFoldRegionsRequest {
+        path: "engine.py".to_string(),
+        source: source.to_string(),
+    });
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "imports" && r.start_line == 0 && r.end_line == 1));
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "type" && r.start_line == 3 && r.end_line == 10));
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "comment" && r.start_line == 4 && r.end_line == 6));
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "method" && r.start_line == 7 && r.end_line == 10));
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "block" && r.start_line == 8 && r.end_line == 9));
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "method" && r.start_line == 12 && r.end_line == 13));
+}
+
+#[test]
+fn fold_regions_handles_python_multibyte_utf8_docstrings_safely() {
+    let source = concat!(
+        "def run():\n",
+        "    \"\"\"中文文档第一行\n",
+        "    第二行 🚀\n",
+        "    \"\"\"\n",
+        "    x = '''单引号中文'''\n",
+        "    return x\n",
+    );
+    let response = super::fold_regions(super::EditorFoldRegionsRequest {
+        path: "unicode_doc.py".to_string(),
+        source: source.to_string(),
+    });
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "method" && r.start_line == 0 && r.end_line == 5));
+    assert!(response
+        .fold_regions
+        .iter()
+        .any(|r| r.kind == "comment" && r.start_line == 1 && r.end_line == 3));
+}

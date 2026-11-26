@@ -61,6 +61,7 @@ stable error code and a user-facing message:
 | `core.ping` | Verify the ABI and protocol version |
 | `editor.lineEdit` | Apply a deterministic line-level text transform and return the replacement plus selection to restore |
 | `editor.lineCommentToken` | Resolve the line comment token for a file extension or language id |
+| `editor.foldRegions` | Compute deterministic multi-language editor fold regions (Go, Rust, Python, and generic brace languages) |
 | `workspace.snapshot` | Enumerate visible workspace nodes and relative file paths |
 | `workspace.repositories` | Discover deterministic Git repository roots for an opened workspace |
 | `workspace.search` | Search visible file names and UTF-8 text files |
@@ -95,9 +96,10 @@ stable error code and a user-facing message:
 | `debug.destroySession` | Remove a session after the platform closes its native transport |
 | `lsp.applyTextEdits` | Apply LSP UTF-16 text edits with range validation |
 | `lsp.plainSnippet` | Convert LSP snippet insert text into plain editor text |
-| `lsp.builtinCompletions` | Return lightweight current-file identifier completions |
-| `lsp.builtinHover` | Return lightweight current-symbol hover text |
-| `lsp.builtinNavigation` | Return lightweight current-file definition/reference locations |
+| `lsp.builtinCompletions` | Return lightweight local + open-buffer + cached workspace symbol completions |
+| `lsp.builtinHover` | Return lightweight markdown hover with declaration signature, doc comment, and location |
+| `lsp.builtinNavigation` | Return lightweight cross-file ranked definition and trigram-pruned code-only reference locations |
+| `lsp.builtinSignatureHelp` | Return lightweight call-site parameter signature help with UTF-16 parameter offsets and active parameter index |
 | `lsp.startServer` | Start one Rust-owned process/session and begin initialization |
 | `lsp.jdtWorkspaceKey` | Derive the deterministic JDT LS workspace-state directory key |
 | `java.workspacePolicy` | Decide Java workspace activation and classify changed paths |
@@ -800,8 +802,16 @@ still applies.
 
 `workspace.searchEverywhere` uses the same query options and visibility fields,
 and additionally accepts `maxSymbolResults`. Results are ordered as file,
-type, symbol, and content matches. Java type and method results include a
-one-based line, `symbolName`, and the matching source line in `preview`.
+type, symbol, and content matches. Type and symbol results cover Go, Rust,
+Python, Java, JS/TS, and C-family sources and include a one-based line,
+`symbolName`, and the matching source line in `preview`.
+
+`workspace.documentSymbols` accepts `{ "path": string, "source": string }` and
+returns deterministically ordered offline document symbols (`name`, `kind`,
+one-based `line`) extracted by the same language-aware scanner used by
+`workspace.searchEverywhere`. Hosts use it as an instant, zero-process fallback
+for Structure outlines and editor symbol breadcrumbs before an LSP server is
+ready or when a server does not advertise `documentSymbolProvider`.
 
 Case-insensitive literal search and replacement use Unicode simple case
 folding, as provided by the existing Rust regex engine. This includes Kelvin
@@ -903,8 +913,17 @@ dotfiles such as `.env`, or a language id — extensions, dotfile basenames,
 and language ids share one table) and returns `{ "token": "#" }` or
 `{ "token": null }` for file types without a line comment token.
 
-macOS consumes both commands through the native editing pipeline. The
-platform-neutral behavior is pinned by
+`editor.foldRegions` accepts `{ "path": string, "source": string }` and returns
+`{ "foldRegions": [{ "startLine": number, "endLine": number, "kind": "imports" | "type" | "method" | "block" | "comment" }] }`
+using zero-based line numbers. It performs a single-pass O(N) lexical scan for
+Go (`import (...)`, structs/interfaces, functions, comment runs, raw strings),
+Rust (nested `/* /* */ */`, `use` blocks, raw strings, lifetime-safe char
+scanning), Python (indentation stack, UTF-8 safe triple-quoted docstrings,
+import runs, `#` comment runs), and generic brace-delimited languages without
+spawning any external process.
+
+macOS consumes these editor commands through the native editing pipeline. The
+platform-neutral line-edit behavior is pinned by
 `shared/fixtures/editor/line-edit-v1.json`.
 
 The `debug.*` commands are the shared Debug Adapter Protocol boundary. Rust
@@ -1074,15 +1093,40 @@ socket or process alive long enough to flush the frame, then closes it and
 calls `debug.destroySession`. A session allocates no process, socket, timer, or
 background task, and no session exists until Debug is used.
 
-`lsp.builtinCompletions`, `lsp.builtinHover`, and `lsp.builtinNavigation` are
-the no-process lightweight language path. They accept current-file text, an
-absolute `filePath`, and a zero-based LSP position. Completion returns
-current-file identifiers with text edits for the active prefix. Hover returns
-the current identifier as markdown. Navigation returns current-file locations;
-definition prefers declaration-looking occurrences, while references returns
-all matching identifier occurrences. These commands are deliberately
-text-level fallbacks; precise type-aware behavior belongs to a started language
-server.
+`lsp.builtinCompletions`, `lsp.builtinHover`, `lsp.builtinNavigation`, and
+`lsp.builtinSignatureHelp` are the zero-process Lightweight Mode intelligence
+path. Each command accepts current-file `text`, an absolute `filePath`, a
+zero-based UTF-16 LSP `position`, and optional `workspaceRoot` and
+`openBuffers` (`[{ "filePath": string, "text": string }]`) so callers can query
+both unsaved editor buffers and the cached workspace symbol/trigram index
+(`WorkspaceSearchIndex`, non-blocking `try_lock`) without spawning any LSP
+process:
+
+- `lsp.builtinCompletions` ranks nearby local identifiers, unsaved open-buffer
+  symbols, and O(log N) prefix-matched workspace symbols (capped at 80 items)
+  with text edits for the active prefix.
+- `lsp.builtinHover` resolves matching local, open-buffer, or workspace
+  declarations and returns a fenced Markdown signature, preceding doc comment
+  (or Python docstring), and relative `path:line` location; when no declaration
+  matches, it falls back cleanly to a minimal identifier hover.
+- `lsp.builtinNavigation` supports `textDocument/definition` (cross-file ranked
+  definitions with qualifier/package/module affinity and Go receiver method
+  awareness) and `textDocument/references` (trigram-pruned across workspace
+  files, code-only lexical scanning skipping comments and strings, capped at
+  300 locations). `textDocument/implementation` honestly returns an empty
+  location list so callers can offer opt-in Precision LSP escalation instead of
+  fabricating text matches.
+- `lsp.builtinSignatureHelp` locates the enclosing call inside a UTF-8-safe
+  16 KB backward window, tracks nested calls and active comma index, resolves
+  the callee signature across current file / open buffers / cached workspace
+  index (skipping Go receiver parameter lists), and returns normalized
+  `signatures` with UTF-16 `labelStart`/`labelEnd` parameter ranges and
+  `activeParameter`.
+
+These commands remain deterministic lexical/index intelligence rather than a
+full type checker; precise type-checked diagnostics, cross-file safe Rename,
+Formatting, Code Actions, Go to Implementation, semantic tokens, and inlay
+hints belong to opt-in Precision LSP sessions.
 
 The LSP provider catalog is returned by `lithe_core_lsp_provider_catalog_json`.
 Each provider descriptor may include `languageServerLaunch` with ordered
@@ -1106,9 +1150,20 @@ The client initialization request is locked by
 `client_core_initializes_and_applies_server_capabilities`. Its `PACKAGE_VERSION`
 placeholder is replaced with the crate version before comparison. The client
 advertises `textDocument.rename.prepareSupport: true` (with
-`prepareSupportDefaultBehavior: 1`) and `textDocument.codeAction.dataSupport: true`,
-and `lsp.request` supports `prepareRename` (`textDocument/prepareRename`, gated by
-the server's static or dynamic `renameProvider.prepareProvider` capability). The
+`prepareSupportDefaultBehavior: 1`), `textDocument.codeAction.dataSupport: true`,
+`textDocument.signatureHelp` (with `labelOffsetSupport` and
+`activeParameterSupport`), `textDocument.documentHighlight`,
+`textDocument.documentSymbol` (`hierarchicalDocumentSymbolSupport: true`),
+`textDocument.semanticTokens` (full, relative, standard legend), and
+`textDocument.inlayHint`. `lsp.request` supports `prepareRename`
+(`textDocument/prepareRename`, gated by static or dynamic
+`renameProvider.prepareProvider`), `signatureHelp` (`textDocument/signatureHelp`),
+`documentHighlight` (`textDocument/documentHighlight`), `documentSymbols`
+(`textDocument/documentSymbol`, normalizing both hierarchical `DocumentSymbol[]`
+and flat `SymbolInformation[]`), and `semanticTokensFull`
+(`textDocument/semanticTokens/full`, decoding 5-integer LSP deltas against the
+session's registered legend). Normalized completion items additionally carry
+`insertTextFormat` (`1` = plain text, `2` = snippet) and `preselect`. The
 client keeps `workspace.applyEdit: false` until both server-request correlation
 and the host edit transaction are implemented. Existing rename and code-action
 requests remain available; returning edits from those requests does not imply
@@ -1212,9 +1267,11 @@ and virtual-location representation as ordinary navigation.
 `lsp.request` accepts a semantic `operation` plus
 the operation-specific URI, position, range, diagnostics, item, action, or
 command fields, and returns `{ operationId }`. Supported operations include
-completion, hover, definition/declaration/type-definition, references,
-implementation, rename, formatting, code actions and resolve, execute command,
-inlay hints, folding ranges, code lens, and provider virtual documents.
+completion (with `insertTextFormat` and `preselect`), completion resolve, hover,
+definition/declaration/type-definition, references, implementation,
+prepareRename, rename, formatting, code actions and resolve, execute command,
+inlay hints, signature help, document highlight, document symbols,
+semanticTokensFull, folding ranges, code lens, and provider virtual documents.
 The `virtualDocument` operation accepts `{ sessionId, operation,
 virtualUri }` without a document `uri`. Its terminal `requestCompleted` event
 returns `{ text }`, where `text` is the provider-resolved UTF-8 source for the

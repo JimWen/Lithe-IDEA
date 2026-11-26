@@ -5,21 +5,24 @@ use crate::project::files::{
 };
 use crate::project::symbols::extract_symbols;
 use crate::protocol::{CoreError, ErrorCode, SearchMatch};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-/// A workspace-local search index shared by file search, Search Everywhere and
-/// Replace in Files. The postings are file-level on purpose: the final matcher
-/// still reads the current file, so regex, whole-word and unsaved-buffer
-/// semantics remain exact.
+/// A workspace-local search index shared by file search, Search Everywhere,
+/// Replace in Files, and zero-LSP lightweight symbol lookup. The postings are
+/// file-level on purpose: the final matcher still reads the current file, so
+/// regex, whole-word and unsaved-buffer semantics remain exact.
 pub(crate) struct WorkspaceSearchIndex {
     files: Vec<Option<IndexedFile>>,
     free_ids: Vec<u32>,
     path_to_id: HashMap<String, u32>,
     postings: HashMap<u32, Vec<u32>>,
+    /// Lowercased symbol name mapped to `(file_id, symbol_index)` entries for
+    /// O(log N) exact and prefix cross-file lightweight lookup.
+    symbols_by_lower_name: BTreeMap<String, Vec<(u32, u32)>>,
 }
 
 /// Content indexing outcome distinguishing binary assets from short or unreadable files.
@@ -47,12 +50,14 @@ pub(crate) struct IndexedFile {
 }
 
 #[derive(Clone)]
-/// Normalized workspace symbol retained for Search Everywhere results.
+/// Normalized workspace symbol retained for Search Everywhere and lightweight lookup.
 pub(crate) struct IndexedSymbol {
     pub(crate) name: String,
     pub(crate) kind: String,
     pub(crate) line: usize,
+    pub(crate) utf16_column: usize,
     pub(crate) signature: String,
+    pub(crate) doc_comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +126,29 @@ pub(crate) fn get_or_build(root: &Path, rules: &VisibilityRules) -> Result<Share
     let index = Arc::new(RwLock::new(WorkspaceSearchIndex::build(root, rules)?));
     *entry = Some(Arc::clone(&index));
     Ok(index)
+}
+
+pub(crate) fn get_cached(root: &Path) -> Option<SharedIndex> {
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let slots = {
+        let Ok(indexes) = cache().lock() else {
+            return None;
+        };
+        indexes
+            .iter()
+            .filter(|(key, _)| key.root == canonical_root)
+            .map(|(_, slot)| Arc::clone(slot))
+            .collect::<Vec<_>>()
+    };
+    for slot in slots {
+        // Never block lightweight editor interactions on an in-flight disk build.
+        if let Ok(guard) = slot.try_lock() {
+            if let Some(index) = guard.as_ref() {
+                return Some(Arc::clone(index));
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn invalidate_root(root: &Path) {
@@ -215,6 +243,7 @@ impl WorkspaceSearchIndex {
             free_ids: Vec::new(),
             path_to_id: HashMap::with_capacity(paths.len()),
             postings: HashMap::new(),
+            symbols_by_lower_name: BTreeMap::new(),
         };
         for path in paths {
             crate::protocol::cancellation::check()?;
@@ -238,6 +267,14 @@ impl WorkspaceSearchIndex {
             let posting = self.postings.entry(*trigram).or_default();
             if let Err(position) = posting.binary_search(&id) {
                 posting.insert(position, id);
+            }
+        }
+        for (sym_index, symbol) in symbols.iter().enumerate() {
+            if let Ok(sym_idx) = u32::try_from(sym_index) {
+                self.symbols_by_lower_name
+                    .entry(symbol.name.to_ascii_lowercase())
+                    .or_default()
+                    .push((id, sym_idx));
             }
         }
         let file = Some(IndexedFile {
@@ -288,6 +325,15 @@ impl WorkspaceSearchIndex {
                 posting.retain(|value| *value != id);
                 if posting.is_empty() {
                     self.postings.remove(&trigram);
+                }
+            }
+        }
+        for symbol in &file.symbols {
+            let lower = symbol.name.to_ascii_lowercase();
+            if let Some(entries) = self.symbols_by_lower_name.get_mut(&lower) {
+                entries.retain(|(file_id, _)| *file_id != id);
+                if entries.is_empty() {
+                    self.symbols_by_lower_name.remove(&lower);
                 }
             }
         }
@@ -392,6 +438,50 @@ impl WorkspaceSearchIndex {
         self.file(id)
             .map(|file| file.symbols.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Returns `(relative_path, symbol)` entries whose name matches `name` exactly.
+    pub(crate) fn exact_symbols(&self, name: &str) -> Vec<(&str, &IndexedSymbol)> {
+        let lower = name.to_ascii_lowercase();
+        let Some(entries) = self.symbols_by_lower_name.get(&lower) else {
+            return Vec::new();
+        };
+        entries
+            .iter()
+            .filter_map(|&(file_id, sym_idx)| {
+                let file = self.file(file_id)?;
+                let symbol = file.symbols.get(sym_idx as usize)?;
+                (symbol.name == name).then_some((file.path.as_str(), symbol))
+            })
+            .collect()
+    }
+
+    /// Returns up to `limit` `(relative_path, symbol)` entries matching a lowercased prefix.
+    pub(crate) fn prefix_symbols(
+        &self,
+        prefix_lower: &str,
+        limit: usize,
+    ) -> Vec<(&str, &IndexedSymbol)> {
+        if prefix_lower.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let mut results = Vec::new();
+        for (key, entries) in self.symbols_by_lower_name.range(prefix_lower.to_string()..) {
+            if !key.starts_with(prefix_lower) {
+                break;
+            }
+            for &(file_id, sym_idx) in entries {
+                if let Some(file) = self.file(file_id) {
+                    if let Some(symbol) = file.symbols.get(sym_idx as usize) {
+                        results.push((file.path.as_str(), symbol));
+                        if results.len() >= limit {
+                            return results;
+                        }
+                    }
+                }
+            }
+        }
+        results
     }
 
     pub(crate) fn stats(&self) -> SearchIndexStats {
@@ -518,7 +608,9 @@ fn read_search_data(
             name: symbol.name,
             kind: symbol.kind,
             line: symbol.line,
+            utf16_column: symbol.utf16_column,
             signature: symbol.signature,
+            doc_comment: symbol.doc_comment,
         })
         .collect();
     let has_ascii_casefold_non_ascii = text

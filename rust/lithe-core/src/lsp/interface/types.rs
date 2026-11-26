@@ -65,6 +65,102 @@ pub struct LspCodeLensResponse {
     pub data: Option<Value>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// Normalized parameter metadata within an LSP signature help entry.
+pub struct LspParameterInformationResponse {
+    /// Display text for the parameter, resolved from either a string or UTF-16 slice.
+    pub label: String,
+    /// Optional inclusive UTF-16 start offset inside the owning signature label.
+    pub label_start: Option<i64>,
+    /// Optional exclusive UTF-16 end offset inside the owning signature label.
+    pub label_end: Option<i64>,
+    /// Optional parameter documentation rendered as plain text or markdown.
+    pub documentation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// Normalized callable signature returned by `textDocument/signatureHelp`.
+pub struct LspSignatureInformationResponse {
+    /// Full callable signature label provided by the server.
+    pub label: String,
+    /// Optional documentation describing the callable.
+    pub documentation: Option<String>,
+    /// Ordered parameter descriptions for this signature.
+    pub parameters: Vec<LspParameterInformationResponse>,
+    /// Optional signature-local override for the active parameter index.
+    pub active_parameter: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// Normalized response for `textDocument/signatureHelp`.
+pub struct LspSignatureHelpResponse {
+    /// Candidate signatures for the call site.
+    pub signatures: Vec<LspSignatureInformationResponse>,
+    /// Zero-based index of the active signature.
+    pub active_signature: Option<i64>,
+    /// Zero-based index of the active parameter.
+    pub active_parameter: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// Normalized symbol occurrence returned by `textDocument/documentHighlight`.
+pub struct LspDocumentHighlightResponse {
+    /// Document range covered by the highlighted occurrence.
+    pub range: LspRangeResponse,
+    /// Numeric LSP `DocumentHighlightKind` (`1` = text, `2` = read, `3` = write).
+    pub kind: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// Normalized hierarchical symbol node returned by `textDocument/documentSymbol`.
+pub struct LspDocumentSymbolResponse {
+    /// Display name of the symbol.
+    pub name: String,
+    /// Optional signature or type detail supplied by the server.
+    pub detail: Option<String>,
+    /// Numeric LSP `SymbolKind`.
+    pub kind: i64,
+    /// Full enclosing range of the symbol declaration and body.
+    pub range: LspRangeResponse,
+    /// Focused identifier range selected when navigating to the symbol.
+    pub selection_range: LspRangeResponse,
+    /// Nested child symbols in declaration order.
+    pub children: Vec<LspDocumentSymbolResponse>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+/// Legend advertised by a server's `semanticTokensProvider` capability.
+pub struct LspSemanticTokensLegend {
+    /// Ordered semantic token type names indexed by encoded token integers.
+    #[serde(default)]
+    pub token_types: Vec<String>,
+    /// Ordered semantic token modifier names indexed by modifier bit positions.
+    #[serde(default)]
+    pub token_modifiers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// Decoded absolute semantic token emitted from `textDocument/semanticTokens/full`.
+pub struct LspSemanticTokenResponse {
+    /// Zero-based source line number.
+    pub line: i64,
+    /// Zero-based UTF-16 starting column on `line`.
+    pub utf16_column: i64,
+    /// UTF-16 token length on `line`.
+    pub length: i64,
+    /// Resolved semantic token type name from the server legend.
+    pub token_type: String,
+    /// Resolved semantic token modifier names decoded from the modifier bitmask.
+    pub token_modifiers: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 /// Serializable form of an LSP document range.
@@ -128,6 +224,9 @@ pub struct LspClientState {
     pub diagnostics: BTreeMap<String, Vec<LspClientDiagnostic>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub diagnostic_versions: BTreeMap<String, i64>,
+    /// Legend advertised by `semanticTokensProvider` for decoding delta token arrays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_tokens_legend: Option<LspSemanticTokensLegend>,
 }
 
 impl Default for LspClientState {
@@ -142,6 +241,7 @@ impl Default for LspClientState {
             pending_requests: BTreeMap::new(),
             diagnostics: BTreeMap::new(),
             diagnostic_versions: BTreeMap::new(),
+            semantic_tokens_legend: None,
         }
     }
 }

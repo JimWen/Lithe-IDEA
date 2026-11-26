@@ -48,6 +48,8 @@ pub enum CoreCommand {
     WorkspaceSearch,
     /// Searches file paths, contents, and symbols (`workspace.searchEverywhere`).
     WorkspaceSearchEverywhere,
+    /// Extracts deterministic outline symbols from one source buffer (`workspace.documentSymbols`).
+    WorkspaceDocumentSymbols,
     /// Previews replacements without writing files (`workspace.replacePreview`).
     WorkspaceReplacePreview,
     /// Reads one workspace-relative UTF-8 file (`file.read`).
@@ -114,13 +116,17 @@ pub enum CoreCommand {
     /// Resolves the line comment token for a file extension
     /// (`editor.lineCommentToken`).
     EditorLineCommentToken,
+    /// Computes deterministic multi-language fold regions (`editor.foldRegions`).
+    EditorFoldRegions,
     /// Reduces an LSP snippet to insertion text (`lsp.plainSnippet`).
     LspPlainSnippet,
-    /// Provides same-document fallback completions (`lsp.builtinCompletions`).
+    /// Provides lightweight fallback completions (`lsp.builtinCompletions`).
     LspBuiltinCompletions,
-    /// Provides a same-document fallback hover (`lsp.builtinHover`).
+    /// Provides a lightweight fallback hover (`lsp.builtinHover`).
     LspBuiltinHover,
-    /// Provides same-document fallback navigation (`lsp.builtinNavigation`).
+    /// Provides lightweight fallback signature help (`lsp.builtinSignatureHelp`).
+    LspBuiltinSignatureHelp,
+    /// Provides lightweight fallback navigation (`lsp.builtinNavigation`).
     LspBuiltinNavigation,
     /// Starts and initializes a managed language server (`lsp.startServer`).
     LspStartServer,
@@ -283,6 +289,7 @@ impl CoreCommand {
             "workspace.searchIndex.invalidate" => Some(Self::WorkspaceSearchIndexInvalidate),
             "workspace.search" => Some(Self::WorkspaceSearch),
             "workspace.searchEverywhere" => Some(Self::WorkspaceSearchEverywhere),
+            "workspace.documentSymbols" => Some(Self::WorkspaceDocumentSymbols),
             "workspace.replacePreview" => Some(Self::WorkspaceReplacePreview),
             "file.read" => Some(Self::FileRead),
             "file.write" => Some(Self::FileWrite),
@@ -315,9 +322,11 @@ impl CoreCommand {
             "lsp.applyTextEdits" => Some(Self::LspApplyTextEdits),
             "editor.lineEdit" => Some(Self::EditorLineEdit),
             "editor.lineCommentToken" => Some(Self::EditorLineCommentToken),
+            "editor.foldRegions" => Some(Self::EditorFoldRegions),
             "lsp.plainSnippet" => Some(Self::LspPlainSnippet),
             "lsp.builtinCompletions" => Some(Self::LspBuiltinCompletions),
             "lsp.builtinHover" => Some(Self::LspBuiltinHover),
+            "lsp.builtinSignatureHelp" => Some(Self::LspBuiltinSignatureHelp),
             "lsp.builtinNavigation" => Some(Self::LspBuiltinNavigation),
             "lsp.startServer" => Some(Self::LspStartServer),
             "lsp.jdtWorkspaceKey" => Some(Self::LspJdtWorkspaceKey),

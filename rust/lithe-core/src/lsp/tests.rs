@@ -336,6 +336,8 @@ fn builtin_completion_returns_current_file_identifiers_for_prefix() {
             line: 1,
             utf16_column: 19,
         },
+        workspace_root: None,
+        open_buffers: None,
     })
     .unwrap();
 
@@ -353,18 +355,34 @@ fn builtin_completion_returns_current_file_identifiers_for_prefix() {
 fn builtin_hover_returns_current_identifier_range() {
     let response = builtin_hover(BuiltinRequest {
         file_path: "/tmp/main.rs".to_string(),
-        text: "fn launch() {}\n".to_string(),
+        text: "/// Launches the rocket.\nfn launch() {}\n".to_string(),
         position: LspPosition {
-            line: 0,
+            line: 1,
             utf16_column: 4,
         },
+        workspace_root: None,
+        open_buffers: None,
     })
     .unwrap();
 
     let hover = response.hover.unwrap();
-    assert_eq!(hover.contents, "`launch`");
+    assert!(hover.contents.contains("```rust\nfn launch() {}\n```"));
+    assert!(hover.contents.contains("Launches the rocket."));
     assert_eq!(hover.range.start.utf16_column, 3);
     assert_eq!(hover.range.end.utf16_column, 9);
+
+    let fallback = builtin_hover(BuiltinRequest {
+        file_path: "/tmp/main.rs".to_string(),
+        text: "unknownSymbol\n".to_string(),
+        position: LspPosition {
+            line: 0,
+            utf16_column: 3,
+        },
+        workspace_root: None,
+        open_buffers: None,
+    })
+    .unwrap();
+    assert_eq!(fallback.hover.unwrap().contents, "`unknownSymbol`");
 }
 
 #[test]
@@ -378,6 +396,8 @@ fn builtin_navigation_prefers_declarations_and_finds_references() {
             utf16_column: 8,
         },
         method: "textDocument/definition".to_string(),
+        workspace_root: None,
+        open_buffers: None,
     })
     .unwrap();
     assert_eq!(definitions.locations.len(), 1);
@@ -392,6 +412,8 @@ fn builtin_navigation_prefers_declarations_and_finds_references() {
             utf16_column: 8,
         },
         method: "textDocument/references".to_string(),
+        workspace_root: None,
+        open_buffers: None,
     })
     .unwrap();
     assert_eq!(references.locations.len(), 2);
@@ -2533,4 +2555,728 @@ fn prepare_rename_capability_and_result_shapes_are_normalized() {
         .server_capabilities
         .iter()
         .any(|c| c == "prepareRename"));
+}
+
+#[test]
+fn client_normalizes_p1a_signature_highlight_symbol_semantic_tokens_and_completion_fields() {
+    let initialized = client_initialize(ClientInitializeRequest {
+        state: LspClientState::default(),
+        root_uri: "file:///tmp/project".to_string(),
+        process_id: Some(7),
+        initialization_options: None,
+    })
+    .unwrap();
+
+    let applied = client_apply_server_message(ClientApplyServerMessageRequest {
+        state: initialized.state,
+        message: json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {
+                "capabilities": {
+                    "completionProvider": { "resolveProvider": true },
+                    "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
+                    "documentHighlightProvider": true,
+                    "documentSymbolProvider": true,
+                    "semanticTokensProvider": {
+                        "full": true,
+                        "legend": {
+                            "tokenTypes": ["type", "function", "parameter", "variable"],
+                            "tokenModifiers": ["declaration", "readonly"]
+                        }
+                    }
+                }
+            }
+        })
+        .to_string(),
+    })
+    .unwrap();
+    let mut state = applied.state;
+    for cap in [
+        "signatureHelp",
+        "documentHighlight",
+        "documentSymbol",
+        "semanticTokens",
+    ] {
+        assert!(
+            state.server_capabilities.iter().any(|c| c == cap),
+            "missing capability {cap}"
+        );
+    }
+
+    let opened = client_open_document(ClientOpenDocumentRequest {
+        state,
+        uri: "file:///tmp/project/main.go".to_string(),
+        language_id: "go".to_string(),
+        text: "package main\nfunc add(a int, b int) int { return a + b }\n".to_string(),
+    })
+    .unwrap();
+    state = opened.state;
+
+    // 1. SignatureHelp with both string label and UTF-16 offset tuple label.
+    let sig_req = client_feature_request_canonical(ClientFeatureRequest {
+        state,
+        uri: "file:///tmp/project/main.go".to_string(),
+        method: "textDocument/signatureHelp".to_string(),
+        position: Some(LspPosition {
+            line: 1,
+            utf16_column: 12,
+        }),
+        new_name: None,
+        range: None,
+        diagnostics: Vec::new(),
+        completion_item: None,
+        code_action: None,
+        command: None,
+    })
+    .unwrap();
+    let sig_id = serde_json::from_str::<Value>(&sig_req.messages[0]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let sig_resp = client_apply_server_message(ClientApplyServerMessageRequest {
+        state: sig_req.state,
+        message: json!({
+            "jsonrpc": "2.0",
+            "id": sig_id,
+            "result": {
+                "activeSignature": 0,
+                "activeParameter": 1,
+                "signatures": [{
+                    "label": "add(a int, b int) int",
+                    "documentation": { "kind": "markdown", "value": "Adds two ints." },
+                    "parameters": [
+                        { "label": [4, 9], "documentation": "first" },
+                        { "label": "b int", "documentation": { "kind": "plaintext", "value": "second" } }
+                    ]
+                }]
+            }
+        })
+        .to_string(),
+    })
+    .unwrap();
+    state = sig_resp.state;
+    let sig_value = &sig_resp.events[0].result.as_ref().unwrap()["signatureHelp"];
+    assert_eq!(sig_value["activeParameter"], 1);
+    assert_eq!(
+        sig_value["signatures"][0]["parameters"][0]["label"],
+        "a int"
+    );
+    assert_eq!(sig_value["signatures"][0]["parameters"][0]["labelStart"], 4);
+    assert_eq!(sig_value["signatures"][0]["parameters"][0]["labelEnd"], 9);
+    assert_eq!(
+        sig_value["signatures"][0]["parameters"][1]["label"],
+        "b int"
+    );
+
+    // 2. DocumentHighlight (read + write + omitted kind defaulting to text=1).
+    let hl_req = client_feature_request_canonical(ClientFeatureRequest {
+        state,
+        uri: "file:///tmp/project/main.go".to_string(),
+        method: "textDocument/documentHighlight".to_string(),
+        position: Some(LspPosition {
+            line: 1,
+            utf16_column: 9,
+        }),
+        new_name: None,
+        range: None,
+        diagnostics: Vec::new(),
+        completion_item: None,
+        code_action: None,
+        command: None,
+    })
+    .unwrap();
+    let hl_id = serde_json::from_str::<Value>(&hl_req.messages[0]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let hl_resp = client_apply_server_message(ClientApplyServerMessageRequest {
+        state: hl_req.state,
+        message: json!({
+            "jsonrpc": "2.0",
+            "id": hl_id,
+            "result": [
+                { "range": { "start": { "line": 1, "character": 9 }, "end": { "line": 1, "character": 10 } }, "kind": 3 },
+                { "range": { "start": { "line": 1, "character": 37 }, "end": { "line": 1, "character": 38 } } }
+            ]
+        })
+        .to_string(),
+    })
+    .unwrap();
+    state = hl_resp.state;
+    let highlights = hl_resp.events[0].result.as_ref().unwrap()["highlights"]
+        .as_array()
+        .unwrap();
+    assert_eq!(highlights.len(), 2);
+    assert_eq!(highlights[0]["kind"], 3);
+    assert_eq!(highlights[1]["kind"], 1);
+
+    // 3. DocumentSymbol (hierarchical + flat SymbolInformation).
+    let sym_req = client_feature_request_canonical(ClientFeatureRequest {
+        state,
+        uri: "file:///tmp/project/main.go".to_string(),
+        method: "textDocument/documentSymbol".to_string(),
+        position: None,
+        new_name: None,
+        range: None,
+        diagnostics: Vec::new(),
+        completion_item: None,
+        code_action: None,
+        command: None,
+    })
+    .unwrap();
+    let sym_id = serde_json::from_str::<Value>(&sym_req.messages[0]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let sym_resp = client_apply_server_message(ClientApplyServerMessageRequest {
+        state: sym_req.state,
+        message: json!({
+            "jsonrpc": "2.0",
+            "id": sym_id,
+            "result": [
+                {
+                    "name": "Server",
+                    "detail": "struct",
+                    "kind": 23,
+                    "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 4, "character": 1 } },
+                    "selectionRange": { "start": { "line": 0, "character": 5 }, "end": { "line": 0, "character": 11 } },
+                    "children": [{
+                        "name": "Serve",
+                        "kind": 6,
+                        "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 3, "character": 1 } },
+                        "selectionRange": { "start": { "line": 1, "character": 5 }, "end": { "line": 1, "character": 10 } }
+                    }]
+                },
+                {
+                    "name": "legacyHelper",
+                    "kind": 12,
+                    "containerName": "pkg",
+                    "location": {
+                        "uri": "file:///tmp/project/main.go",
+                        "range": { "start": { "line": 5, "character": 0 }, "end": { "line": 5, "character": 12 } }
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    })
+    .unwrap();
+    state = sym_resp.state;
+    let symbols = sym_resp.events[0].result.as_ref().unwrap()["symbols"]
+        .as_array()
+        .unwrap();
+    assert_eq!(symbols.len(), 2);
+    assert_eq!(symbols[0]["name"], "Server");
+    assert_eq!(symbols[0]["children"][0]["name"], "Serve");
+    assert_eq!(symbols[1]["name"], "legacyHelper");
+    assert_eq!(symbols[1]["detail"], "pkg");
+
+    // 4. SemanticTokens delta decoding across lines and same-line tokens + modifiers bitmask.
+    let tok_req = client_feature_request_canonical(ClientFeatureRequest {
+        state,
+        uri: "file:///tmp/project/main.go".to_string(),
+        method: "textDocument/semanticTokens/full".to_string(),
+        position: None,
+        new_name: None,
+        range: None,
+        diagnostics: Vec::new(),
+        completion_item: None,
+        code_action: None,
+        command: None,
+    })
+    .unwrap();
+    let tok_id = serde_json::from_str::<Value>(&tok_req.messages[0]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let tok_resp = client_apply_server_message(ClientApplyServerMessageRequest {
+        state: tok_req.state,
+        message: json!({
+            "jsonrpc": "2.0",
+            "id": tok_id,
+            "result": {
+                // Token 0: line 1, col 5, len 3, type=1(function), mods=1(declaration)
+                // Token 1: same line 1, col 5+4=9, len 1, type=2(parameter), mods=0
+                // Token 2: line 1+1=2, col 2, len 4, type=3(variable), mods=3(declaration+readonly)
+                "data": [1, 5, 3, 1, 1, 0, 4, 1, 2, 0, 1, 2, 4, 3, 3]
+            }
+        })
+        .to_string(),
+    })
+    .unwrap();
+    state = tok_resp.state;
+    let tokens = tok_resp.events[0].result.as_ref().unwrap()["tokens"]
+        .as_array()
+        .unwrap();
+    assert_eq!(tokens.len(), 3);
+    assert_eq!(tokens[0]["line"], 1);
+    assert_eq!(tokens[0]["utf16Column"], 5);
+    assert_eq!(tokens[0]["tokenType"], "function");
+    assert_eq!(tokens[0]["tokenModifiers"], json!(["declaration"]));
+    assert_eq!(tokens[1]["line"], 1);
+    assert_eq!(tokens[1]["utf16Column"], 9);
+    assert_eq!(tokens[1]["tokenType"], "parameter");
+    assert_eq!(tokens[2]["line"], 2);
+    assert_eq!(tokens[2]["utf16Column"], 2);
+    assert_eq!(
+        tokens[2]["tokenModifiers"],
+        json!(["declaration", "readonly"])
+    );
+
+    // 5. Completion items preserve insertTextFormat and preselect.
+    let comp_req = client_feature_request_canonical(ClientFeatureRequest {
+        state,
+        uri: "file:///tmp/project/main.go".to_string(),
+        method: "textDocument/completion".to_string(),
+        position: Some(LspPosition {
+            line: 1,
+            utf16_column: 5,
+        }),
+        new_name: None,
+        range: None,
+        diagnostics: Vec::new(),
+        completion_item: None,
+        code_action: None,
+        command: None,
+    })
+    .unwrap();
+    let comp_id = serde_json::from_str::<Value>(&comp_req.messages[0]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let comp_resp = client_apply_server_message(ClientApplyServerMessageRequest {
+        state: comp_req.state,
+        message: json!({
+            "jsonrpc": "2.0",
+            "id": comp_id,
+            "result": {
+                "isIncomplete": false,
+                "items": [{
+                    "label": "Println",
+                    "insertText": "Println(${1:a})",
+                    "insertTextFormat": 2,
+                    "preselect": true
+                }]
+            }
+        })
+        .to_string(),
+    })
+    .unwrap();
+    let comp_items = comp_resp.events[0].result.as_ref().unwrap()["items"]
+        .as_array()
+        .unwrap();
+    assert_eq!(comp_items[0]["insertTextFormat"], 2);
+    assert_eq!(comp_items[0]["preselect"], true);
+
+    // 6. Dynamic unregistration clears semanticTokens capability and legend.
+    let unreg = client_apply_server_message(ClientApplyServerMessageRequest {
+        state: comp_resp.state,
+        message: json!({
+            "jsonrpc": "2.0",
+            "id": "srv-unreg",
+            "method": "client/unregisterCapability",
+            "params": {
+                "unregisterations": [{ "id": "st-1", "method": "textDocument/semanticTokens/full" }]
+            }
+        })
+        .to_string(),
+    })
+    .unwrap();
+    assert!(!unreg
+        .state
+        .server_capabilities
+        .iter()
+        .any(|c| c == "semanticTokens"));
+    assert!(unreg.state.semantic_tokens_legend.is_none());
+
+    // 7. Offline workspace.documentSymbols command works for Go, Rust, Python.
+    let doc_syms_raw = crate::execute_json(
+        &json!({
+            "command": "workspace.documentSymbols",
+            "payload": {
+                "path": "src/main.rs",
+                "source": "pub struct Config {}\npub fn run() {}\n"
+            }
+        })
+        .to_string(),
+    );
+    let doc_syms: Value = serde_json::from_str(&doc_syms_raw).unwrap();
+    assert_eq!(doc_syms["ok"], true);
+    let offline_symbols = doc_syms["data"]["symbols"].as_array().unwrap();
+    assert_eq!(offline_symbols.len(), 2);
+    assert_eq!(offline_symbols[0]["name"], "Config");
+    assert_eq!(offline_symbols[0]["kind"], "type");
+    assert_eq!(offline_symbols[1]["name"], "run");
+    assert_eq!(offline_symbols[1]["kind"], "symbol");
+}
+
+#[test]
+fn lightweight_cross_file_go_rust_python_navigation_hover_signature_and_completions() {
+    let root = temporary_root("lightweight-cross-file");
+    let pkg_dir = root.join("billing");
+    let other_dir = root.join("other");
+    fs::create_dir_all(&pkg_dir).unwrap();
+    fs::create_dir_all(&other_dir).unwrap();
+
+    let go_svc = pkg_dir.join("service.go");
+    fs::write(
+        &go_svc,
+        concat!(
+            "package billing\n",
+            "\n",
+            "// CalculateTotal computes invoice totals.\n",
+            "func (s *Service) CalculateTotal(amount int, tax float64) float64 {\n",
+            "    return float64(amount) * tax\n",
+            "}\n",
+            "\n",
+            "const DefaultTaxRate = 1.08\n",
+        ),
+    )
+    .unwrap();
+
+    let go_other = other_dir.join("dup.go");
+    fs::write(
+        &go_other,
+        "package other\nfunc CalculateTotal(x int) int { return x }\n",
+    )
+    .unwrap();
+
+    let go_main = root.join("main.go");
+    let go_main_text = concat!(
+        "package main\n",
+        "\n",
+        "func run(s *Service) {\n",
+        "    // CalculateTotal mentioned in comment must not count as a reference\n",
+        "    msg := \"CalculateTotal in string\"\n",
+        "    _ = msg\n",
+        "    _ = billing.CalculateTotal(10, DefaultTaxRate)\n",
+        "}\n",
+    );
+    fs::write(&go_main, go_main_text).unwrap();
+
+    let py_helper = root.join("helpers.py");
+    fs::write(
+        &py_helper,
+        concat!(
+            "def compute_score(items: list[int], scale: float = 1.0) -> float:\n",
+            "    \"\"\"Return weighted total score.\"\"\"\n",
+            "    return sum(items) * scale\n",
+        ),
+    )
+    .unwrap();
+
+    // Warm the cached WorkspaceSearchIndex so cross-file O(log N) lookups and trigram pruning activate.
+    let warm_raw = crate::execute_json(
+        &json!({
+            "command": "workspace.searchIndex.warm",
+            "payload": { "root": root.to_string_lossy() }
+        })
+        .to_string(),
+    );
+    let warm: Value = serde_json::from_str(&warm_raw).unwrap();
+    assert_eq!(warm["ok"], true);
+
+    // 1. Go cross-file definition with qualifier (`billing.CalculateTotal`) prefers `billing/service.go`
+    // and lands on `CalculateTotal` (past the receiver `(s *Service)`).
+    let defs = builtin_navigation(BuiltinNavigationRequest {
+        file_path: go_main.to_string_lossy().to_string(),
+        text: go_main_text.to_string(),
+        position: LspPosition {
+            line: 6,
+            utf16_column: 20,
+        },
+        method: "textDocument/definition".to_string(),
+        workspace_root: Some(root.to_string_lossy().to_string()),
+        open_buffers: None,
+    })
+    .unwrap();
+    assert!(!defs.locations.is_empty());
+    assert_eq!(
+        defs.locations[0].display_path.as_deref(),
+        Some("billing/service.go")
+    );
+    assert_eq!(defs.locations[0].range.start.line, 3);
+    assert_eq!(defs.locations[0].range.start.utf16_column, 18);
+
+    // 2. `textDocument/implementation` stays honestly empty in Lightweight Mode.
+    let impls = builtin_navigation(BuiltinNavigationRequest {
+        file_path: go_main.to_string_lossy().to_string(),
+        text: go_main_text.to_string(),
+        position: LspPosition {
+            line: 6,
+            utf16_column: 20,
+        },
+        method: "textDocument/implementation".to_string(),
+        workspace_root: Some(root.to_string_lossy().to_string()),
+        open_buffers: None,
+    })
+    .unwrap();
+    assert!(impls.locations.is_empty());
+
+    // 3. Cross-file references use trigram pruning and skip comment & string occurrences.
+    let refs = builtin_navigation(BuiltinNavigationRequest {
+        file_path: go_main.to_string_lossy().to_string(),
+        text: go_main_text.to_string(),
+        position: LspPosition {
+            line: 6,
+            utf16_column: 20,
+        },
+        method: "textDocument/references".to_string(),
+        workspace_root: Some(root.to_string_lossy().to_string()),
+        open_buffers: None,
+    })
+    .unwrap();
+    assert_eq!(refs.locations.len(), 3); // main.go:7, billing/service.go:4, other/dup.go:2
+    assert!(!refs
+        .locations
+        .iter()
+        .any(|loc| loc.file_path.ends_with("main.go")
+            && (loc.range.start.line == 3 || loc.range.start.line == 4)));
+
+    // 4. Cross-file hover includes fenced Go signature, doc comment, and relative path:line.
+    let hover = builtin_hover(BuiltinRequest {
+        file_path: go_main.to_string_lossy().to_string(),
+        text: go_main_text.to_string(),
+        position: LspPosition {
+            line: 6,
+            utf16_column: 20,
+        },
+        workspace_root: Some(root.to_string_lossy().to_string()),
+        open_buffers: None,
+    })
+    .unwrap()
+    .hover
+    .expect("hover should resolve cross-file Go method");
+    assert!(hover
+        .contents
+        .contains("```go\nfunc (s *Service) CalculateTotal(amount int, tax float64) float64"));
+    assert!(hover
+        .contents
+        .contains("CalculateTotal computes invoice totals."));
+    assert!(hover.contents.contains("billing/service.go:4"));
+
+    // 5. Cross-file signature help via `lsp.builtinSignatureHelp` highlights 2nd param after comma
+    // and skips the Go receiver `(s *Service)`.
+    let sig_raw = crate::execute_json(
+        &json!({
+            "command": "lsp.builtinSignatureHelp",
+            "payload": {
+                "filePath": go_main.to_string_lossy(),
+                "text": go_main_text,
+                "position": { "line": 6, "utf16Column": 38 },
+                "workspaceRoot": root.to_string_lossy()
+            }
+        })
+        .to_string(),
+    );
+    let sig_json: Value = serde_json::from_str(&sig_raw).unwrap();
+    assert_eq!(sig_json["ok"], true);
+    assert_eq!(sig_json["data"]["activeParameter"], 1);
+    let params = sig_json["data"]["signatures"][0]["parameters"]
+        .as_array()
+        .unwrap();
+    assert_eq!(params.len(), 2);
+    assert_eq!(params[0]["label"], "amount int");
+    assert_eq!(params[1]["label"], "tax float64");
+    let sig_label = sig_json["data"]["signatures"][0]["label"].as_str().unwrap();
+    let p1_start = params[1]["labelStart"].as_u64().unwrap() as usize;
+    let p1_end = params[1]["labelEnd"].as_u64().unwrap() as usize;
+    assert_eq!(&sig_label[p1_start..p1_end], "tax float64");
+
+    // 6. Cross-file completions surface workspace symbols, skip comment words, and match case-insensitively.
+    let comp = builtin_completions(BuiltinRequest {
+        file_path: go_main.to_string_lossy().to_string(),
+        text: "package main\n// secretCommentWord\nfunc f() { calc }\n".to_string(),
+        position: LspPosition {
+            line: 2,
+            utf16_column: 15,
+        },
+        workspace_root: Some(root.to_string_lossy().to_string()),
+        open_buffers: None,
+    })
+    .unwrap();
+    assert!(comp.items.iter().any(|item| item.label == "CalculateTotal"));
+    assert!(!comp
+        .items
+        .iter()
+        .any(|item| item.label == "secretCommentWord"));
+
+    // 7. Python cross-file hover extracts docstring & signature help tracks active parameter inside nested calls.
+    let py_caller = root.join("app.py");
+    let py_caller_text = "result = compute_score(list(range(3)), 2.5)\n";
+    let py_hover = builtin_hover(BuiltinRequest {
+        file_path: py_caller.to_string_lossy().to_string(),
+        text: py_caller_text.to_string(),
+        position: LspPosition {
+            line: 0,
+            utf16_column: 12,
+        },
+        workspace_root: Some(root.to_string_lossy().to_string()),
+        open_buffers: None,
+    })
+    .unwrap()
+    .hover
+    .expect("hover should resolve Python docstring");
+    assert!(py_hover.contents.contains("Return weighted total score."));
+
+    let py_sig = builtin_signature_help(BuiltinRequest {
+        file_path: py_caller.to_string_lossy().to_string(),
+        text: py_caller_text.to_string(),
+        position: LspPosition {
+            line: 0,
+            utf16_column: 40,
+        },
+        workspace_root: Some(root.to_string_lossy().to_string()),
+        open_buffers: None,
+    })
+    .unwrap();
+    assert_eq!(py_sig.active_parameter, Some(1));
+    assert_eq!(py_sig.signatures[0].parameters.len(), 2);
+    assert_eq!(
+        py_sig.signatures[0].parameters[1].label,
+        "scale: float = 1.0"
+    );
+
+    // Clean up cached search index and temp root.
+    let _ = crate::execute_json(
+        &json!({
+            "command": "workspace.searchIndex.invalidate",
+            "payload": { "root": root.to_string_lossy() }
+        })
+        .to_string(),
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn lightweight_unicode_python_docstrings_and_large_multibyte_signature_help_never_panic() {
+    // Regression for P1: Python triple-quoted strings containing multibyte UTF-8 text.
+    let py_source = concat!(
+        "def greet(name: str, count: int) -> str:\n",
+        "    \"\"\"中文文档说明 🚀\"\"\"\n",
+        "    note = '''多字节单引号'''\n",
+        "    return f\"{name}:{count}:{note}\"\n",
+        "\n",
+        "result = greet(\"世界\", 2)\n",
+    );
+    let symbols_raw = crate::execute_json(
+        &json!({
+            "command": "workspace.documentSymbols",
+            "payload": { "path": "demo.py", "source": py_source }
+        })
+        .to_string(),
+    );
+    let symbols_json: Value = serde_json::from_str(&symbols_raw).unwrap();
+    assert_eq!(symbols_json["ok"], true);
+    assert!(symbols_json["data"]["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["name"] == "greet"));
+
+    let py_hover = builtin_hover(BuiltinRequest {
+        file_path: "/tmp/demo.py".to_string(),
+        text: py_source.to_string(),
+        position: LspPosition {
+            line: 5,
+            utf16_column: 11,
+        },
+        workspace_root: None,
+        open_buffers: None,
+    })
+    .unwrap();
+    assert!(py_hover.hover.unwrap().contents.contains("中文文档说明"));
+
+    let py_sig = builtin_signature_help(BuiltinRequest {
+        file_path: "/tmp/demo.py".to_string(),
+        text: py_source.to_string(),
+        position: LspPosition {
+            line: 5,
+            utf16_column: 22,
+        },
+        workspace_root: None,
+        open_buffers: None,
+    })
+    .unwrap();
+    assert_eq!(py_sig.active_parameter, Some(1));
+
+    let py_comp = builtin_completions(BuiltinRequest {
+        file_path: "/tmp/demo.py".to_string(),
+        text: py_source.to_string(),
+        position: LspPosition {
+            line: 5,
+            utf16_column: 12,
+        },
+        workspace_root: None,
+        open_buffers: None,
+    })
+    .unwrap();
+    assert!(!py_comp.items.is_empty());
+
+    // Regression for P1: cursor > 16,384 bytes after dense multibyte UTF-8 characters
+    // must align the signature-help scan window to a UTF-8 boundary without panicking.
+    let mut go_large = String::from("package main\nfunc foo(a int, b string) {}\n// ");
+    for _ in 0..6_000 {
+        go_large.push('中');
+    }
+    go_large.push_str("\nfunc main() { foo(1, \"x\") }\n");
+    let target_line = go_large.lines().count() as i64 - 1;
+    let go_sig = builtin_signature_help(BuiltinRequest {
+        file_path: "/tmp/large_utf8.go".to_string(),
+        text: go_large,
+        position: LspPosition {
+            line: target_line,
+            utf16_column: 22,
+        },
+        workspace_root: None,
+        open_buffers: None,
+    })
+    .unwrap();
+    assert_eq!(go_sig.active_parameter, Some(1));
+    assert_eq!(go_sig.signatures[0].parameters.len(), 2);
+}
+
+#[test]
+fn lightweight_hover_utf8_word_boundary_and_linear_large_file() {
+    // Regression for P1: non-whole-word multibyte identifier matches must advance along
+    // UTF-8 character boundaries instead of `abs + 1`.
+    let py_utf8 = "变量x = 1\nprint(变量)\n";
+    let hover = builtin_hover(BuiltinRequest {
+        file_path: "/tmp/utf8_vars.py".to_string(),
+        text: py_utf8.to_string(),
+        position: LspPosition {
+            line: 1,
+            utf16_column: 7,
+        },
+        workspace_root: None,
+        open_buffers: None,
+    })
+    .unwrap();
+    assert!(hover.hover.unwrap().contents.contains("变量"));
+
+    // Regression for P2: repeated identifier occurrences without a local declaration must scan
+    // in O(N) time rather than recomputing prefix line offsets quadratically.
+    let mut repeated = String::with_capacity(110_000);
+    for _ in 0..10_000 {
+        repeated.push_str("print(foo)\n");
+    }
+    let started = std::time::Instant::now();
+    let large_hover = builtin_hover(BuiltinRequest {
+        file_path: "/tmp/large_hover.py".to_string(),
+        text: repeated,
+        position: LspPosition {
+            line: 9_999,
+            utf16_column: 7,
+        },
+        workspace_root: None,
+        open_buffers: None,
+    })
+    .unwrap();
+    assert!(large_hover.hover.unwrap().contents.contains("foo"));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "hover lookup exceeded linear-time budget: {:?}",
+        started.elapsed()
+    );
 }

@@ -264,6 +264,14 @@ pub enum LspSemanticOperation {
     ExecuteCommand,
     /// `textDocument/inlayHint`.
     InlayHints,
+    /// `textDocument/signatureHelp`.
+    SignatureHelp,
+    /// `textDocument/documentHighlight`.
+    DocumentHighlight,
+    /// `textDocument/documentSymbol`.
+    DocumentSymbols,
+    /// `textDocument/semanticTokens/full`.
+    SemanticTokensFull,
     /// `textDocument/foldingRange`.
     FoldingRanges,
     /// `textDocument/codeLens`.
@@ -2719,6 +2727,10 @@ fn semantic_method(operation: LspSemanticOperation) -> &'static str {
             "workspace/executeCommand"
         }
         LspSemanticOperation::InlayHints => "textDocument/inlayHint",
+        LspSemanticOperation::SignatureHelp => "textDocument/signatureHelp",
+        LspSemanticOperation::DocumentHighlight => "textDocument/documentHighlight",
+        LspSemanticOperation::DocumentSymbols => "textDocument/documentSymbol",
+        LspSemanticOperation::SemanticTokensFull => "textDocument/semanticTokens/full",
         LspSemanticOperation::FoldingRanges => "textDocument/foldingRange",
         LspSemanticOperation::CodeLens => "textDocument/codeLens",
     }
@@ -2744,6 +2756,10 @@ fn semantic_capability(operation: LspSemanticOperation) -> Option<&'static str> 
             Some("executeCommand")
         }
         LspSemanticOperation::InlayHints => Some("inlayHints"),
+        LspSemanticOperation::SignatureHelp => Some("signatureHelp"),
+        LspSemanticOperation::DocumentHighlight => Some("documentHighlight"),
+        LspSemanticOperation::DocumentSymbols => Some("documentSymbol"),
+        LspSemanticOperation::SemanticTokensFull => Some("semanticTokens"),
         LspSemanticOperation::FoldingRanges => Some("foldingRanges"),
         LspSemanticOperation::CodeLens => Some("codeLens"),
     }
