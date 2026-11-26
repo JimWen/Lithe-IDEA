@@ -199,7 +199,7 @@ struct SettingsView: View {
         case .python:
             ["Python", "Interpreter", "Virtual environment", "venv", "site-packages", "PYTHONPATH", "pyproject.toml", "requirements.txt", "basedpyright", "Language server", "External Libraries"]
         case .ai:
-            ["AI & Commit", "AI provider", "Model", "API key", "Commit message"]
+            ["AI & Commit", "AI Agent", "Codex", "Claude", "Worktree", "Permission", "Supervised", "Plan", "AI provider", "Model", "API key", "Commit message"]
         case .git:
             ["Git", "Fetch", "Tags", "Submodules", "Prune", "Commit identity", "Committer name", "Committer email", "Configuration scope", "user.name", "user.email"]
         case .updates:
@@ -617,6 +617,7 @@ struct SettingsView: View {
 
     private var aiSettings: some View {
         VStack(alignment: .leading, spacing: 12) {
+            AIAgentSettingsSectionView(settings: settings)
             group("AI provider") {
                 if settings.commitMessageAI.providers.isEmpty {
                     Text("No AI provider is configured yet.")

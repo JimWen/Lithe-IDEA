@@ -1,4 +1,5 @@
 import Foundation
+import LitheAIAgentModule
 import LitheAIAssistanceModule
 import LitheApplicationKernel
 import LitheCoreContracts
@@ -159,12 +160,35 @@ final class MacServiceContainer {
                 + bundledLanguageManifests
                 + pluginStartup.activeNativeManifests
         )
+        let runtimeService = ProjectRuntimeService(
+            runtimeLocator: MacRuntimeLocator(),
+            store: store,
+            toolDiscovery: MacRuntimeToolDiscovery(),
+            fileStorage: fileStorage
+        )
+        let aiAgentCLIResolver = MacAIAgentCLIResolver(
+            runtimeService: runtimeService,
+            processRunner: processRunner
+        )
+        let aiAgentThreadStore = MacAIAgentThreadStore(fileStorage: fileStorage)
         do {
             try moduleRegistry.register(ModuleFactory(manifest: WorkspaceFoundationModule.moduleManifest) {
                 WorkspaceFoundationModule(makeGraph: {
                     let owner = WorkspaceModuleResourceOwner()
                     return owner
                 })
+            })
+            try moduleRegistry.register(ModuleFactory(
+                manifest: AIAgentModule.moduleManifest,
+                contributions: AIAgentModule.moduleContributions
+            ) {
+                AIAgentModule(
+                    processFactory: MacAIAgentProcessSessionFactory(processRegistry: processRegistry),
+                    cliResolver: aiAgentCLIResolver,
+                    streamingTransportFactory: { MacURLSessionTransport() },
+                    credentialResolver: credentialResolver,
+                    threadStore: aiAgentThreadStore
+                )
             })
             try moduleRegistry.register(ModuleFactory(
                 manifest: AIAssistanceModule.moduleManifest,
@@ -197,12 +221,6 @@ final class MacServiceContainer {
         } catch {
             preconditionFailure("Invalid built-in module graph: \(error.localizedDescription)")
         }
-        let runtimeService = ProjectRuntimeService(
-            runtimeLocator: MacRuntimeLocator(),
-            store: store,
-            toolDiscovery: MacRuntimeToolDiscovery(),
-            fileStorage: fileStorage
-        )
         let rustLanguageProviderCatalogSource = RustLanguageProviderCatalogSource(core: rustCore)
         // Installation owns the process-backed language boundary even when a
         // package is disabled, quarantined, or failed to load. Only the active
@@ -582,6 +600,11 @@ final class MacServiceContainer {
             databaseSecureStore: databaseSecureStore,
             credentialResolver: credentialResolver,
             aiConfigurationSources: aiConfigurationSources,
+            aiAgentWorkspaceHostBuilder: MacAIAgentWorkspaceHostBuilder(
+                processRunner: processRunner,
+                runtimeService: runtimeService,
+                fileStorage: fileStorage
+            ),
             recentProjectsStore: RecentProjectsStore(store: store),
             workspaceSessionStore: WorkspaceSessionStore(store: store),
             directoryMarkStore: directoryMarkStore,

@@ -32,6 +32,7 @@ final class AppSettings: ObservableObject {
         static let gitSaveChangesPolicy = "settings.gitSaveChangesPolicy"
         static let projectOpenBehavior = "settings.projectOpenBehavior"
         static let commitMessageAI = "settings.commitMessageAI"
+        static let aiAgent = "settings.aiAgent"
         static let keyboardShortcutOverrides = "settings.keyboardShortcutOverrides"
         static let customLogDirectory = "settings.customLogDirectory"
         static let workbenchBackground = "settings.workbenchBackground"
@@ -140,6 +141,9 @@ final class AppSettings: ObservableObject {
     @Published var commitMessageAI: CommitMessageAISettings {
         didSet { saveCommitMessageAI() }
     }
+    @Published var aiAgent: AIAgentSettings {
+        didSet { saveAIAgentSettings() }
+    }
     @Published private(set) var keyboardShortcutOverrides: [String: [KeyboardShortcutBinding]]
     @Published private(set) var customLogDirectory: URL?
     @Published private(set) var workbenchBackground: WorkbenchBackgroundConfiguration
@@ -224,6 +228,12 @@ final class AppSettings: ObservableObject {
             commitMessageAI = saved
         } else {
             commitMessageAI = .default
+        }
+        if let data = defaults.data(forKey: Key.aiAgent),
+           let saved = try? JSONDecoder().decode(AIAgentSettings.self, from: data) {
+            aiAgent = saved
+        } else {
+            aiAgent = .default
         }
         AppThemeRuntime.shared.activate(colorTheme)
         updateGitExecutionPreferences()
@@ -405,6 +415,7 @@ final class AppSettings: ObservableObject {
         gitSaveChangesPolicy = .stash
         projectOpenBehavior = .thisWindow
         commitMessageAI = .default
+        aiAgent = .default
         setCustomLogDirectory(nil)
         clearWorkbenchBackground()
         workbenchBackgroundOpacity = 0.22
@@ -499,6 +510,11 @@ final class AppSettings: ObservableObject {
     private func saveCommitMessageAI() {
         guard let data = try? JSONEncoder().encode(commitMessageAI) else { return }
         defaults.set(data, forKey: Key.commitMessageAI)
+    }
+
+    private func saveAIAgentSettings() {
+        guard let data = try? JSONEncoder().encode(aiAgent) else { return }
+        defaults.set(data, forKey: Key.aiAgent)
     }
 
     private func saveKeyboardShortcutOverrides() {

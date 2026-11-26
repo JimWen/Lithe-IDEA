@@ -2,7 +2,61 @@ import Foundation
 import LitheCoreContracts
 import Network
 
-struct MacURLSessionTransport: AIHTTPTransport {
+struct MacURLSessionTransport: AIHTTPTransport, AIHTTPStreamingTransport {
+    func stream(_ request: AIHTTPRequest) async throws -> AsyncThrowingStream<Data, Error> {
+        if request.url.scheme?.lowercased() == "http" && !request.allowsInsecureHTTP {
+            throw AIHTTPStreamTransportError.insecureHTTPNotAllowed
+        }
+        var urlRequest = URLRequest(url: request.url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.httpBody = request.body
+        urlRequest.timeoutInterval = request.timeout
+        request.headers.forEach { key, value in
+            urlRequest.setValue(value, forHTTPHeaderField: key)
+        }
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: urlRequest)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIHTTPStreamTransportError.invalidResponse
+        }
+        if !(200...299).contains(httpResponse.statusCode) {
+            var errorBody = Data()
+            for try await byte in bytes {
+                errorBody.append(byte)
+                if errorBody.count >= 4096 { break }
+            }
+            let detail = String(decoding: errorBody, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw AIHTTPStreamTransportError.httpStatus(httpResponse.statusCode, detail)
+        }
+
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var chunk = Data()
+                    chunk.reserveCapacity(1024)
+                    for try await byte in bytes {
+                        if Task.isCancelled { break }
+                        chunk.append(byte)
+                        if byte == 0x0A || chunk.count >= 1024 {
+                            continuation.yield(chunk)
+                            chunk.removeAll(keepingCapacity: true)
+                        }
+                    }
+                    if !chunk.isEmpty {
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
     func send(_ request: AIHTTPRequest) async throws -> AIHTTPResponse {
         switch request.url.scheme?.lowercased() {
         case "http":

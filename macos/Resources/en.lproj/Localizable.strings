@@ -1859,7 +1859,7 @@
 "Open a file to inspect its structure" = "Open a file to inspect its structure";
 "No refactoring actions are available here" = "No refactoring actions are available here";
 "Toggle Lightweight / Precision LSP Mode" = "Toggle Lightweight / Precision LSP Mode";
-"Switch between fast zero-LSP Lightweight Mode and Precision LSP for this window" = "Switch between fast zero-LSP Lightweight Mode and Precision LSP for this window";
+"Switch between fast zero-LSP Lightweight Mode and Precision LSP for this project" = "Switch between fast zero-LSP Lightweight Mode and Precision LSP for this project";
 "Enable Precision LSP" = "Enable Precision LSP";
 "Lightweight" = "Lightweight";
 "Precision LSP" = "Precision LSP";
@@ -1875,3 +1875,27 @@
 "Configure Go…" = "Configure Go…";
 "Configure Rust…" = "Configure Rust…";
 "Configure Python…" = "Configure Python…";
+
+"AI Agent" = "AI Agent";
+"Show or hide the AI Agent tool window" = "Show or hide the AI Agent tool window";
+"AI Agent: New Thread" = "AI Agent: New Thread";
+"Start a new AI Agent conversation thread" = "Start a new AI Agent conversation thread";
+"AI Agent Harness" = "AI Agent Harness";
+"AI Agent Settings" = "AI Agent Settings";
+"Hide AI Agent" = "Hide AI Agent";
+"New Thread" = "New Thread";
+"Detect Agent CLIs" = "Detect Agent CLIs";
+"Open AI Agent Panel" = "Open AI Agent Panel";
+"Default backend" = "Default backend";
+"Permission mode" = "Permission mode";
+"Codex CLI path" = "Codex CLI path";
+"Claude CLI path" = "Claude CLI path";
+"Default Codex model" = "Default Codex model";
+"Default Claude model" = "Default Claude model";
+"Custom agent instructions" = "Custom agent instructions";
+"Back to Chat" = "Back to Chat";
+"Commit All" = "Commit All";
+"Review Diff" = "Review Diff";
+"Allow Once" = "Allow Once";
+"Allow Always" = "Allow Always";
+"Deny" = "Deny";

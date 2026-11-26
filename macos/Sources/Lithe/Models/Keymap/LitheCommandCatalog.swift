@@ -14,7 +14,7 @@ enum LitheCommandCatalog {
         command("save", "Save", "Save the active document", .project, "s", [.command]),
         command("close-project", "Close Project", "Return to the Welcome screen", .project, "w", [.shift, .command]),
         command("settings", "Settings", "Configure editor and project behavior", .project, ",", [.command]),
-        command("toggle-language-intelligence-mode", "Toggle Lightweight / Precision LSP Mode", "Switch between fast zero-LSP Lightweight Mode and Precision LSP for this window", .project),
+        command("toggle-language-intelligence-mode", "Toggle Lightweight / Precision LSP Mode", "Switch between fast zero-LSP Lightweight Mode and Precision LSP for this project", .project),
         command("rebuild-java-index", "Java: Rebuild Index", "Clear the current project's Java index and rebuild it on next use", .project),
         command("reveal-in-finder", "Reveal in Finder", "Show the active file in Finder", .project),
 
@@ -69,6 +69,8 @@ enum LitheCommandCatalog {
         command("toggle-run", "Toggle Run", "Show or hide run output", .window, "4", [.command]),
         command("toggle-tests", "Toggle Tests", "Show or hide language-neutral test runners", .window),
         command("toggle-cargo", "Cargo", "Show or hide the Cargo tool window", .window),
+        command("toggle-ai-agent", "AI Agent", "Show or hide the AI Agent tool window", .window, "l", [.shift, .command]),
+        command("new-ai-agent-thread", "AI Agent: New Thread", "Start a new AI Agent conversation thread", .window),
         command("refresh-cargo", "Cargo: Refresh", "Reload Cargo workspace metadata", .project),
         command("cancel-cargo-refresh", "Cargo: Cancel Refresh", "Stop reading Cargo workspace metadata", .project),
         command("toggle-go", "Go Tools", "Show or hide the Go Tools tool window", .window),

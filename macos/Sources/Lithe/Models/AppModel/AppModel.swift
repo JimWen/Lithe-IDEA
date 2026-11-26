@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import LitheAIAgentModule
 import LitheGitModule
 import LitheDatabaseModule
 import LitheDebugModule
@@ -21,6 +22,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         didSet {
             invalidateCargoWorkspace()
             invalidateGoWorkspace()
+            invalidateAIAgentWorkspace()
         }
     }
     @Published private(set) var standaloneFileURL: URL? {
@@ -58,6 +60,10 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     var goCancellationTask: Task<Void, Never>?
     var goRequestGeneration = 0
     let goTreePresentation = GoTreePresentation()
+    @Published var isAIAgentVisible = false
+    @Published var isAIAgentActivating = false
+    @Published var aiAgentActivationError: String?
+    var aiAgentWorkspaceHostStorage: (any AIAgentWorkspaceHost)?
     @Published var editingRunConfiguration: RunConfiguration?
     @Published var pendingGitPushReference: GitReference?
     @Published var pendingNewBranchReference: GitReference?
@@ -215,6 +221,9 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     }
     var gitCapability: LitheGitModule.GitModuleCapability? {
         cachedModuleCapability(.gitWorkspace)
+    }
+    var aiAgentCapability: LitheAIAgentModule.AIAgentCapability? {
+        cachedModuleCapability(.aiAgentWorkspace)
     }
     let documentFeature: DocumentFeatureModel
     let javaFeature: JavaFeatureModel
@@ -427,6 +436,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
             guard let self else { return }
             handleCargoModuleEvent(event)
             handleGoModuleEvent(event)
+            handleAIAgentModuleEvent(event)
             if event.name == "module.sleeping" || event.name == "module.shutdown" {
                 if event.source == .database, selectedSidebar == .database {
                     selectedSidebar = .project

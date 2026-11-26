@@ -87,6 +87,8 @@ enum LitheActionRegistry {
             action("toggle-run", model: model) { model.toggleRun() },
             action("toggle-tests", model: model) { model.toggleTests() },
             action("toggle-cargo", model: model) { model.toggleCargoProject() },
+            action("toggle-ai-agent", model: model) { model.toggleAIAgent() },
+            action("new-ai-agent-thread", model: model) { model.openNewAIAgentThread() },
             action("refresh-cargo", model: model) { model.refreshCargoProject() },
             action("cancel-cargo-refresh", model: model) { model.cancelCargoRefresh() },
             action("toggle-go", model: model) { model.toggleGoProject() },

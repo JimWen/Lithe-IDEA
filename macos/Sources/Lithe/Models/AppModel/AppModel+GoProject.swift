@@ -88,6 +88,8 @@ extension AppModel {
         guard isGoAvailable else { return }
         isGoVisible.toggle()
         guard isGoVisible else { return }
+        isCargoVisible = false
+        isAIAgentVisible = false
         let snapshot = goProjectFeatureIfActive?.snapshot
         if snapshot == nil || snapshot.map(GoTreePresentation.hasDiagnosticsOrIncomplete) == true {
             refreshGoProject()

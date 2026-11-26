@@ -2756,7 +2756,7 @@
 "Open a file to inspect its structure" = "打开文件以查看结构大纲";
 "No refactoring actions are available here" = "此处没有可用的重构操作";
 "Toggle Lightweight / Precision LSP Mode" = "切换轻量模式 / 精确 LSP 模式";
-"Switch between fast zero-LSP Lightweight Mode and Precision LSP for this window" = "为当前窗口切换零进程轻量模式或精确 LSP 模式";
+"Switch between fast zero-LSP Lightweight Mode and Precision LSP for this project" = "为当前项目切换零进程轻量模式或精确 LSP 模式";
 "Enable Precision LSP" = "启用精确 LSP";
 "Lightweight" = "轻量模式";
 "Precision LSP" = "精确 LSP";
@@ -2772,3 +2772,27 @@
 "Configure Go…" = "配置 Go…";
 "Configure Rust…" = "配置 Rust…";
 "Configure Python…" = "配置 Python…";
+
+"AI Agent" = "AI 智能体";
+"Show or hide the AI Agent tool window" = "显示或隐藏 AI 智能体工具窗口";
+"AI Agent: New Thread" = "AI 智能体：新建会话";
+"Start a new AI Agent conversation thread" = "开启新的 AI 智能体对话会话";
+"AI Agent Harness" = "AI 智能体引擎";
+"AI Agent Settings" = "AI 智能体设置";
+"Hide AI Agent" = "隐藏 AI 智能体";
+"New Thread" = "新建会话";
+"Detect Agent CLIs" = "检测智能体 CLI";
+"Open AI Agent Panel" = "打开 AI 智能体面板";
+"Default backend" = "默认引擎";
+"Permission mode" = "权限模式";
+"Codex CLI path" = "Codex CLI 路径";
+"Claude CLI path" = "Claude CLI 路径";
+"Default Codex model" = "默认 Codex 模型";
+"Default Claude model" = "默认 Claude 模型";
+"Custom agent instructions" = "自定义智能体指令";
+"Back to Chat" = "返回对话";
+"Commit All" = "提交全部更改";
+"Review Diff" = "查看差异";
+"Allow Once" = "允许一次";
+"Allow Always" = "始终允许";
+"Deny" = "拒绝";

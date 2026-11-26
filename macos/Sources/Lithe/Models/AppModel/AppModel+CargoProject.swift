@@ -88,6 +88,8 @@ extension AppModel {
         guard isCargoAvailable else { return }
         isCargoVisible.toggle()
         guard isCargoVisible else { return }
+        isGoVisible = false
+        isAIAgentVisible = false
         if cargoProjectFeatureIfActive?.snapshot == nil { refreshCargoProject() }
     }
 

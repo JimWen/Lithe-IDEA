@@ -48,6 +48,7 @@ final class AppServices {
     let databaseSecureStore: any SecureStore
     let credentialResolver: any AIProviderCredentialResolver
     let aiConfigurationSources: [any AIConfigurationSource]
+    let aiAgentWorkspaceHostBuilder: any AIAgentWorkspaceHostBuilding
     let recentProjectsStore: RecentProjectsStore
     let workspaceSessionStore: WorkspaceSessionStore
     let directoryMarkStore: any WorkspaceDirectoryMarkStoring
@@ -91,6 +92,7 @@ final class AppServices {
         databaseSecureStore: any SecureStore,
         credentialResolver: any AIProviderCredentialResolver,
         aiConfigurationSources: [any AIConfigurationSource],
+        aiAgentWorkspaceHostBuilder: any AIAgentWorkspaceHostBuilding = UnavailableAIAgentWorkspaceHostBuilder(),
         recentProjectsStore: RecentProjectsStore,
         workspaceSessionStore: WorkspaceSessionStore,
         directoryMarkStore: any WorkspaceDirectoryMarkStoring,
@@ -147,6 +149,7 @@ final class AppServices {
         self.databaseSecureStore = databaseSecureStore
         self.credentialResolver = credentialResolver
         self.aiConfigurationSources = aiConfigurationSources
+        self.aiAgentWorkspaceHostBuilder = aiAgentWorkspaceHostBuilder
         self.recentProjectsStore = recentProjectsStore
         self.workspaceSessionStore = workspaceSessionStore
         self.directoryMarkStore = directoryMarkStore

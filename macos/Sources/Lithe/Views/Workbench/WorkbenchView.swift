@@ -40,7 +40,7 @@ struct WorkbenchView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarWidth: CGFloat = 320
-    @State private var rightSidebarWidth: CGFloat = 380
+    @State private var rightSidebarWidth: CGFloat = 420
     @State private var topPaneHeight: CGFloat?
     @State private var isBranchSwitcherPresented = false
     @State private var isCheckoutRevisionPresented = false
@@ -297,13 +297,47 @@ struct WorkbenchView: View {
 
             GeometryReader { geometry in
                 // Keep the project tree and editor usable at the minimum window
-                // width, while preserving the preferred tool width on larger windows.
-                let panelWidth = WorkbenchLayoutMetrics.dockedToolWidth(
-                    availableWidth: geometry.size.width, preferredWidth: rightSidebarWidth)
+                // width, while letting the user resize the right sidebar smoothly
+                // via LitheSplitPaneView without re-evaluating sibling panes.
+                let availableForCenter = max(
+                    0,
+                    geometry.size.width - ActivityBarMetrics.width - WorkbenchLayoutMetrics.rightActivityBarWidth
+                )
+                let maximumRight = max(
+                    0,
+                    WorkbenchLayoutMetrics.dockedToolWidth(
+                        availableWidth: geometry.size.width,
+                        preferredWidth: min(760, availableForCenter)
+                    )
+                )
+                let minimumRight = min(WorkbenchLayoutMetrics.minimumDockedToolWidth, maximumRight)
                 HStack(spacing: 0) {
                     activityBar
-                    workspaceArea
-                    rightHoverRegion(panelWidth: panelWidth)
+                    LitheSplitPaneView(
+                        axis: .horizontal,
+                        placement: .trailing,
+                        defaultSize: rightSidebarWidth,
+                        minimum: minimumRight,
+                        maximum: maximumRight,
+                        flexibleMinimum: min(WorkbenchLayoutMetrics.minimumWorkspaceContentWidth, availableForCenter),
+                        showsIdleDivider: false,
+                        isSizedPaneVisible: isRightSidebarVisible,
+                        onCommit: { width in
+                            rightSidebarWidth = width
+                            saveLayout(
+                                sidebarWidth: sidebarWidth,
+                                topPaneHeight: topPaneHeight,
+                                rightSidebarWidth: width
+                            )
+                        },
+                        sized: {
+                            rightSidebarPanelContent
+                        },
+                        flexible: {
+                            workspaceArea
+                        }
+                    )
+                    pluginActivityBar
                 }
                 .frame(maxHeight: .infinity)
             }
@@ -1038,16 +1072,15 @@ struct WorkbenchView: View {
         model.notifications.lazy.filter { !$0.isRead }.count
     }
 
-    private func rightHoverRegion(panelWidth: CGFloat) -> some View {
-        HStack(spacing: 0) {
+    private var rightSidebarPanelContent: some View {
+        Group {
             if isRightSidebarVisible {
                 moduleUIRegistry.selectedToolContent(
                     from: model.rightSidebarContributions,
                     model: model
                 )
                 .equatable()
-                .frame(width: panelWidth)
-                .frame(maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .workbenchPaneChrome(
                     background: model.workbenchBackgroundFeature.hasImage
                         ? Color.clear
@@ -1063,20 +1096,10 @@ struct WorkbenchView: View {
                         ? Color.clear
                         : LitheTheme.titlebar
                 )
-                .transition(
-                    reduceMotion
-                        ? .opacity
-                        : .move(edge: .trailing).combined(with: .opacity)
-                )
-
+            } else {
+                Color.clear
             }
-            pluginActivityBar
         }
-        .fixedSize(horizontal: true, vertical: false)
-        .animation(
-            reduceMotion ? nil : .easeOut(duration: 0.14),
-            value: isRightSidebarVisible
-        )
     }
 
     private var isRightSidebarVisible: Bool {
@@ -1398,15 +1421,21 @@ struct WorkbenchView: View {
         let layout = model.loadWorkbenchLayout(for: workspaceURL)
         sidebarWidth = CGFloat(layout.sidebarWidth)
         topPaneHeight = layout.topPaneHeight.map { CGFloat($0) }
+        rightSidebarWidth = CGFloat(layout.rightSidebarWidth ?? 420)
         didRestoreLayout = true
     }
 
-    private func saveLayout(sidebarWidth: CGFloat, topPaneHeight: CGFloat?) {
+    private func saveLayout(
+        sidebarWidth: CGFloat,
+        topPaneHeight: CGFloat?,
+        rightSidebarWidth: CGFloat? = nil
+    ) {
         guard didRestoreLayout, let workspaceURL = model.workspaceURL else { return }
         model.saveWorkbenchLayout(
             WorkbenchLayout(
                 sidebarWidth: Double(sidebarWidth),
-                topPaneHeight: topPaneHeight.map(Double.init)
+                topPaneHeight: topPaneHeight.map(Double.init),
+                rightSidebarWidth: Double(rightSidebarWidth ?? self.rightSidebarWidth)
             ),
             for: workspaceURL
         )

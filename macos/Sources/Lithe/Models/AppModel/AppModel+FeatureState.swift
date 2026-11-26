@@ -406,6 +406,8 @@ extension AppModel {
             true
         case "toggle-cargo":
             isCargoAvailable
+        case "toggle-ai-agent", "new-ai-agent-thread":
+            isAIAgentAvailable
         case "refresh-cargo":
             canRefreshCargoProject
         case "cancel-cargo-refresh":

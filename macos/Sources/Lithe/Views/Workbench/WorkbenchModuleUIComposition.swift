@@ -1,4 +1,5 @@
 import SwiftUI
+import LitheAIAgentModule
 import LitheModuleAPI
 import LitheDebugModule
 import LitheExecutionModule
@@ -15,6 +16,7 @@ enum WorkbenchModuleUIComposition {
                 gitRegistration,
                 languageRegistration,
                 executionRegistration,
+                aiAgentRegistration,
                 cargoRegistration,
                 goRegistration,
                 debugRegistration
@@ -109,6 +111,19 @@ enum WorkbenchModuleUIComposition {
                 }
             )
         ]
+    )
+
+    private static let aiAgentRegistration = WorkbenchModuleUIRegistry.Registration(
+        contributions: AIAgentModule.moduleContributions,
+        actions: [.init(id: "aiAgent.toggle", commandID: "toggle-ai-agent")],
+        renderers: [.init(
+            id: "aiAgent.panel",
+            ideaAssetPath: nil,
+            isVisible: { $0.isAIAgentAvailable },
+            isSelected: { $0.isAIAgentToolWindowSelected },
+            content: { _ in AnyView(AIAgentToolWindowView()) },
+            contentIdentity: { WorkbenchModuleUIRegistry.Renderer.featureIdentity($0.aiAgentFeatureIfActive) }
+        )]
     )
 
     private static let cargoRegistration = WorkbenchModuleUIRegistry.Registration(
