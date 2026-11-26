@@ -1,11 +1,14 @@
 import Combine
 import Foundation
+import LitheCoreContracts
 
 enum EditorLanguageActionKind: Equatable, Sendable {
     case renameSymbol
     case sourceActions
     case completeSymbol
     case quickDocumentation
+    case parameterInfo
+    case refactorThis
 }
 
 struct EditorLanguageActionRequest: Identifiable, Equatable, Sendable {
@@ -28,6 +31,9 @@ final class EditorChromeModel: ObservableObject {
     @Published private(set) var isReplaceVisible = false
     @Published private(set) var findReplaceText = ""
     @Published private(set) var languageActionRequest: EditorLanguageActionRequest?
+    /// Active document outline symbols (LSP `documentSymbol` with offline Rust fallback).
+    @Published private(set) var documentSymbols: [LanguageServerDocumentSymbol] = []
+    @Published private(set) var documentSymbolsURL: URL?
     /// 超大文件（行数阈值见 `LitheTextViewportLayout`）不支持软换行，
     /// 编辑器据此禁用 chrome 开关与右键菜单项。
     @Published private(set) var isSoftWrapAvailable = true
@@ -111,9 +117,17 @@ final class EditorChromeModel: ObservableObject {
         languageActionRequest = nil
     }
 
+    func updateDocumentSymbols(_ symbols: [LanguageServerDocumentSymbol], for url: URL?) {
+        let normalizedURL = url?.standardizedFileURL
+        guard documentSymbols != symbols || documentSymbolsURL != normalizedURL else { return }
+        documentSymbols = symbols
+        documentSymbolsURL = normalizedURL
+    }
+
     func reset() {
         update(caret: nil)
         update(selectedText: "")
+        updateDocumentSymbols([], for: nil)
         if languageActionRequest != nil {
             languageActionRequest = nil
         }

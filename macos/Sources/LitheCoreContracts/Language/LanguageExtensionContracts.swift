@@ -117,6 +117,14 @@ public protocol LanguageServerExtensionProviding: AnyObject {
     var lifecycle: any LanguageServerExtensionLifecycle { get }
 }
 
+/// Optional syntax, highlighting, and offline-completion metadata exported by
+/// a language plugin so the editor and builtin completion share a single
+/// language-owned definition without hardcoding language branches in the host.
+@MainActor
+public protocol LanguageSyntaxExtensionProviding: AnyObject {
+    var syntaxProfile: LanguageSyntaxProfile { get }
+}
+
 @MainActor
 public protocol LanguageServerExtensionLifecycle: AnyObject {
     var isRunning: Bool { get }

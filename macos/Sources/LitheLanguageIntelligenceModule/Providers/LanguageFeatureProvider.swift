@@ -27,6 +27,7 @@ struct UnavailableBuiltinLanguageFeatureCore: BuiltinLanguageFeatureCore {
 package enum LanguageFeature: Hashable, Sendable {
     case completion
     case hover
+    case signatureHelp
     case navigation(method: String)
 }
 
@@ -52,19 +53,22 @@ package struct LanguageFeatureRequestContext: Sendable {
     package let position: LanguageServerPosition
     package let languageID: String?
     package let workspaceURL: URL?
+    package let openBuffers: [String: String]
 
     package init(
         fileURL: URL,
         text: String,
         position: LanguageServerPosition,
         languageID: String? = nil,
-        workspaceURL: URL? = nil
+        workspaceURL: URL? = nil,
+        openBuffers: [String: String] = [:]
     ) {
         self.fileURL = fileURL.standardizedFileURL
         self.text = text
         self.position = position
         self.languageID = languageID
         self.workspaceURL = workspaceURL?.standardizedFileURL
+        self.openBuffers = openBuffers
     }
 }
 
@@ -82,11 +86,24 @@ package protocol LanguageFeatureProvider: AnyObject {
         in context: LanguageFeatureRequestContext,
         completion: @escaping (Result<LanguageServerHover?, Error>) -> Void
     ) throws
+    func signatureHelp(
+        in context: LanguageFeatureRequestContext,
+        completion: @escaping (Result<LanguageServerSignatureHelp?, Error>) -> Void
+    ) throws
     func navigate(
         method: String,
         in context: LanguageFeatureRequestContext,
         completion: @escaping (Result<[LanguageServerLocation], Error>) -> Void
     ) throws
+}
+
+package extension LanguageFeatureProvider {
+    func signatureHelp(
+        in _: LanguageFeatureRequestContext,
+        completion: @escaping (Result<LanguageServerSignatureHelp?, Error>) -> Void
+    ) throws {
+        completion(.success(nil))
+    }
 }
 
 @MainActor
@@ -108,8 +125,11 @@ package final class BuiltinLanguageFeatureProvider: LanguageFeatureProvider {
         switch feature {
         case .completion:
             return core.isBuiltinLanguageFeatureAvailable || Self.keywordLanguage(for: context) != nil
-        case .hover, .navigation:
+        case .hover, .signatureHelp:
             return core.isBuiltinLanguageFeatureAvailable
+        case .navigation(let method):
+            // Interface/trait implementation discovery requires Precision LSP.
+            return core.isBuiltinLanguageFeatureAvailable && method != "textDocument/implementation"
         }
     }
 
@@ -117,33 +137,76 @@ package final class BuiltinLanguageFeatureProvider: LanguageFeatureProvider {
         in context: LanguageFeatureRequestContext,
         completion: @escaping (Result<[LanguageServerCompletionItem], Error>) -> Void
     ) throws {
-        let symbols = core.isBuiltinLanguageFeatureAvailable
-            ? core.builtinLanguageCompletions(
-                fileURL: context.fileURL,
-                text: context.text,
-                position: context.position
-            ) ?? []
-            : []
+        let snippets = Self.snippetCompletions(in: context)
+        let types = Self.builtinTypeCompletions(in: context)
         let keywords = Self.keywordCompletions(in: context)
-
-        var seenLabels = Set<String>()
-        let merged = (symbols + keywords).filter { seenLabels.insert($0.label).inserted }
-        completion(.success(merged))
+        guard core.isBuiltinLanguageFeatureAvailable else {
+            var seenLabels = Set<String>()
+            let merged = (snippets + types + keywords).filter { seenLabels.insert($0.label).inserted }
+            completion(.success(merged))
+            return
+        }
+        let core = self.core
+        Task { @MainActor in
+            let symbols = await Task.detached(priority: .userInitiated) {
+                core.builtinLanguageCompletions(
+                    fileURL: context.fileURL,
+                    text: context.text,
+                    position: context.position,
+                    workspaceURL: context.workspaceURL,
+                    openBuffers: context.openBuffers.isEmpty ? nil : context.openBuffers
+                ) ?? []
+            }.value
+            var seenLabels = Set<String>()
+            let merged = (symbols + snippets + types + keywords).filter { seenLabels.insert($0.label).inserted }
+            completion(.success(merged))
+        }
     }
 
     package func hover(
         in context: LanguageFeatureRequestContext,
         completion: @escaping (Result<LanguageServerHover?, Error>) -> Void
     ) throws {
-        completion(.success(
-            core.isBuiltinLanguageFeatureAvailable
-                ? core.builtinLanguageHover(
+        guard core.isBuiltinLanguageFeatureAvailable else {
+            completion(.success(nil))
+            return
+        }
+        let core = self.core
+        Task { @MainActor in
+            let hover = await Task.detached(priority: .userInitiated) {
+                core.builtinLanguageHover(
                     fileURL: context.fileURL,
                     text: context.text,
-                    position: context.position
+                    position: context.position,
+                    workspaceURL: context.workspaceURL,
+                    openBuffers: context.openBuffers.isEmpty ? nil : context.openBuffers
                 )
-                : nil
-        ))
+            }.value
+            completion(.success(hover))
+        }
+    }
+
+    package func signatureHelp(
+        in context: LanguageFeatureRequestContext,
+        completion: @escaping (Result<LanguageServerSignatureHelp?, Error>) -> Void
+    ) throws {
+        guard core.isBuiltinLanguageFeatureAvailable else {
+            completion(.success(nil))
+            return
+        }
+        let core = self.core
+        Task { @MainActor in
+            let help = await Task.detached(priority: .userInitiated) {
+                core.builtinLanguageSignatureHelp(
+                    fileURL: context.fileURL,
+                    text: context.text,
+                    position: context.position,
+                    workspaceURL: context.workspaceURL,
+                    openBuffers: context.openBuffers.isEmpty ? nil : context.openBuffers
+                )
+            }.value
+            completion(.success(help))
+        }
     }
 
     package func navigate(
@@ -151,16 +214,25 @@ package final class BuiltinLanguageFeatureProvider: LanguageFeatureProvider {
         in context: LanguageFeatureRequestContext,
         completion: @escaping (Result<[LanguageServerLocation], Error>) -> Void
     ) throws {
-        completion(.success(
-            core.isBuiltinLanguageFeatureAvailable
-                ? core.builtinLanguageNavigation(
+        guard core.isBuiltinLanguageFeatureAvailable,
+              method != "textDocument/implementation" else {
+            completion(.success([]))
+            return
+        }
+        let core = self.core
+        Task { @MainActor in
+            let locations = await Task.detached(priority: .userInitiated) {
+                core.builtinLanguageNavigation(
                     method: method,
                     fileURL: context.fileURL,
                     text: context.text,
-                    position: context.position
+                    position: context.position,
+                    workspaceURL: context.workspaceURL,
+                    openBuffers: context.openBuffers.isEmpty ? nil : context.openBuffers
                 ) ?? []
-                : []
-        ))
+            }.value
+            completion(.success(locations))
+        }
     }
 }
 
@@ -193,6 +265,8 @@ package final class LanguageServerFeatureProvider: LanguageFeatureProvider {
             return features.contains(.completion)
         case .hover:
             return features.contains(.hover)
+        case .signatureHelp:
+            return features.contains(.signatureHelp)
         case .navigation(let method):
             return features.contains(Self.navigationFeature(for: method))
         }
@@ -227,6 +301,17 @@ package final class LanguageServerFeatureProvider: LanguageFeatureProvider {
         )
     }
 
+    package func signatureHelp(
+        in context: LanguageFeatureRequestContext,
+        completion: @escaping (Result<LanguageServerSignatureHelp?, Error>) -> Void
+    ) throws {
+        try session.signatureHelp(
+            fileURL: context.fileURL,
+            position: context.position,
+            completion: completion
+        )
+    }
+
     package func navigate(
         method: String,
         in context: LanguageFeatureRequestContext,
@@ -250,117 +335,121 @@ package final class LanguageServerFeatureProvider: LanguageFeatureProvider {
 }
 
 private extension BuiltinLanguageFeatureProvider {
-    enum KeywordLanguage {
-        case go
-        case swift
-        case rust
-        case python
-        case javaScript
-        case typeScript
-
-        var displayName: String {
-            switch self {
-            case .go: "Go"
-            case .swift: "Swift"
-            case .rust: "Rust"
-            case .python: "Python"
-            case .javaScript: "JavaScript"
-            case .typeScript: "TypeScript"
-            }
-        }
-
-        var keywords: Set<String> {
-            switch self {
-            case .go:
-                return [
-                    "break", "case", "chan", "const", "continue", "default", "defer", "else",
-                    "fallthrough", "for", "func", "go", "goto", "if", "import", "interface",
-                    "map", "package", "range", "return", "select", "struct", "switch", "type", "var"
-                ]
-            case .swift:
-                return [
-                    "actor", "any", "as", "associatedtype", "async", "await", "break", "case",
-                    "catch", "class", "continue", "convenience", "default", "defer", "deinit", "didSet",
-                    "distributed", "do", "dynamic", "else", "enum", "extension", "fallthrough", "fileprivate",
-                    "final", "for", "func", "get", "guard", "if", "import", "in", "indirect", "infix",
-                    "init", "inout", "internal", "is", "isolated", "lazy", "let", "macro", "mutating",
-                    "nonisolated", "nonmutating", "open", "operator", "optional", "override", "package",
-                    "postfix", "precedencegroup", "prefix", "private", "protocol", "public", "repeat", "required",
-                    "rethrows", "return", "set", "some", "static", "struct", "subscript", "super", "switch",
-                    "throws", "try", "typealias", "unowned", "var", "weak", "where", "while", "willSet"
-                ]
-            case .rust:
-                return [
-                    "Self", "abstract", "as", "async", "await", "become", "box", "break", "const", "continue",
-                    "crate", "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen",
-                    "if", "impl", "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override",
-                    "priv", "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true",
-                    "try", "type", "typeof", "union", "unsafe", "unsized", "use", "virtual", "where", "while", "yield"
-                ]
-            case .python:
-                return [
-                    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "case",
-                    "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from",
-                    "global", "if", "import", "in", "is", "lambda", "match", "nonlocal", "not", "or", "pass",
-                    "raise", "return", "try", "while", "with", "yield"
-                ]
-            case .javaScript:
-                return Self.javaScriptKeywords
-            case .typeScript:
-                return Self.javaScriptKeywords.union([
-                    "abstract", "any", "as", "asserts", "bigint", "boolean", "constructor", "declare", "enum",
-                    "from", "get", "implements", "infer", "interface", "is", "keyof", "module", "namespace",
-                    "never", "number", "object", "override", "private", "protected", "public", "readonly", "require",
-                    "set", "string", "symbol", "type", "undefined", "unique", "unknown"
-                ])
-            }
-        }
-
-        private static let javaScriptKeywords: Set<String> = [
-            "async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default",
-            "delete", "do", "else", "export", "extends", "false", "finally", "for", "function", "if", "import",
-            "in", "instanceof", "let", "new", "null", "of", "return", "static", "super", "switch", "this",
-            "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield"
-        ]
+    struct SnippetTemplate {
+        let label: String
+        let detail: String
+        let body: String
     }
 
-    static func keywordLanguage(for context: LanguageFeatureRequestContext) -> KeywordLanguage? {
-        if let languageID = context.languageID?.lowercased() {
-            switch languageID {
-            case "go", "golang": return .go
-            case "swift": return .swift
-            case "rust": return .rust
-            case "python": return .python
-            case "javascript", "javascriptreact", "jsx": return .javaScript
-            case "typescript", "typescriptreact", "tsx": return .typeScript
-            default: break
-            }
+    static func keywordLanguage(for context: LanguageFeatureRequestContext) -> LanguageSyntaxProfile? {
+        guard let profile = LanguageSyntaxProfileRegistry.shared.profile(
+            forLanguageID: context.languageID,
+            fileURL: context.fileURL
+        ), !profile.completionKeywords.isEmpty else {
+            return nil
         }
-
-        switch context.fileURL.pathExtension.lowercased() {
-        case "go": return .go
-        case "swift": return .swift
-        case "rs": return .rust
-        case "py", "pyw": return .python
-        case "js", "jsx", "mjs", "cjs": return .javaScript
-        case "ts", "tsx", "mts", "cts": return .typeScript
-        default: return nil
-        }
+        return profile
     }
 
-    static func keywordCompletions(
+    static func editRangeAndPrefix(
         in context: LanguageFeatureRequestContext
-    ) -> [LanguageServerCompletionItem] {
-        guard let language = keywordLanguage(for: context) else { return [] }
+    ) -> (prefix: String, editRange: LanguageServerRange) {
         let prefix = identifierPrefix(in: context.text, at: context.position)
         let startColumn = max(0, context.position.utf16Column - prefix.utf16.count)
         let editRange = LanguageServerRange(
             start: LanguageServerPosition(line: context.position.line, utf16Column: startColumn),
             end: context.position
         )
+        return (prefix, editRange)
+    }
 
-        return language.keywords
-            .filter { prefix.isEmpty || $0.hasPrefix(prefix) }
+    static func snippetCompletions(
+        in context: LanguageFeatureRequestContext
+    ) -> [LanguageServerCompletionItem] {
+        let ext = context.fileURL.pathExtension.lowercased()
+        let templates: [SnippetTemplate]
+        switch ext {
+        case "go":
+            templates = [
+                SnippetTemplate(label: "iferr", detail: "if err != nil", body: "if err != nil {\n\treturn ${1:err}\n}$0"),
+                SnippetTemplate(label: "tfunc", detail: "Go unit test", body: "func Test${1:Name}(t *testing.T) {\n\t$0\n}"),
+                SnippetTemplate(label: "bfunc", detail: "Go benchmark", body: "func Benchmark${1:Name}(b *testing.B) {\n\tfor i := 0; i < b.N; i++ {\n\t\t$0\n\t}\n}"),
+                SnippetTemplate(label: "funcm", detail: "Go method", body: "func (${1:s} *${2:Type}) ${3:Name}(${4:}) ${5:error} {\n\t$0\n}"),
+            ]
+        case "rs":
+            templates = [
+                SnippetTemplate(label: "fnm", detail: "Rust function", body: "fn ${1:name}(${2:}) -> ${3:()} {\n    $0\n}"),
+                SnippetTemplate(label: "tmod", detail: "Rust #[cfg(test)] mod", body: "#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn ${1:it_works}() {\n        $0\n    }\n}"),
+                SnippetTemplate(label: "testfn", detail: "Rust #[test] fn", body: "#[test]\nfn ${1:test_case}() {\n    $0\n}"),
+                SnippetTemplate(label: "matchb", detail: "Rust match block", body: "match ${1:value} {\n    ${2:_} => $0,\n}"),
+            ]
+        case "py", "pyi", "pyw":
+            templates = [
+                SnippetTemplate(label: "ifmain", detail: "Python main guard", body: "if __name__ == \"__main__\":\n    ${1:main()}$0"),
+                SnippetTemplate(label: "defm", detail: "Python function", body: "def ${1:name}(${2:}) -> ${3:None}:\n    $0"),
+                SnippetTemplate(label: "classm", detail: "Python class", body: "class ${1:Name}:\n    def __init__(self${2:}) -> None:\n        $0"),
+                SnippetTemplate(label: "testpy", detail: "Pytest test function", body: "def test_${1:behavior}() -> None:\n    $0"),
+            ]
+        default:
+            templates = []
+        }
+        guard !templates.isEmpty else { return [] }
+        let (prefix, editRange) = editRangeAndPrefix(in: context)
+        let prefixLower = prefix.lowercased()
+        return templates
+            .filter { prefix.isEmpty || $0.label.lowercased().hasPrefix(prefixLower) }
+            .map { template in
+                LanguageServerCompletionItem(
+                    label: template.label,
+                    detail: template.detail,
+                    documentation: nil,
+                    insertText: template.body,
+                    sortText: "zx_snippet_\(template.label)",
+                    filterText: template.label,
+                    kind: 15,
+                    textEdit: LanguageServerTextEdit(range: editRange, newText: template.body),
+                    additionalTextEdits: [],
+                    data: nil,
+                    insertTextFormat: 2
+                )
+            }
+    }
+
+    static func builtinTypeCompletions(
+        in context: LanguageFeatureRequestContext
+    ) -> [LanguageServerCompletionItem] {
+        guard let language = keywordLanguage(for: context),
+              !language.builtinTypes.isEmpty else { return [] }
+        let (prefix, editRange) = editRangeAndPrefix(in: context)
+        let prefixLower = prefix.lowercased()
+        return language.builtinTypes
+            .filter { prefix.isEmpty || $0.lowercased().hasPrefix(prefixLower) }
+            .sorted()
+            .map { typeName in
+                LanguageServerCompletionItem(
+                    label: typeName,
+                    detail: "\(language.displayName) type",
+                    documentation: nil,
+                    insertText: typeName,
+                    sortText: "zy_type_\(typeName)",
+                    filterText: typeName,
+                    kind: 25,
+                    textEdit: LanguageServerTextEdit(range: editRange, newText: typeName),
+                    additionalTextEdits: [],
+                    data: nil
+                )
+            }
+    }
+
+    static func keywordCompletions(
+        in context: LanguageFeatureRequestContext
+    ) -> [LanguageServerCompletionItem] {
+        guard let language = keywordLanguage(for: context) else { return [] }
+        let (prefix, editRange) = editRangeAndPrefix(in: context)
+        let prefixLower = prefix.lowercased()
+
+        return language.completionKeywords
+            .filter { prefix.isEmpty || $0.lowercased().hasPrefix(prefixLower) }
             .sorted()
             .map { keyword in
                 LanguageServerCompletionItem(

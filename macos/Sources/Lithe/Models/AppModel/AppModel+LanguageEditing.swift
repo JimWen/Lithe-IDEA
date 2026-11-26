@@ -50,8 +50,18 @@ extension AppModel {
     }
 
     private func captureLanguageEditContext(requireSession: Bool) throws -> LanguageEditRequestContext {
-        guard acceptsLanguageEdits, let document = activeDocument, let root = workspaceURL else { throw LanguageWorkspaceEditPlanner.Failure.staleSource }
-        let token = try languageToolingSessionsIfActive?.prepareEditingSession(fileURL: document.url, text: document.text, rootURL: root)
+        guard acceptsLanguageEdits, let document = activeDocument else { throw LanguageWorkspaceEditPlanner.Failure.staleSource }
+        let root: URL
+        if let workspaceURL {
+            root = workspaceURL
+        } else if !requireSession {
+            root = document.url.deletingLastPathComponent()
+        } else {
+            throw LanguageWorkspaceEditPlanner.Failure.staleSource
+        }
+        let token = workspaceURL != nil
+            ? try languageToolingSessionsIfActive?.prepareEditingSession(fileURL: document.url, text: document.text, rootURL: root)
+            : nil
         if requireSession, token == nil { throw LanguageWorkspaceEditPlanner.Failure.staleSource }
         var synchronized: [URL: LanguageServerSynchronizedDocumentSnapshot] = [:]
         if let token, let manager = languageToolingSessionsIfActive {
@@ -111,8 +121,9 @@ extension AppModel {
 
     private func isCurrentLanguageEditContext(_ context: LanguageEditRequestContext,
                                               buffers: [URL: WorkspaceTextEditBufferSnapshot]? = nil) -> Bool {
+        let currentRoot = (workspaceURL ?? activeDocument?.url.deletingLastPathComponent())?.standardizedFileURL
         guard acceptsLanguageEdits, languageEditGeneration == context.generation,
-              workspaceURL?.standardizedFileURL == context.workspace.url,
+              currentRoot == context.workspace.url,
               workspaceFeature.workspaceGeneration == context.workspace.generation else { return false }
         if let session = context.session,
            languageToolingSessionsIfActive?.isCurrentEditingSession(session) != true { return false }
@@ -138,13 +149,13 @@ extension AppModel {
 
     func requestLanguageCompletions(line: Int, utf16Column: Int,
                                     completion: @escaping ([LanguageServerCompletionItem]) -> Void) {
-        guard let document = activeDocument, let root = workspaceURL,
+        guard let document = activeDocument,
               let manager = languageToolingSessionsIfActive,
               manager.features(for: document.url).contains(.completion) else { completion([]); return }
         do {
             let context = try captureLanguageEditContext(requireSession: false)
             try manager.completions(fileURL: document.url, text: document.text,
-                position: .init(line: max(0, line), utf16Column: max(0, utf16Column)), rootURL: root) { [weak self] result in
+                position: .init(line: max(0, line), utf16Column: max(0, utf16Column)), rootURL: workspaceURL) { [weak self] result in
                 guard let self, self.isCurrentLanguageEditContext(context.withoutSession) else { completion([]); return }
                 switch result {
                 case .success(let values):
@@ -170,20 +181,44 @@ extension AppModel {
     }
 
     func triggerRenameSymbol() {
-        guard let document = activeDocument, !document.isReadOnly,
-              supportsLanguageServerFeature(.rename) else { return }
+        guard let document = activeDocument, !document.isReadOnly else { return }
+        guard supportsLanguageServerFeature(.rename) else {
+            if isLightweightIntelligenceMode {
+                requestPrecisionLSPEscalation(
+                    forAction: settings.language == .simplifiedChinese ? "重命名符号" : "Rename Symbol",
+                    fileURL: document.url
+                )
+            }
+            return
+        }
         editorChrome.requestLanguageAction(.renameSymbol, for: document.id)
     }
 
     func triggerFormatDocument() {
-        guard let document = activeDocument, !document.isReadOnly,
-              supportsLanguageServerFeature(.formatting) else { return }
+        guard let document = activeDocument, !document.isReadOnly else { return }
+        guard supportsLanguageServerFeature(.formatting) else {
+            if isLightweightIntelligenceMode {
+                requestPrecisionLSPEscalation(
+                    forAction: settings.language == .simplifiedChinese ? "格式化文档" : "Format Document",
+                    fileURL: document.url
+                )
+            }
+            return
+        }
         requestLanguageFormatting()
     }
 
     func triggerSourceActions() {
-        guard let document = activeDocument, !document.isReadOnly,
-              supportsLanguageServerFeature(.codeActions) else { return }
+        guard let document = activeDocument, !document.isReadOnly else { return }
+        guard supportsLanguageServerFeature(.codeActions) else {
+            if isLightweightIntelligenceMode {
+                requestPrecisionLSPEscalation(
+                    forAction: settings.language == .simplifiedChinese ? "源码操作" : "Source Actions",
+                    fileURL: document.url
+                )
+            }
+            return
+        }
         editorChrome.requestLanguageAction(.sourceActions, for: document.id)
     }
 
@@ -197,6 +232,222 @@ extension AppModel {
         guard let document = activeDocument,
               supportsLanguageServerFeature(.hover) else { return }
         editorChrome.requestLanguageAction(.quickDocumentation, for: document.id)
+    }
+
+    func triggerParameterInfo() {
+        guard let document = activeDocument,
+              supportsLanguageServerFeature(.signatureHelp) else { return }
+        editorChrome.requestLanguageAction(.parameterInfo, for: document.id)
+    }
+
+    func triggerRefactorThis() {
+        guard let document = activeDocument, !document.isReadOnly else { return }
+        guard supportsLanguageServerFeature(.rename) || supportsLanguageServerFeature(.codeActions) else {
+            if isLightweightIntelligenceMode {
+                requestPrecisionLSPEscalation(
+                    forAction: settings.language == .simplifiedChinese ? "重构此项" : "Refactor This",
+                    fileURL: document.url
+                )
+            }
+            return
+        }
+        editorChrome.requestLanguageAction(.refactorThis, for: document.id)
+    }
+
+    func requestLanguageInlayHints(
+        for document: EditorDocument,
+        range: LanguageServerRange,
+        completion: @escaping ([LanguageServerInlayHint]) -> Void
+    ) {
+        guard settings.showInlayHints,
+              let root = workspaceURL,
+              let manager = languageToolingSessionsIfActive,
+              manager.features(for: document.url).contains(.inlayHints) else {
+            completion([])
+            return
+        }
+        let expectedURL = document.url.standardizedFileURL
+        let expectedText = document.text
+        do {
+            try manager.inlayHints(
+                fileURL: document.url,
+                text: expectedText,
+                range: range,
+                rootURL: root
+            ) { [weak document] result in
+                guard let document,
+                      document.url.standardizedFileURL == expectedURL,
+                      document.text.utf8.elementsEqual(expectedText.utf8) else {
+                    completion([])
+                    return
+                }
+                if case .success(let hints) = result {
+                    completion(hints)
+                } else {
+                    completion([])
+                }
+            }
+        } catch {
+            completion([])
+        }
+    }
+
+    func requestLanguageSignatureHelp(
+        for document: EditorDocument,
+        line: Int,
+        utf16Column: Int,
+        completion: @escaping (LanguageServerSignatureHelp?) -> Void
+    ) {
+        guard let manager = languageToolingSessionsIfActive,
+              manager.features(for: document.url).contains(.signatureHelp) else {
+            completion(nil)
+            return
+        }
+        let expectedURL = document.url.standardizedFileURL
+        let expectedText = document.text
+        do {
+            try manager.signatureHelp(
+                fileURL: document.url,
+                text: expectedText,
+                position: .init(line: max(0, line), utf16Column: max(0, utf16Column)),
+                rootURL: workspaceURL
+            ) { [weak document] result in
+                guard let document,
+                      document.url.standardizedFileURL == expectedURL,
+                      document.text.utf8.elementsEqual(expectedText.utf8) else {
+                    completion(nil)
+                    return
+                }
+                if case .success(let help) = result {
+                    completion(help)
+                } else {
+                    completion(nil)
+                }
+            }
+        } catch {
+            completion(nil)
+        }
+    }
+
+    func requestLanguageDocumentHighlight(
+        for document: EditorDocument,
+        line: Int,
+        utf16Column: Int,
+        completion: @escaping ([LanguageServerDocumentHighlight]) -> Void
+    ) {
+        guard let root = workspaceURL,
+              let manager = languageToolingSessionsIfActive,
+              manager.features(for: document.url).contains(.documentHighlight) else {
+            completion([])
+            return
+        }
+        let expectedURL = document.url.standardizedFileURL
+        let expectedText = document.text
+        do {
+            try manager.documentHighlight(
+                fileURL: document.url,
+                text: expectedText,
+                position: .init(line: max(0, line), utf16Column: max(0, utf16Column)),
+                rootURL: root
+            ) { [weak document] result in
+                guard let document,
+                      document.url.standardizedFileURL == expectedURL,
+                      document.text.utf8.elementsEqual(expectedText.utf8) else {
+                    completion([])
+                    return
+                }
+                if case .success(let highlights) = result {
+                    completion(highlights)
+                } else {
+                    completion([])
+                }
+            }
+        } catch {
+            completion([])
+        }
+    }
+
+    func requestLanguageDocumentSymbols(
+        for document: EditorDocument,
+        completion: @escaping ([LanguageServerDocumentSymbol]) -> Void
+    ) {
+        let expectedURL = document.url.standardizedFileURL
+        let expectedText = document.text
+        let filePath = document.url.lastPathComponent
+        let offlineFallback: () -> [LanguageServerDocumentSymbol] = {
+            RustCoreBridge().workspaceDocumentSymbols(path: filePath, source: expectedText)
+        }
+
+        guard let root = workspaceURL,
+              let manager = languageToolingSessionsIfActive,
+              manager.features(for: document.url).contains(.documentSymbol) else {
+            completion(offlineFallback())
+            return
+        }
+        do {
+            try manager.documentSymbols(
+                fileURL: document.url,
+                text: expectedText,
+                rootURL: root
+            ) { [weak document] result in
+                guard let document,
+                      document.url.standardizedFileURL == expectedURL,
+                      document.text.utf8.elementsEqual(expectedText.utf8) else {
+                    return
+                }
+                if case .success(let symbols) = result, !symbols.isEmpty {
+                    completion(symbols)
+                } else {
+                    completion(offlineFallback())
+                }
+            }
+        } catch {
+            completion(offlineFallback())
+        }
+    }
+
+    func refreshDocumentSymbols(for document: EditorDocument) {
+        let documentID = document.id
+        let url = document.url.standardizedFileURL
+        requestLanguageDocumentSymbols(for: document) { [weak self] symbols in
+            guard let self, self.activeDocumentID == documentID else { return }
+            self.editorChrome.updateDocumentSymbols(symbols, for: url)
+        }
+    }
+
+    func requestLanguageSemanticTokens(
+        for document: EditorDocument,
+        completion: @escaping ([LanguageServerSemanticToken]) -> Void
+    ) {
+        guard let root = workspaceURL,
+              let manager = languageToolingSessionsIfActive,
+              manager.features(for: document.url).contains(.semanticTokens) else {
+            completion([])
+            return
+        }
+        let expectedURL = document.url.standardizedFileURL
+        let expectedText = document.text
+        do {
+            try manager.semanticTokens(
+                fileURL: document.url,
+                text: expectedText,
+                rootURL: root
+            ) { [weak document] result in
+                guard let document,
+                      document.url.standardizedFileURL == expectedURL,
+                      document.text.utf8.elementsEqual(expectedText.utf8) else {
+                    completion([])
+                    return
+                }
+                if case .success(let tokens) = result {
+                    completion(tokens)
+                } else {
+                    completion([])
+                }
+            }
+        } catch {
+            completion([])
+        }
     }
 
     func requestLanguagePrepareRename(
@@ -443,9 +694,11 @@ extension AppModel {
                 guard let captured = languageEditContexts.removeValue(forKey: id) else { throw LanguageWorkspaceEditPlanner.Failure.staleSource }
                 context = captured
             } else {
-                // Local callers may supply a direct unversioned completion.
-                guard item.data == nil, item.originSessionIdentity == nil, let root = workspaceURL,
+                // Local callers (including standalone files and refined local completions)
+                // may supply a direct unversioned completion without a server session.
+                guard item.data == nil, item.originSessionIdentity == nil,
                       let document = activeDocument else { throw LanguageWorkspaceEditPlanner.Failure.staleSource }
+                let root = workspaceURL ?? document.url.deletingLastPathComponent()
                 context = LanguageEditRequestContext(
                     workspace: .init(url: root.standardizedFileURL, generation: workspaceFeature.workspaceGeneration),
                     generation: languageEditGeneration,
@@ -472,6 +725,137 @@ extension AppModel {
         } catch { showNotification(error.localizedDescription) }
     }
 
+    func resolveLanguageCompletionPreview(
+        _ item: LanguageServerCompletionItem,
+        completion: @escaping (LanguageServerCompletionItem?) -> Void
+    ) {
+        guard item.data != nil,
+              let id = item.requestContextID,
+              let context = languageEditContexts[id],
+              context.session != nil,
+              isCurrentLanguageEditContext(context) else {
+            completion(nil)
+            return
+        }
+        do {
+            let session = try originalLanguageSession(context)
+            guard session.features.contains(.completionResolve) else {
+                completion(nil)
+                return
+            }
+            try session.resolveCompletion(item, fileURL: context.requestURL) { [weak self] result in
+                guard let self, self.isCurrentLanguageEditContext(context) else {
+                    completion(nil)
+                    return
+                }
+                if case .success(var resolved) = result {
+                    resolved.requestContextID = item.requestContextID
+                    resolved.originSessionIdentity = item.originSessionIdentity
+                    completion(resolved)
+                } else {
+                    completion(nil)
+                }
+            }
+        } catch {
+            completion(nil)
+        }
+    }
+
+    /// Formats `document` before saving when `settings.formatOnSave` is enabled.
+    /// Bounded and best-effort: never blocks or prevents saving if LSP is slow/unavailable.
+    func formatDocumentBeforeSave(_ document: EditorDocument) async {
+        guard settings.formatOnSave,
+              !document.isReadOnly,
+              !document.hasMutationLease,
+              languageEditTask == nil,
+              let manager = languageToolingSessionsIfActive,
+              manager.features(for: document.url).contains(.formatting),
+              let root = workspaceURL else { return }
+        guard let context = try? captureLanguageEditContextForDocument(document, root: root, requireSession: true),
+              let session = try? originalLanguageSession(context) else { return }
+
+        let edits: [LanguageServerTextEdit]? = await withCheckedContinuation { continuation in
+            var resumed = false
+            let finish: ([LanguageServerTextEdit]?) -> Void = { value in
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: value)
+            }
+            let timeoutTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(1500))
+                finish(nil)
+            }
+            do {
+                try session.format(fileURL: context.requestURL) { result in
+                    timeoutTask.cancel()
+                    if case .success(let value) = result {
+                        finish(value)
+                    } else {
+                        finish(nil)
+                    }
+                }
+            } catch {
+                timeoutTask.cancel()
+                finish(nil)
+            }
+        }
+        guard let edits, !edits.isEmpty,
+              isCurrentLanguageEditContext(context),
+              let buffer = context.buffers[context.requestURL] else { return }
+        let rootPrefix = context.workspace.url.path + "/"
+        guard let plan = try? LanguageWorkspaceEditPlanner.plan(
+            .init(operations: [.edit(.init(uri: context.requestURL.absoluteString, edits: edits))]),
+            rootURL: context.workspace.url,
+            sources: [
+                context.requestURL: .init(
+                    path: String(context.requestURL.path.dropFirst(rootPrefix.count)),
+                    text: buffer.text,
+                    diskIdentity: "",
+                    isOpen: true,
+                    synchronized: context.synchronized[context.requestURL]
+                )
+            ],
+            sessionIdentity: context.session?.identity
+        ) else { return }
+        _ = services.workspaceTextEditUndoController.applyOpenDocumentEdits(
+            plan,
+            at: context.workspace.url,
+            expectedBuffers: context.buffers,
+            preserveActiveSaveOwner: true
+        )
+    }
+
+    private func captureLanguageEditContextForDocument(
+        _ document: EditorDocument,
+        root: URL,
+        requireSession: Bool
+    ) throws -> LanguageEditRequestContext {
+        guard acceptsLanguageEdits else { throw LanguageWorkspaceEditPlanner.Failure.staleSource }
+        let token = try languageToolingSessionsIfActive?.prepareEditingSession(
+            fileURL: document.url,
+            text: document.text,
+            rootURL: root
+        )
+        if requireSession, token == nil { throw LanguageWorkspaceEditPlanner.Failure.staleSource }
+        var synchronized: [URL: LanguageServerSynchronizedDocumentSnapshot] = [:]
+        if let token, let manager = languageToolingSessionsIfActive {
+            let session = try manager.editingSession(matching: token)
+            let url = document.url.standardizedFileURL
+            if let snapshot = session.synchronizedDocumentSnapshot(for: url) {
+                synchronized[url] = snapshot
+            }
+        }
+        let normalizedURL = document.url.standardizedFileURL
+        return LanguageEditRequestContext(
+            workspace: WorkspaceIdentity(url: root.standardizedFileURL, generation: workspaceFeature.workspaceGeneration),
+            generation: languageEditGeneration,
+            requestURL: normalizedURL,
+            buffers: [normalizedURL: WorkspaceTextEditBufferSnapshot(document)],
+            session: token,
+            synchronized: synchronized
+        )
+    }
+
     private func performLanguageCompletion(_ item: LanguageServerCompletionItem, fallbackRange: LanguageServerRange,
                                            context: LanguageEditRequestContext, beforeSelection: NSRange?,
                                            canApply: @MainActor () -> Bool, restoreSelection: @escaping @MainActor (NSRange) -> Void) {
@@ -479,7 +863,16 @@ extension AppModel {
             guard canApply(), isCurrentLanguageEditContext(context), activeDocument?.url.standardizedFileURL == context.requestURL,
                   let buffer = context.buffers[context.requestURL] else { throw LanguageWorkspaceEditPlanner.Failure.staleSource }
             let source = item.textEdit ?? .init(range: fallbackRange, newText: item.insertText)
-            let primary = LanguageServerTextEdit(range: source.range, newText: LanguageServerSnippet.plainText(source.newText), annotationID: source.annotationID)
+            let expanded: LanguageServerSnippet.Expanded
+            if item.insertTextFormat == 1 {
+                expanded = LanguageServerSnippet.Expanded(
+                    text: source.newText,
+                    selectionUTF16Range: NSRange(location: source.newText.utf16.count, length: 0)
+                )
+            } else {
+                expanded = LanguageServerSnippet.expand(source.newText)
+            }
+            let primary = LanguageServerTextEdit(range: source.range, newText: expanded.text, annotationID: source.annotationID)
             let edits = [primary] + item.additionalTextEdits
             let root = context.workspace.url.path + "/"
             let plan = try LanguageWorkspaceEditPlanner.plan(.init(operations: [.edit(.init(uri: context.requestURL.absoluteString, edits: edits))]),
@@ -487,14 +880,18 @@ extension AppModel {
                     path: String(context.requestURL.path.dropFirst(root.count)), text: buffer.text, diskIdentity: "", isOpen: true,
                     synchronized: context.synchronized[context.requestURL])], sessionIdentity: context.session?.identity)
             let range = try LanguageServerTextEditApplicator.range(primary.range, in: buffer.text)
-            var caret = range.location + primary.newText.utf16.count
+            var offsetDelta = 0
             for additional in item.additionalTextEdits {
                 let other = try LanguageServerTextEditApplicator.range(additional.range, in: buffer.text)
-                if other.location < range.location { caret += additional.newText.utf16.count - other.length }
+                if other.location < range.location { offsetDelta += additional.newText.utf16.count - other.length }
             }
+            let afterSelection = NSRange(
+                location: max(0, range.location + offsetDelta + expanded.selectionUTF16Range.location),
+                length: expanded.selectionUTF16Range.length
+            )
             let result = services.workspaceTextEditUndoController.applyOpenDocumentEdits(plan, at: context.workspace.url,
                 expectedBuffers: context.buffers, selection: .init(before: beforeSelection ?? range,
-                    after: NSRange(location: caret, length: 0), restore: restoreSelection))
+                    after: afterSelection, restore: restoreSelection))
             guard result.state == .applied else { throw LanguageWorkspaceEditPlanner.Failure.staleSource }
         } catch { showNotification(error.localizedDescription, severity: .error, title: "Could not apply completion") }
     }

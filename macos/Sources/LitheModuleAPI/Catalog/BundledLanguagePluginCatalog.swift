@@ -44,13 +44,11 @@ public struct BundledLanguagePluginSpecification: Sendable {
 }
 
 /// Describes bundled non-Java language recognition and the process-backed
-/// features that are independently manageable as plugins. Go remains an
-/// official native package and is therefore not duplicated here.
+/// features that are independently manageable as plugins. Go, Rust, and Python
+/// ship as official native packages and are therefore not duplicated here.
 public enum BundledLanguagePluginCatalog {
     public static let specifications: [BundledLanguagePluginSpecification] = [
-        .init(id: "python", displayName: "Python", fileExtensions: ["py", "pyw"], executableNames: ["basedpyright-langserver", "pyright-langserver"], arguments: ["--stdio"], supportsExecution: true, supportsDebug: true),
         .init(id: "node", displayName: "Node.js", fileExtensions: ["js", "jsx", "ts", "tsx", "mjs", "cjs"], executableNames: ["typescript-language-server"], arguments: ["--stdio"], languageIdentifier: "javascript", supportsExecution: true, supportsDebug: true),
-        .init(id: "rust", displayName: "Rust", fileExtensions: ["rs"], executableNames: ["rust-analyzer"], validationArguments: ["--version"], supportsExecution: true, supportsDebug: true),
         .init(id: "clangd", displayName: "C/C++/Objective-C", fileExtensions: ["c", "h", "hh", "hpp", "hxx", "cpp", "cc", "cxx", "m", "mm"], executableNames: ["clangd"], languageIdentifier: "cpp"),
         .init(id: "csharp", displayName: "C#", fileExtensions: ["cs", "csx"]),
         .init(id: "fsharp", displayName: "F#", fileExtensions: ["fs", "fsi", "fsx"]),

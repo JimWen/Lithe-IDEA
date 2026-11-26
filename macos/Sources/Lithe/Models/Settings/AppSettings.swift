@@ -16,6 +16,9 @@ final class AppSettings: ObservableObject {
         static let tabWidth = "settings.tabWidth"
         static let editorTabLayoutMode = "settings.editorTabLayoutMode"
         static let showCodeVision = "settings.showCodeVision"
+        static let showInlayHints = "settings.showInlayHints"
+        static let formatOnSave = "settings.formatOnSave"
+        static let languageIntelligenceMode = "settings.languageIntelligenceMode"
         static let autoSave = "settings.autoSave"
         static let autoSaveDelay = "settings.autoSaveDelay"
         static let terminalShell = "settings.terminalShell"
@@ -81,6 +84,11 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(editorTabLayoutMode.rawValue, forKey: Key.editorTabLayoutMode) }
     }
     @Published var showCodeVision: Bool { didSet { defaults.set(showCodeVision, forKey: Key.showCodeVision) } }
+    @Published var showInlayHints: Bool { didSet { defaults.set(showInlayHints, forKey: Key.showInlayHints) } }
+    @Published var formatOnSave: Bool { didSet { defaults.set(formatOnSave, forKey: Key.formatOnSave) } }
+    @Published var languageIntelligenceMode: LanguageIntelligenceMode {
+        didSet { defaults.set(languageIntelligenceMode.rawValue, forKey: Key.languageIntelligenceMode) }
+    }
     @Published var autoSave: Bool { didSet { defaults.set(autoSave, forKey: Key.autoSave) } }
     @Published var autoSaveDelay: Double { didSet { defaults.set(autoSaveDelay, forKey: Key.autoSaveDelay) } }
     @Published var terminalConfiguration: TerminalShellConfiguration {
@@ -174,6 +182,11 @@ final class AppSettings: ObservableObject {
             rawValue: defaults.string(forKey: Key.editorTabLayoutMode) ?? ""
         ) ?? .singleLine
         showCodeVision = defaults.object(forKey: Key.showCodeVision) as? Bool ?? true
+        showInlayHints = defaults.object(forKey: Key.showInlayHints) as? Bool ?? true
+        formatOnSave = defaults.object(forKey: Key.formatOnSave) as? Bool ?? false
+        languageIntelligenceMode = LanguageIntelligenceMode(
+            rawValue: defaults.string(forKey: Key.languageIntelligenceMode) ?? ""
+        ) ?? .lightweight
         autoSave = defaults.object(forKey: Key.autoSave) as? Bool ?? true
         autoSaveDelay = defaults.object(forKey: Key.autoSaveDelay) as? Double ?? 1.5
         let terminal = Self.loadTerminalConfiguration(from: defaults)
@@ -377,6 +390,9 @@ final class AppSettings: ObservableObject {
         tabWidth = 4
         editorTabLayoutMode = .singleLine
         showCodeVision = true
+        showInlayHints = true
+        formatOnSave = false
+        languageIntelligenceMode = .lightweight
         autoSave = true
         autoSaveDelay = 1.5
         terminalConfiguration = TerminalShellConfiguration()

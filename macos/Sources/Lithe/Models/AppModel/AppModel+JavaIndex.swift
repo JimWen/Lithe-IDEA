@@ -40,6 +40,14 @@ extension AppModel {
             id: .languageIntelligence,
             moduleID: .languageIntelligence
         )
+        capability.sessions.openBuffersProvider = { [weak self] in
+            guard let self else { return [:] }
+            var buffers: [String: String] = [:]
+            for document in self.openDocuments {
+                buffers[document.url.standardizedFileURL.path] = document.text
+            }
+            return buffers
+        }
         observeModuleFeature(
             .languageIntelligence,
             observation: capability.sessions.objectWillChange.sink { [weak self] _ in
@@ -54,6 +62,7 @@ extension AppModel {
         )
         capability.tools.onCandidatesChanged = { [weak self] providerID in
             guard let self,
+                  self.effectiveLanguageIntelligenceMode == .lsp,
                   self.languageToolingFeature.shouldRetryCandidate(providerID: providerID) else {
                 return
             }
@@ -69,6 +78,9 @@ extension AppModel {
             guard providerID == "java" else { return }
             self?.handleJavaLanguageServerState(state, operationID: operationID)
         }
+        // Propagate immediate availability of built-in lightweight features (completions,
+        // hover, signature help, go-to-definition, references) to active editors.
+        scheduleObjectWillChangeRelay()
     }
 
     func synchronizeOpenDocuments(forLanguageProvider providerID: String, excluding excludedURL: URL?) {

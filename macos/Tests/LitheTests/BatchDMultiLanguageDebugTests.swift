@@ -6,6 +6,8 @@ import LitheCoreContracts
 import LitheExecutionModule
 import LitheGoSupportModule
 import LitheModuleAPI
+import LithePythonSupportModule
+import LitheRustSupportModule
 import Testing
 @testable import Lithe
 
@@ -328,24 +330,30 @@ struct BatchDMultiLanguageDebugTests {
             )
         })
         let toolHost = MacLanguageProjectToolHost(registry: registry)
-        for languageID in ["rust", "python", "node"] {
-            let projectToolHost = languageID == "rust" ? toolHost : nil
-            let module = BundledLanguageExecutionModule(
-                languageID: languageID,
-                executionHost: execHost,
-                projectToolHost: projectToolHost
+        try runtime.register(ModuleFactory(
+            manifest: RustExecutionModule.moduleManifest,
+            contributions: RustExecutionModule.moduleContributions
+        ) {
+            RustExecutionModule(executionHost: execHost, projectToolHost: toolHost)
+        })
+        try runtime.register(ModuleFactory(
+            manifest: PythonExecutionModule.moduleManifest
+        ) {
+            PythonExecutionModule(executionHost: execHost)
+        })
+        let nodeModule = BundledLanguageExecutionModule(
+            languageID: "node",
+            executionHost: execHost
+        )
+        try runtime.register(ModuleFactory(
+            manifest: nodeModule.manifest,
+            contributions: BundledLanguagePluginCatalog.executionContributions(languageID: "node")
+        ) {
+            BundledLanguageExecutionModule(
+                languageID: "node",
+                executionHost: execHost
             )
-            try runtime.register(ModuleFactory(
-                manifest: module.manifest,
-                contributions: BundledLanguagePluginCatalog.executionContributions(languageID: languageID)
-            ) {
-                BundledLanguageExecutionModule(
-                    languageID: languageID,
-                    executionHost: execHost,
-                    projectToolHost: projectToolHost
-                )
-            })
-        }
+        })
 
         // Go execution module exports `.languageDebugExtension("go")` when enabled.
         try await runtime.setEnabled(true, for: .languageExecutionExtension("go"))

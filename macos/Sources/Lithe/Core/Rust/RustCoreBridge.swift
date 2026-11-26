@@ -1229,10 +1229,67 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         let value: String
     }
 
+    private struct EditorFoldRegionsRequest: Encodable {
+        let path: String
+        let source: String
+    }
+
+    private struct EditorFoldRegionsPayload: Decodable {
+        let foldRegions: [JavaStructurePayload.FoldRegion]
+    }
+
+    private struct BuiltinSignatureHelpPayload: Decodable {
+        struct Parameter: Decodable {
+            let label: String
+            let labelStart: Int?
+            let labelEnd: Int?
+            let documentation: String?
+
+            func makeModel() -> LanguageServerParameterInformation {
+                LanguageServerParameterInformation(
+                    label: label,
+                    labelStart: labelStart,
+                    labelEnd: labelEnd,
+                    documentation: documentation
+                )
+            }
+        }
+
+        struct Signature: Decodable {
+            let label: String
+            let documentation: String?
+            let parameters: [Parameter]
+            let activeParameter: Int?
+
+            func makeModel() -> LanguageServerSignatureInformation {
+                LanguageServerSignatureInformation(
+                    label: label,
+                    documentation: documentation,
+                    parameters: parameters.map { $0.makeModel() },
+                    activeParameter: activeParameter
+                )
+            }
+        }
+
+        let signatures: [Signature]
+        let activeSignature: Int?
+        let activeParameter: Int?
+
+        func makeModel() -> LanguageServerSignatureHelp {
+            LanguageServerSignatureHelp(
+                signatures: signatures.map { $0.makeModel() },
+                activeSignature: activeSignature,
+                activeParameter: activeParameter
+            )
+        }
+    }
+
     private struct LspBuiltinRequest: Encodable {
         let filePath: String
         let text: String
         let position: LspTextEditsRequest.TextEdit.Range.Position
+        let workspaceRoot: String?
+        let openBuffers: [String: String]?
     }
 
     private struct LspBuiltinNavigationRequest: Encodable {
@@ -1240,6 +1297,8 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         let text: String
         let position: LspTextEditsRequest.TextEdit.Range.Position
         let method: String
+        let workspaceRoot: String?
+        let openBuffers: [String: String]?
     }
 
     struct LspClientDiagnosticPayload: Decodable, Sendable {
@@ -1642,6 +1701,22 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
     private struct JavaStructureRequest: Encodable {
         let source: String
         let declarationSources: [String]
+    }
+
+    private struct WorkspaceDocumentSymbolsRequest: Encodable {
+        let path: String
+        let source: String
+    }
+
+    struct WorkspaceDocumentSymbolsPayload: Decodable, Sendable {
+        struct Entry: Decodable, Sendable {
+            let name: String
+            let kind: String
+            let line: Int
+            let signature: String
+        }
+
+        let symbols: [Entry]
     }
 
 
@@ -2272,6 +2347,29 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         )
     }
 
+    func workspaceDocumentSymbols(path: String, source: String) -> [LanguageServerDocumentSymbol] {
+        guard let payload: WorkspaceDocumentSymbolsPayload = execute(
+            command: "workspace.documentSymbols",
+            payload: WorkspaceDocumentSymbolsRequest(path: path, source: source)
+        ) else {
+            return []
+        }
+        return payload.symbols.map { entry in
+            let zeroLine = max(0, entry.line - 1)
+            let position = LanguageServerPosition(line: zeroLine, utf16Column: 0)
+            let range = LanguageServerRange(start: position, end: position)
+            let lspKind = entry.kind == "type" ? 23 : 12 // Struct/Type vs Function/Symbol
+            return LanguageServerDocumentSymbol(
+                name: entry.name,
+                detail: entry.signature,
+                kind: lspKind,
+                range: range,
+                selectionRange: range,
+                children: []
+            )
+        }
+    }
+
 
 
 
@@ -2743,17 +2841,43 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         return response?.text
     }
 
+    func editorFoldRegions(path: String, source: String) -> [JavaFoldRegion] {
+        let response: EditorFoldRegionsPayload? = execute(
+            command: "editor.foldRegions",
+            payload: EditorFoldRegionsRequest(path: path, source: source)
+        )
+        return response?.foldRegions.compactMap { $0.makeModel() } ?? []
+    }
+
     package func builtinLanguageCompletions(
         fileURL: URL,
         text: String,
         position: LanguageServerPosition
+    ) -> [LanguageServerCompletionItem]? {
+        builtinLanguageCompletions(
+            fileURL: fileURL,
+            text: text,
+            position: position,
+            workspaceURL: nil,
+            openBuffers: nil
+        )
+    }
+
+    package func builtinLanguageCompletions(
+        fileURL: URL,
+        text: String,
+        position: LanguageServerPosition,
+        workspaceURL: URL?,
+        openBuffers: [String: String]?
     ) -> [LanguageServerCompletionItem]? {
         let response: BuiltinCompletionPayload? = execute(
             command: "lsp.builtinCompletions",
             payload: LspBuiltinRequest(
                 filePath: fileURL.standardizedFileURL.path,
                 text: text,
-                position: .init(line: position.line, utf16Column: position.utf16Column)
+                position: .init(line: position.line, utf16Column: position.utf16Column),
+                workspaceRoot: workspaceURL?.standardizedFileURL.path,
+                openBuffers: openBuffers?.isEmpty == true ? nil : openBuffers
             )
         )
         return response?.makeModels()
@@ -2764,15 +2888,54 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         text: String,
         position: LanguageServerPosition
     ) -> LanguageServerHover? {
+        builtinLanguageHover(
+            fileURL: fileURL,
+            text: text,
+            position: position,
+            workspaceURL: nil,
+            openBuffers: nil
+        )
+    }
+
+    package func builtinLanguageHover(
+        fileURL: URL,
+        text: String,
+        position: LanguageServerPosition,
+        workspaceURL: URL?,
+        openBuffers: [String: String]?
+    ) -> LanguageServerHover? {
         let response: BuiltinHoverPayload? = execute(
             command: "lsp.builtinHover",
             payload: LspBuiltinRequest(
                 filePath: fileURL.standardizedFileURL.path,
                 text: text,
-                position: .init(line: position.line, utf16Column: position.utf16Column)
+                position: .init(line: position.line, utf16Column: position.utf16Column),
+                workspaceRoot: workspaceURL?.standardizedFileURL.path,
+                openBuffers: openBuffers?.isEmpty == true ? nil : openBuffers
             )
         )
         return response?.hover?.makeModel()
+    }
+
+    package func builtinLanguageSignatureHelp(
+        fileURL: URL,
+        text: String,
+        position: LanguageServerPosition,
+        workspaceURL: URL?,
+        openBuffers: [String: String]?
+    ) -> LanguageServerSignatureHelp? {
+        let response: BuiltinSignatureHelpPayload? = execute(
+            command: "lsp.builtinSignatureHelp",
+            payload: LspBuiltinRequest(
+                filePath: fileURL.standardizedFileURL.path,
+                text: text,
+                position: .init(line: position.line, utf16Column: position.utf16Column),
+                workspaceRoot: workspaceURL?.standardizedFileURL.path,
+                openBuffers: openBuffers?.isEmpty == true ? nil : openBuffers
+            )
+        )
+        let help = response?.makeModel()
+        return help?.signatures.isEmpty == false ? help : nil
     }
 
     package func builtinLanguageNavigation(
@@ -2781,13 +2944,33 @@ struct RustCoreBridge: Sendable, IncrementalLanguageServerRuntimeCore {
         text: String,
         position: LanguageServerPosition
     ) -> [LanguageServerLocation]? {
+        builtinLanguageNavigation(
+            method: method,
+            fileURL: fileURL,
+            text: text,
+            position: position,
+            workspaceURL: nil,
+            openBuffers: nil
+        )
+    }
+
+    package func builtinLanguageNavigation(
+        method: String,
+        fileURL: URL,
+        text: String,
+        position: LanguageServerPosition,
+        workspaceURL: URL?,
+        openBuffers: [String: String]?
+    ) -> [LanguageServerLocation]? {
         let response: BuiltinNavigationPayload? = execute(
             command: "lsp.builtinNavigation",
             payload: LspBuiltinNavigationRequest(
                 filePath: fileURL.standardizedFileURL.path,
                 text: text,
                 position: .init(line: position.line, utf16Column: position.utf16Column),
-                method: method
+                method: method,
+                workspaceRoot: workspaceURL?.standardizedFileURL.path,
+                openBuffers: openBuffers?.isEmpty == true ? nil : openBuffers
             )
         )
         return response?.makeModels()

@@ -2,7 +2,9 @@ import Foundation
 import LitheCoreContracts
 
 @MainActor
-public final class GoLanguageServerCapability: NSObject, LanguageServerExtensionProviding {
+public final class GoLanguageServerCapability: NSObject,
+    LanguageServerExtensionProviding,
+    LanguageSyntaxExtensionProviding {
     public let configuration = LanguageServerExtensionConfiguration(
         languageID: goLanguageID,
         displayName: "Go",
@@ -10,6 +12,7 @@ public final class GoLanguageServerCapability: NSObject, LanguageServerExtension
         validationArguments: ["version"],
         languageIdentifier: "go"
     )
+    public let syntaxProfile = LanguageSyntaxProfile.go
     public let lifecycle: any LanguageServerExtensionLifecycle
 
     init(lifecycle: any LanguageServerExtensionLifecycle) {

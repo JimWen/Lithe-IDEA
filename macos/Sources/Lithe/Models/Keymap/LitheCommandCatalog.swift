@@ -14,6 +14,7 @@ enum LitheCommandCatalog {
         command("save", "Save", "Save the active document", .project, "s", [.command]),
         command("close-project", "Close Project", "Return to the Welcome screen", .project, "w", [.shift, .command]),
         command("settings", "Settings", "Configure editor and project behavior", .project, ",", [.command]),
+        command("toggle-language-intelligence-mode", "Toggle Lightweight / Precision LSP Mode", "Switch between fast zero-LSP Lightweight Mode and Precision LSP for this window", .project),
         command("rebuild-java-index", "Java: Rebuild Index", "Clear the current project's Java index and rebuild it on next use", .project),
         command("reveal-in-finder", "Reveal in Finder", "Show the active file in Finder", .project),
 
@@ -51,12 +52,15 @@ enum LitheCommandCatalog {
         command("rename-symbol", "Rename Symbol", "Rename the symbol at the caret across the workspace", .navigation, "f6", [.shift]),
         command("format-document", "Format Document", "Format the active document with the language server", .navigation, "l", [.option, .command]),
         command("source-actions", "Source Actions", "Show quick fixes and refactoring actions at the caret", .navigation, "return", [.option]),
+        command("refactor-this", "Refactor This", "Show refactoring and rename actions at the caret", .navigation, "t", [.control]),
         command("complete-symbol", "Complete Symbol", "Show language-server completions at the caret", .navigation, "space", [.control]),
+        command("parameter-info", "Parameter Info", "Show function parameter signature help at the caret", .navigation, "p", [.command]),
         command("quick-documentation", "Quick Documentation", "Show hover documentation for the symbol at the caret", .navigation, "f1"),
         command("search-in-project", "Find in Files", "Search text across the workspace", .navigation, "f", [.shift, .command]),
         command("replace-in-project", "Replace in Files", "Replace text across the workspace", .navigation, "r", [.shift, .command]),
 
         command("toggle-project", "Project", "Show or hide the Project tool window", .window, "1", [.command]),
+        command("toggle-structure", "Structure", "Show or hide the file Structure outline", .window, "7", [.command]),
         command("toggle-commit", "Commit", "Show or hide the Commit tool window", .window, "0", [.command]),
         command("toggle-find", "Find", "Show or hide the Find tool window", .window, "3", [.command]),
         command("toggle-terminal", "Toggle Terminal", "Show or hide the Terminal tool window", .window, "f12", [.option]),

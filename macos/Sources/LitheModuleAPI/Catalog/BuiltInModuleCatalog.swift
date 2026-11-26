@@ -195,6 +195,8 @@ public enum BuiltInPluginCatalog {
 /// module graph and become available only when their signed package exists.
 public enum OfficialPluginCatalog {
     private static let goLanguageID = "go"
+    private static let rustLanguageID = "rust"
+    private static let pythonLanguageID = "python"
 
     // Installed 0.3.0 bundles resolve moduleManifest(for:) against the host with
     // dynamic_lookup. Preserve these declarations even when the current package
@@ -233,6 +235,13 @@ public enum OfficialPluginCatalog {
         actionID: "go.toggle", rendererID: "go.project"
     )]
 
+    /// The Cargo sidebar entry contributed by the official Rust Support plugin.
+    public static let cargoProjectToolsContributions: [ModuleContribution] = [ModuleContribution(
+        id: "language.rust.cargo", kind: .toolWindow, title: "Cargo",
+        icon: "shippingbox", placement: .rightSidebar, order: 100,
+        actionID: "cargo.toggle", rendererID: "cargo.project"
+    )]
+
     private static let goExecutionManifestV2 = ModuleManifest(
         id: goExecutionManifestV1.id,
         displayName: goExecutionManifestV1.displayName,
@@ -256,6 +265,59 @@ public enum OfficialPluginCatalog {
         sleepPolicy: goLanguageServerManifestV1.sleepPolicy,
         dependencies: goLanguageServerManifestV1.dependencies,
         providedCapabilities: goLanguageServerManifestV1.providedCapabilities
+    )
+
+    private static let rustExecutionManifestV2 = ModuleManifest(
+        id: .languageExecutionExtension(rustLanguageID),
+        displayName: "Rust Execution",
+        scope: .workspace,
+        defaultState: .enabled,
+        activationPolicy: .onDemand,
+        sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
+        dependencies: [.module(.workspace)],
+        providedCapabilities: [
+            .languageExecutionExtension(rustLanguageID),
+            .languageTestingExtension(rustLanguageID),
+            .languageProjectTools(rustLanguageID),
+            .languageDebugExtension(rustLanguageID)
+        ]
+    )
+
+    private static let rustLanguageServerManifestV2 = ModuleManifest(
+        id: .languageServerExtension(rustLanguageID),
+        displayName: "Rust Language Server",
+        scope: .workspace,
+        defaultState: .enabled,
+        activationPolicy: .onDemand,
+        sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
+        dependencies: [.module(.workspace)],
+        providedCapabilities: [.languageServerExtension(rustLanguageID)]
+    )
+
+    private static let pythonExecutionManifestV2 = ModuleManifest(
+        id: .languageExecutionExtension(pythonLanguageID),
+        displayName: "Python Execution",
+        scope: .workspace,
+        defaultState: .enabled,
+        activationPolicy: .onDemand,
+        sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
+        dependencies: [.module(.workspace)],
+        providedCapabilities: [
+            .languageExecutionExtension(pythonLanguageID),
+            .languageTestingExtension(pythonLanguageID),
+            .languageDebugExtension(pythonLanguageID)
+        ]
+    )
+
+    private static let pythonLanguageServerManifestV2 = ModuleManifest(
+        id: .languageServerExtension(pythonLanguageID),
+        displayName: "Python Language Server",
+        scope: .workspace,
+        defaultState: .enabled,
+        activationPolicy: .onDemand,
+        sleepPolicy: .whenIdle(afterSeconds: 10 * 60),
+        dependencies: [.module(.workspace)],
+        providedCapabilities: [.languageServerExtension(pythonLanguageID)]
     )
 
     public static let manifests: [PluginManifest] = [
@@ -291,8 +353,71 @@ public enum OfficialPluginCatalog {
                 testingModuleID: .languageExecutionExtension(goLanguageID),
                 debugModuleID: .languageExecutionExtension(goLanguageID)
             )]
+        ),
+        PluginManifest(
+            id: PluginID("dev.lithe.plugin.python-support"),
+            displayName: "Python Support",
+            version: BuiltInPluginCatalog.hostVersion,
+            hostCompatibility: PluginHostCompatibility(
+                minimum: BuiltInPluginCatalog.hostVersion,
+                maximumExclusive: PluginVersion(major: 0, minor: 4, patch: 0)
+            ),
+            vendor: BuiltInPluginCatalog.vendor,
+            entrypoint: PluginEntrypoint(
+                kind: .nativeBundle,
+                bundleIdentifier: "dev.lithe.plugin.python-support.bundle",
+                principalClass: "LithePythonSupportPluginEntrypoint",
+                bundlePath: "PythonSupport.bundle"
+            ),
+            modules: [
+                PluginModuleDeclaration(manifest: pythonExecutionManifestV2),
+                PluginModuleDeclaration(manifest: pythonLanguageServerManifestV2)
+            ],
+            languageSupports: [LanguageSupportDeclaration(
+                id: pythonLanguageID,
+                displayName: "Python",
+                fileExtensions: ["py", "pyi", "pyw"],
+                projectFileNames: ["pyproject.toml", "pytest.ini", "requirements.txt", "setup.cfg", "setup.py"],
+                languageServerModuleID: .languageServerExtension(pythonLanguageID),
+                executionModuleID: .languageExecutionExtension(pythonLanguageID),
+                testingModuleID: .languageExecutionExtension(pythonLanguageID),
+                debugModuleID: .languageExecutionExtension(pythonLanguageID)
+            )]
+        ),
+        PluginManifest(
+            id: PluginID("dev.lithe.plugin.rust-support"),
+            displayName: "Rust Support",
+            version: BuiltInPluginCatalog.hostVersion,
+            hostCompatibility: PluginHostCompatibility(
+                minimum: BuiltInPluginCatalog.hostVersion,
+                maximumExclusive: PluginVersion(major: 0, minor: 4, patch: 0)
+            ),
+            vendor: BuiltInPluginCatalog.vendor,
+            entrypoint: PluginEntrypoint(
+                kind: .nativeBundle,
+                bundleIdentifier: "dev.lithe.plugin.rust-support.bundle",
+                principalClass: "LitheRustSupportPluginEntrypoint",
+                bundlePath: "RustSupport.bundle"
+            ),
+            modules: [
+                PluginModuleDeclaration(
+                    manifest: rustExecutionManifestV2,
+                    contributions: OfficialPluginCatalog.cargoProjectToolsContributions
+                ),
+                PluginModuleDeclaration(manifest: rustLanguageServerManifestV2)
+            ],
+            languageSupports: [LanguageSupportDeclaration(
+                id: rustLanguageID,
+                displayName: "Rust",
+                fileExtensions: ["rs"],
+                projectFileNames: ["cargo.toml"],
+                languageServerModuleID: .languageServerExtension(rustLanguageID),
+                executionModuleID: .languageExecutionExtension(rustLanguageID),
+                testingModuleID: .languageExecutionExtension(rustLanguageID),
+                debugModuleID: .languageExecutionExtension(rustLanguageID)
+            )]
         )
-    ]
+    ].sorted { $0.id < $1.id }
 
     public static func manifest(forModule id: ModuleID) -> PluginManifest? {
         manifests.first { plugin in plugin.modules.contains { $0.manifest.id == id } }
@@ -312,6 +437,10 @@ public enum OfficialPluginCatalog {
         switch id {
         case goExecutionManifestV2.id: goExecutionManifestV2
         case goLanguageServerManifestV2.id: goLanguageServerManifestV2
+        case rustExecutionManifestV2.id: rustExecutionManifestV2
+        case rustLanguageServerManifestV2.id: rustLanguageServerManifestV2
+        case pythonExecutionManifestV2.id: pythonExecutionManifestV2
+        case pythonLanguageServerManifestV2.id: pythonLanguageServerManifestV2
         default: nil
         }
     }

@@ -1,3 +1,4 @@
+import LitheCoreContracts
 import SwiftUI
 
 struct LSPControlCenterView: View {
@@ -11,6 +12,7 @@ struct LSPControlCenterView: View {
             header
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    intelligenceModeSection
                     projectSummary
                     if projectLanguageServers.isEmpty {
                         emptyState
@@ -42,6 +44,67 @@ struct LSPControlCenterView: View {
         .padding(.horizontal, 16)
         .frame(height: 42)
         .background(LitheTheme.settingsSurface)
+    }
+
+    private var intelligenceModeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(usesChinese ? "代码智能模式" : "Code Intelligence Mode")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(LitheTheme.primaryText)
+                    Text(usesChinese
+                        ? "默认使用轻量模式（零 LSP 常驻进程，毫秒级高亮、折叠、跨文件符号跳转/悬停/参数提示与引用检索）；需要精确类型诊断或跨文件重命名时可按需开启精确 LSP。"
+                        : "Lightweight Mode is the default (zero background LSP processes; instant highlighting, folding, cross-file jump, hover, signature help, and references). Enable Precision LSP on demand for type diagnostics and safe cross-file rename.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(LitheTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Picker(
+                    usesChinese ? "代码智能模式" : "Code Intelligence Mode",
+                    selection: Binding(
+                        get: { settings.languageIntelligenceMode },
+                        set: { model.applyGlobalLanguageIntelligenceMode($0) }
+                    )
+                ) {
+                    Text(usesChinese ? "轻量模式（默认）" : "Lightweight (Default)")
+                        .tag(LanguageIntelligenceMode.lightweight)
+                    Text(usesChinese ? "精确 LSP" : "Precision LSP")
+                        .tag(LanguageIntelligenceMode.lsp)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 240)
+            }
+
+            if let overrideMode = model.sessionLanguageIntelligenceModeOverride {
+                HStack(spacing: 8) {
+                    Image(systemName: "bolt.circle")
+                        .foregroundStyle(LitheTheme.accent)
+                    Text(usesChinese
+                        ? "当前窗口临时覆盖为：\(overrideMode == .lsp ? "精确 LSP" : "轻量模式")"
+                        : "This window currently overrides the global default: \(overrideMode == .lsp ? "Precision LSP" : "Lightweight Mode")")
+                        .font(.system(size: 11))
+                        .foregroundStyle(LitheTheme.secondaryText)
+                    Spacer(minLength: 8)
+                    Button(usesChinese ? "恢复默认" : "Reset") {
+                        model.setSessionLanguageIntelligenceMode(settings.languageIntelligenceMode)
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11, weight: .medium))
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: LitheTheme.Metrics.cornerRadius)
+                .fill(LitheTheme.settingsSurface)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: LitheTheme.Metrics.cornerRadius)
+                .stroke(LitheTheme.divider, lineWidth: 1)
+        }
     }
 
     private var projectSummary: some View {
@@ -148,6 +211,9 @@ struct LSPControlCenterView: View {
         case .stopping: return usesChinese ? "正在停止" : "Stopping"
         case .disabled: return usesChinese ? "已关闭" : "Off"
         case .stopped:
+            if model.isLightweightIntelligenceMode {
+                return usesChinese ? "待机（轻量模式，未启动进程）" : "Standby (Lightweight Mode)"
+            }
             return usesChinese ? "按需启动，打开对应文件时运行" : "Starts on demand when a matching file is opened"
         case .error:
             if descriptor.id == "java" {

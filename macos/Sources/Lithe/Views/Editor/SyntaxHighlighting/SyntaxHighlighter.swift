@@ -1,7 +1,89 @@
 import AppKit
+import LitheCoreContracts
 
 /// Applies the adapter selected by the bundled file-format mapping.
 enum SyntaxHighlighter {
+    static func semanticTokenRole(
+        for tokenType: String,
+        modifiers: [String]
+    ) -> SyntaxHighlightingColorRole? {
+        switch tokenType {
+        case "namespace", "module", "package":
+            return .type
+        case "type", "class", "enum", "interface", "struct", "builtinType":
+            return .type
+        case "typeParameter":
+            return .typeParameter
+        case "parameter":
+            return .parameter
+        case "variable":
+            return modifiers.contains("readonly") || modifiers.contains("constant") ? .constant : .variable
+        case "property", "field":
+            return .property
+        case "enumMember":
+            return .constant
+        case "function", "method":
+            return modifiers.contains("declaration") || modifiers.contains("definition")
+                ? .functionDeclaration
+                : .functionCall
+        case "macro", "decorator", "attribute":
+            return .annotation
+        case "keyword", "modifier":
+            return .keyword
+        case "comment":
+            return modifiers.contains("documentation") ? .documentationComment : .comment
+        case "string", "regexp":
+            return .string
+        case "number":
+            return .number
+        case "operator":
+            return .operator
+        default:
+            return nil
+        }
+    }
+
+    static func applyLspSemanticTokens(
+        _ tokens: [LanguageServerSemanticToken],
+        to storage: NSTextStorage,
+        lineOffset: (Int) -> Int,
+        fileName: String?,
+        fileExtension: String,
+        isDark: Bool,
+        lineRange: ClosedRange<Int>? = nil
+    ) {
+        guard storage.length > 0, !tokens.isEmpty else { return }
+        let basePalette = CodeEditorPalette(isDark: isDark, theme: LitheTheme.activeTheme)
+        let format = SyntaxHighlightingRegistry.bundled.format(
+            fileName: fileName,
+            fileExtension: fileExtension
+        )
+        let palette = SyntaxHighlightingColorConfiguration.bundled.palette(
+            formatID: format?.id,
+            base: basePalette
+        )
+        let totalLength = storage.length
+        storage.beginEditing()
+        for token in tokens {
+            if let lineRange {
+                if token.line < lineRange.lowerBound { continue }
+                if token.line > lineRange.upperBound { break }
+            }
+            guard token.line >= 0, token.utf16Column >= 0, token.length > 0,
+                  let role = semanticTokenRole(for: token.tokenType, modifiers: token.tokenModifiers) else {
+                continue
+            }
+            let start = lineOffset(token.line) + token.utf16Column
+            guard start >= 0, start + token.length <= totalLength else { continue }
+            storage.addAttribute(
+                .foregroundColor,
+                value: palette.color(for: role),
+                range: NSRange(location: start, length: token.length)
+            )
+        }
+        storage.endEditing()
+    }
+
     static func applyJavaSemanticHighlights(
         _ highlights: [JavaSyntaxHighlight],
         to storage: NSTextStorage,
@@ -86,7 +168,8 @@ enum SyntaxHighlighter {
                 to: storage,
                 palette: palette,
                 range: target,
-                fileExtension: fileExtension
+                fileExtension: fileExtension,
+                fileName: fileName
             )
         case .ini:
             INISyntaxHighlightingAdapter.apply(to: storage, palette: palette, range: target)

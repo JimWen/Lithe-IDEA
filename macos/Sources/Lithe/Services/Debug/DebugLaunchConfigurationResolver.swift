@@ -130,6 +130,129 @@ struct DebugLaunchConfigurationResolver {
         }
     }
 
+    func resolveLanguageTest(
+        provider: LanguageProviderDescriptor,
+        scope: LanguageTestScope,
+        workspaceURL: URL,
+        configurations: [RunConfiguration],
+        selectedConfiguration: RunConfiguration?,
+        preBuiltRustTestExecutableURL: URL? = nil,
+        options: (RunConfiguration) -> RunOptions
+    ) throws -> DebugLaunchConfiguration {
+        let normalizedWorkspace = workspaceURL.standardizedFileURL
+        let fileURL: URL
+        let testIdentifier: String?
+        switch scope {
+        case .workspace:
+            fileURL = normalizedWorkspace
+            testIdentifier = nil
+        case .file(let url):
+            fileURL = url.standardizedFileURL
+            testIdentifier = nil
+        case .testCase(let identifier, let url):
+            fileURL = (url ?? normalizedWorkspace).standardizedFileURL
+            testIdentifier = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        switch provider.id {
+        case "go":
+            let packageDir = (fileURL.hasDirectoryPath ? fileURL : fileURL.deletingLastPathComponent())
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+            var args: [String] = []
+            if let testIdentifier, !testIdentifier.isEmpty {
+                let escaped = NSRegularExpression.escapedPattern(for: testIdentifier)
+                if testIdentifier.hasPrefix("Benchmark") {
+                    args = ["-test.run", "^$", "-test.bench", "^\(escaped)$", "-test.benchmem"]
+                } else {
+                    args = ["-test.run", "^\(escaped)$"]
+                }
+            }
+            var launchArgs: [String: ToolingJSONValue] = [
+                "mode": .string("test"),
+                "program": .string(packageDir.path),
+                "cwd": .string(packageDir.path),
+                "stopOnEntry": .bool(false)
+            ]
+            if !args.isEmpty {
+                launchArgs["args"] = .array(args.map(ToolingJSONValue.string))
+            }
+            return DebugLaunchConfiguration(
+                name: testIdentifier ?? fileURL.lastPathComponent,
+                request: .launch,
+                arguments: launchArgs
+            )
+        case "python":
+            let relativePath: String
+            if fileURL.path.hasPrefix(normalizedWorkspace.path + "/") {
+                relativePath = String(fileURL.path.dropFirst(normalizedWorkspace.path.count + 1))
+            } else {
+                relativePath = fileURL.path
+            }
+            let targetNode: String
+            if let testIdentifier, !testIdentifier.isEmpty {
+                targetNode = "\(relativePath)::\(testIdentifier)"
+            } else {
+                targetNode = relativePath
+            }
+            let launchArgs: [String: ToolingJSONValue] = [
+                "module": .string("pytest"),
+                "args": .array([.string(targetNode), .string("-s")]),
+                "cwd": .string(normalizedWorkspace.path),
+                "console": .string("internalConsole"),
+                "justMyCode": .bool(true)
+            ]
+            return DebugLaunchConfiguration(
+                name: testIdentifier ?? fileURL.lastPathComponent,
+                request: .launch,
+                arguments: launchArgs
+            )
+        case "rust":
+            guard let executableURL = preBuiltRustTestExecutableURL?.standardizedFileURL,
+                  fileExists(executableURL) else {
+                throw DebugLaunchConfigurationResolutionError.rustExecutableNotBuilt(
+                    preBuiltRustTestExecutableURL ?? normalizedWorkspace.appendingPathComponent("target/debug"),
+                    binary: testIdentifier ?? fileURL.lastPathComponent
+                )
+            }
+            let rustConfigurations = configurations.filter { $0.kind.providerID == "cargo" }
+            let moduleConfig = rustConfigurations
+                .filter { contains(fileURL, inModule: $0.modulePath, workspaceURL: normalizedWorkspace) }
+                .max { moduleDepth($0.modulePath) < moduleDepth($1.modulePath) }
+            let moduleURL = normalizedWorkspace
+                .appendingPathComponent(moduleConfig?.modulePath ?? "", isDirectory: true)
+                .standardizedFileURL
+            let runOptions = moduleConfig.map(options) ?? selectedConfiguration.map(options)
+            let workingDirectory = resolvedWorkingDirectory(
+                runOptions: runOptions,
+                fallback: moduleURL,
+                workspaceURL: normalizedWorkspace
+            )
+            var testArgs: [String] = []
+            if let testIdentifier, !testIdentifier.isEmpty {
+                testArgs = [testIdentifier, "--exact", "--nocapture"]
+            } else {
+                testArgs = ["--nocapture"]
+            }
+            var launchArgs: [String: ToolingJSONValue] = [
+                "program": .string(executableURL.path),
+                "cwd": .string(workingDirectory.path),
+                "args": .array(testArgs.map(ToolingJSONValue.string)),
+                "stopOnEntry": .bool(false)
+            ]
+            if let runOptions, !runOptions.environment.isEmpty {
+                launchArgs["env"] = .object(runOptions.environment.mapValues(ToolingJSONValue.string))
+            }
+            return DebugLaunchConfiguration(
+                name: testIdentifier ?? fileURL.lastPathComponent,
+                request: .launch,
+                arguments: launchArgs
+            )
+        default:
+            throw DebugLaunchConfigurationResolutionError.unsupportedProvider(provider.displayName)
+        }
+    }
+
     func resolveJavaAttach(host: String, port: Int) throws -> DebugLaunchConfiguration {
         let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedHost.isEmpty else {
@@ -335,13 +458,13 @@ struct DebugLaunchConfigurationResolver {
         } else {
             programURL = documentURL.deletingLastPathComponent()
         }
-        let normalizedProgram = programURL.standardizedFileURL
+        let normalizedProgram = programURL.resolvingSymlinksInPath().standardizedFileURL
         let runOptions = configuration.map(options) ?? selectedConfiguration.map(options)
         let workingDirectory = resolvedWorkingDirectory(
             runOptions: runOptions,
             fallback: normalizedProgram,
             workspaceURL: workspaceURL
-        )
+        ).resolvingSymlinksInPath().standardizedFileURL
         var arguments: [String: ToolingJSONValue] = [
             "mode": .string("debug"),
             "program": .string(normalizedProgram.path),

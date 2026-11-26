@@ -703,6 +703,14 @@ struct CodeEditorView: NSViewRepresentable {
         previewLine == nil ? model.languageToolingSessionsIfActive?.features(for: document.url) ?? [] : []
     }
 
+    private var hasActivePrecisionLanguageServer: Bool {
+        guard previewLine == nil,
+              let providerID = model.languageProviderCatalog.provider(for: document.url)?.id else {
+            return false
+        }
+        return model.languageToolingSessionsIfActive?.activeLanguageServerIDs.contains(providerID) == true
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(
             document: document,
@@ -828,11 +836,13 @@ struct CodeEditorView: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.isContinuousSpellCheckingEnabled = false
         textView.languageServerFeatures = languageFeatures
+        textView.hasActivePrecisionLanguageServer = hasActivePrecisionLanguageServer
+        textView.documentFileURL = document.url
         textView.isLanguageNavigationEnabled = !textView.languageServerFeatures.intersection([
             .definition, .references, .implementation
         ]).isEmpty
         textView.isLanguageIntelligenceEnabled = !textView.languageServerFeatures.intersection([
-            .hover, .completion, .rename, .formatting, .codeActions
+            .hover, .completion, .rename, .formatting, .codeActions, .signatureHelp
         ]).isEmpty
         textView.onFindStateChange = { [weak coordinator = context.coordinator] index, count in
             coordinator?.scheduleFindStateUpdate(currentIndex: index, count: count)
@@ -868,6 +878,9 @@ struct CodeEditorView: NSViewRepresentable {
                     }
                 }
             }
+            textView.onHoverDwell = { [weak model] line, column, completion in
+                model?.requestLanguageHover(line: line, utf16Column: column, completion: completion)
+            }
             textView.onCompletionRequested = { [weak model, weak textView] line, column in
                 guard let textView, !textView.hasMarkedText() else { return }
                 let selection = textView.selectedRange()
@@ -887,6 +900,9 @@ struct CodeEditorView: NSViewRepresentable {
                         viewportStore.restoreSelection(selection, for: documentID)
                     })
             }
+            textView.onCompletionPreviewResolveRequested = { [weak model] item, completion in
+                model?.resolveLanguageCompletionPreview(item, completion: completion)
+            }
             textView.onPrepareRenameRequested = { [weak model] line, column, completion in
                 model?.requestLanguagePrepareRename(line: line, utf16Column: column, completion: completion)
             }
@@ -901,6 +917,28 @@ struct CodeEditorView: NSViewRepresentable {
                 model?.requestLanguageCodeActions(range: range) { [weak textView, weak model] actions in
                     textView?.presentLanguageCodeActions(actions) { action in model?.applyLanguageCodeAction(action) }
                 }
+            }
+            textView.onSignatureHelpRequested = { [weak model, weak document] line, column, completion in
+                guard let model, let document else {
+                    completion(nil)
+                    return
+                }
+                model.requestLanguageSignatureHelp(
+                    for: document,
+                    line: line,
+                    utf16Column: column,
+                    completion: completion
+                )
+            }
+            textView.onRefactorCodeActionsRequested = { [weak model] range, completion in
+                guard let model else {
+                    completion([])
+                    return
+                }
+                model.requestLanguageCodeActions(range: range, completion: completion)
+            }
+            textView.onRefactorCodeActionSelected = { [weak model] action in
+                model?.applyLanguageCodeAction(action)
             }
         }
         textView.onPasteImage = { [weak coordinator = context.coordinator] in
@@ -936,6 +974,7 @@ struct CodeEditorView: NSViewRepresentable {
         context.coordinator.debugInlineValueOverlay = DebugInlineValueOverlayController(
             textView: textView
         )
+        context.coordinator.inlayHintOverlay = InlayHintOverlayController(textView: textView)
         context.coordinator.isDarkAppearance = palette.isDark
         context.coordinator.colorTheme = settings.colorTheme
         context.coordinator.highlight()
@@ -946,6 +985,9 @@ struct CodeEditorView: NSViewRepresentable {
         context.coordinator.updateGitLineChanges()
         context.coordinator.updateDiagnostics()
         context.coordinator.applyInitialRunnableMarkers()
+        context.coordinator.scheduleDocumentSymbolRefresh()
+        context.coordinator.scheduleSemanticTokensRefresh()
+        context.coordinator.scheduleInlayHintRefresh()
         context.coordinator.shouldFocus = shouldFocus
         context.coordinator.requestInitialFocusIfNeeded()
         let debugFeature = model.genericDebugFeatureIfActive
@@ -1002,6 +1044,10 @@ struct CodeEditorView: NSViewRepresentable {
         let incomingSoftWrapLineCount = textChanged
             ? LitheTextViewportLayout.lineCount(of: document.text)
             : nil
+        if let codeTextView = textView as? CodeTextView {
+            codeTextView.hasActivePrecisionLanguageServer = hasActivePrecisionLanguageServer
+            codeTextView.documentFileURL = document.url
+        }
         let chromeChanged = context.coordinator.applyEditorChromeIfNeeded(
             fontSize: fontSize,
             tabWidth: tabWidth,
@@ -1026,9 +1072,13 @@ struct CodeEditorView: NSViewRepresentable {
                 (textView as? CodeTextView)?.rebuildLineIndex()
                 container.gutter?.refreshLineNumberLayout()
                 context.coordinator.resetHighlightCache()
+                context.coordinator.invalidateSemanticIntelligence()
                 context.coordinator.highlight()
                 (textView as? CodeTextView)?.updateEditorDecorations()
                 context.coordinator.scheduleFoldRefresh()
+                context.coordinator.scheduleDocumentSymbolRefresh()
+                context.coordinator.scheduleSemanticTokensRefresh()
+                context.coordinator.scheduleInlayHintRefresh()
                 container.gutter?.needsDisplay = true
             }
             let textLength = (textView.string as NSString).length
@@ -1047,6 +1097,7 @@ struct CodeEditorView: NSViewRepresentable {
         if appearanceChanged {
             context.coordinator.resetHighlightCache()
             context.coordinator.highlight()
+            context.coordinator.reapplyCachedSemanticTokens()
             (textView as? CodeTextView)?.updateEditorDecorations()
         } else if chromeChanged, !textChanged {
             (textView as? CodeTextView)?.updateEditorDecorations()
@@ -1098,6 +1149,7 @@ struct CodeEditorView: NSViewRepresentable {
         weak var container: EditorContainerView?
         var codeVisionOverlay: CodeVisionOverlayController?
         var debugInlineValueOverlay: DebugInlineValueOverlayController?
+        var inlayHintOverlay: InlayHintOverlayController?
         var isApplyingEditorChange = false
         var isDarkAppearance = true
         var colorTheme: AppColorTheme = .lithe
@@ -1152,6 +1204,14 @@ struct CodeEditorView: NSViewRepresentable {
         private var documentChangeTask: Task<Void, Never>?
         private var caretUpdateTask: Task<Void, Never>?
         private var findStateUpdateTask: Task<Void, Never>?
+        private var inlayHintRefreshTask: Task<Void, Never>?
+        private var documentHighlightRefreshTask: Task<Void, Never>?
+        private var documentSymbolRefreshTask: Task<Void, Never>?
+        private var semanticTokensRefreshTask: Task<Void, Never>?
+        private var cachedInlayHints: [LanguageServerInlayHint] = []
+        private var lastInlayHintLineRange: ClosedRange<Int>?
+        private var cachedSemanticTokens: [LanguageServerSemanticToken] = []
+        private var appliedShowInlayHints = true
         private var highlightedRanges = HighlightedRangeCache()
         private var appliedFontSize: CGFloat?
         private var appliedTabWidth: Int?
@@ -1219,6 +1279,10 @@ struct CodeEditorView: NSViewRepresentable {
             documentChangeTask?.cancel()
             caretUpdateTask?.cancel()
             findStateUpdateTask?.cancel()
+            inlayHintRefreshTask?.cancel()
+            documentHighlightRefreshTask?.cancel()
+            documentSymbolRefreshTask?.cancel()
+            semanticTokensRefreshTask?.cancel()
             editorOverlayRelayoutTask?.cancel()
             visibleHighlightTask?.cancel()
             if let markdownImagePasteMonitor {
@@ -1503,6 +1567,7 @@ struct CodeEditorView: NSViewRepresentable {
                 try? await Task.sleep(for: .milliseconds(24))
                 guard !Task.isCancelled else { return }
                 self?.highlight()
+                self?.scheduleViewportInlayHintRefreshIfNeeded()
             }
         }
 
@@ -1796,6 +1861,10 @@ struct CodeEditorView: NSViewRepresentable {
             }
             if let document {
                 scheduleDocumentChange(document)
+                invalidateSemanticIntelligence()
+                scheduleDocumentSymbolRefresh()
+                scheduleSemanticTokensRefresh()
+                scheduleInlayHintRefresh()
             }
             if nativeCompositionState == nil, let nativeEdit {
                 if isInsideNativeEditScope {
@@ -1959,10 +2028,12 @@ struct CodeEditorView: NSViewRepresentable {
                     }
                 }
             }
+            (textView as? CodeTextView)?.handleSelectionDidChange()
             (textView as? CodeTextView)?.updateCaretDecorations()
             textView?.needsDisplay = true
             gutter?.needsDisplay = true
             scheduleCaretUpdate()
+            scheduleDocumentHighlightRefresh()
         }
 
         fileprivate func applyEditorChromeIfNeeded(
@@ -2021,8 +2092,9 @@ struct CodeEditorView: NSViewRepresentable {
                         .definition, .references, .implementation
                     ]).isEmpty
                     codeTextView.isLanguageIntelligenceEnabled = !languageFeatures.intersection([
-                        .hover, .completion, .rename, .formatting, .codeActions
+                        .hover, .completion, .rename, .formatting, .codeActions, .signatureHelp
                     ]).isEmpty
+                    let previousFeatures = appliedLanguageFeatures ?? []
                     appliedLanguageFeatures = languageFeatures
                     if featureTransition.refreshImplementationMarkers {
                         scheduleJavaNavigationMarkerRefresh()
@@ -2030,6 +2102,26 @@ struct CodeEditorView: NSViewRepresentable {
                               !implementationMarkers.isEmpty {
                         implementationMarkers = []
                         applyFoldState()
+                    }
+                    if !previousFeatures.contains(.inlayHints), languageFeatures.contains(.inlayHints) {
+                        scheduleInlayHintRefresh()
+                    } else if previousFeatures.contains(.inlayHints), !languageFeatures.contains(.inlayHints) {
+                        cachedInlayHints = []
+                        lastInlayHintLineRange = nil
+                        inlayHintOverlay?.clear()
+                    }
+                    if !previousFeatures.contains(.documentSymbol), languageFeatures.contains(.documentSymbol) {
+                        scheduleDocumentSymbolRefresh()
+                    }
+                    if !previousFeatures.contains(.semanticTokens), languageFeatures.contains(.semanticTokens) {
+                        scheduleSemanticTokensRefresh()
+                    } else if previousFeatures.contains(.semanticTokens), !languageFeatures.contains(.semanticTokens) {
+                        cachedSemanticTokens = []
+                    }
+                    if !previousFeatures.contains(.documentHighlight), languageFeatures.contains(.documentHighlight) {
+                        scheduleDocumentHighlightRefresh()
+                    } else if previousFeatures.contains(.documentHighlight), !languageFeatures.contains(.documentHighlight) {
+                        codeTextView.clearSemanticDocumentHighlights()
                     }
                     changed = true
                 }
@@ -2101,6 +2193,8 @@ struct CodeEditorView: NSViewRepresentable {
                 in: textStorage.string as NSString,
                 limit: fullRange
             )
+            let source = textStorage.string as NSString
+            let codeTextView = textView as? CodeTextView
             for range in highlightedRanges.uncoveredRanges(in: target) {
                 SyntaxHighlighter.applyExact(
                     to: textStorage,
@@ -2111,6 +2205,12 @@ struct CodeEditorView: NSViewRepresentable {
                     range: range
                 )
                 highlightedRanges.insert(range)
+                if !cachedSemanticTokens.isEmpty, let codeTextView, range.length > 0 {
+                    let startLine = codeTextView.lineNumber(at: range.location, in: source)
+                    let endOffset = min(source.length, max(range.location, NSMaxRange(range) - 1))
+                    let endLine = codeTextView.lineNumber(at: endOffset, in: source)
+                    reapplyCachedSemanticTokens(in: startLine...max(startLine, endLine))
+                }
             }
         }
 
@@ -2127,29 +2227,50 @@ struct CodeEditorView: NSViewRepresentable {
 
         func scheduleFoldRefresh(useDefaultImportFold: Bool = false) {
             foldRefreshTask?.cancel()
-            guard fileExtension.lowercased() == "java" else {
-                javaMarkerRefreshTask?.cancel()
-                clearJavaStructure()
+            let ext = fileExtension.lowercased()
+            if ext == "java" {
+                scheduleJavaNavigationMarkerRefresh()
+                foldRefreshTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard !Task.isCancelled,
+                          let self,
+                          let document = self.document,
+                          let textView = self.textView as? CodeTextView else { return }
+                    guard self.fileExtension.lowercased() == "java", let model = self.model else {
+                        self.clearJavaStructure()
+                        return
+                    }
+                    let documentID = document.id
+                    let source = textView.string
+                    let structure = await model.javaStructure(source: source)
+                    guard !Task.isCancelled,
+                          self.document?.id == documentID,
+                          self.textView?.string == source else { return }
+                    self.applyJavaStructure(structure, useDefaultImportFold: useDefaultImportFold)
+                }
                 return
             }
-            scheduleJavaNavigationMarkerRefresh()
+
+            javaMarkerRefreshTask?.cancel()
+            implementationMarkers = []
             foldRefreshTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(80))
                 guard !Task.isCancelled,
                       let self,
                       let document = self.document,
-                      let textView = self.textView as? CodeTextView else { return }
-                guard self.fileExtension.lowercased() == "java", let model = self.model else {
-                    self.clearJavaStructure()
-                    return
-                }
+                      let textView = self.textView as? CodeTextView,
+                      let model = self.model else { return }
                 let documentID = document.id
                 let source = textView.string
-                let structure = await model.javaStructure(source: source)
+                let path = document.url.lastPathComponent
+                let regions = await model.editorFoldRegions(path: path, source: source)
                 guard !Task.isCancelled,
                       self.document?.id == documentID,
                       self.textView?.string == source else { return }
-                self.applyJavaStructure(structure, useDefaultImportFold: useDefaultImportFold)
+                self.foldRegions = regions
+                let availableIDs = Set(regions.map(\.id))
+                self.collapsedFoldIDs.formIntersection(availableIDs)
+                self.applyFoldState()
             }
         }
 
@@ -2193,6 +2314,183 @@ struct CodeEditorView: NSViewRepresentable {
                 try? await Task.sleep(for: .milliseconds(80))
                 guard !Task.isCancelled, let document else { return }
                 self?.model?.documentDidChange(document)
+            }
+        }
+
+        func invalidateSemanticIntelligence() {
+            cachedInlayHints = []
+            lastInlayHintLineRange = nil
+            cachedSemanticTokens = []
+            inlayHintOverlay?.clear()
+            (textView as? CodeTextView)?.clearSemanticDocumentHighlights()
+        }
+
+        func reapplyCachedSemanticTokens(in lineRange: ClosedRange<Int>? = nil) {
+            guard !cachedSemanticTokens.isEmpty,
+                  let codeTextView = textView as? CodeTextView,
+                  let textStorage = codeTextView.textStorage else { return }
+            SyntaxHighlighter.applyLspSemanticTokens(
+                cachedSemanticTokens,
+                to: textStorage,
+                lineOffset: { codeTextView.characterOffset(forLine: $0, in: codeTextView.string as NSString) },
+                fileName: fileName,
+                fileExtension: fileExtension,
+                isDark: isDarkAppearance,
+                lineRange: lineRange
+            )
+        }
+
+        private func scheduleViewportInlayHintRefreshIfNeeded() {
+            guard let model,
+                  model.settings.showInlayHints,
+                  let codeTextView = textView as? CodeTextView,
+                  codeTextView.languageServerFeatures.contains(.inlayHints),
+                  let visible = codeTextView.visibleCharacterRange() else { return }
+            let source = codeTextView.string as NSString
+            let visibleStart = codeTextView.lineNumber(at: visible.location, in: source)
+            let visibleEnd = codeTextView.lineNumber(at: min(source.length, NSMaxRange(visible)), in: source)
+            if let covered = lastInlayHintLineRange,
+               visibleStart >= covered.lowerBound,
+               visibleEnd <= covered.upperBound {
+                return
+            }
+            scheduleInlayHintRefresh()
+        }
+
+        func scheduleInlayHintRefresh() {
+            inlayHintRefreshTask?.cancel()
+            guard let model, model.settings.showInlayHints else {
+                cachedInlayHints = []
+                lastInlayHintLineRange = nil
+                inlayHintOverlay?.clear()
+                return
+            }
+            inlayHintRefreshTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(220))
+                guard !Task.isCancelled,
+                      let self,
+                      let model = self.model,
+                      model.settings.showInlayHints,
+                      let document = self.document,
+                      let codeTextView = self.textView as? CodeTextView,
+                      codeTextView.languageServerFeatures.contains(.inlayHints) else { return }
+                let expectedDocumentID = document.id
+                let expectedText = codeTextView.string
+                let source = expectedText as NSString
+                let visible = codeTextView.visibleCharacterRange()
+                    ?? NSRange(location: 0, length: min(8_192, source.length))
+                let lastLine = codeTextView.lineNumber(at: source.length, in: source)
+                let lastLineStart = source.length > 0
+                    ? source.lineRange(for: NSRange(location: source.length, length: 0)).location
+                    : 0
+                let lastLineEndColumn = max(0, source.length - lastLineStart)
+                let startLine = max(0, min(lastLine, codeTextView.lineNumber(at: visible.location, in: source) - 20))
+                let endLocation = min(source.length, NSMaxRange(visible))
+                let paddedEndLine = codeTextView.lineNumber(at: endLocation, in: source) + 40
+                let endLine = min(lastLine, max(startLine, paddedEndLine))
+                let endColumn = (endLine == lastLine) ? lastLineEndColumn : 0
+                let fetchedRange = startLine...max(startLine, endLine)
+                let range = LanguageServerRange(
+                    start: LanguageServerPosition(line: startLine, utf16Column: 0),
+                    end: LanguageServerPosition(line: endLine, utf16Column: endColumn)
+                )
+                model.requestLanguageInlayHints(for: document, range: range) { [weak self] hints in
+                    guard let self,
+                          self.document?.id == expectedDocumentID,
+                          self.textView?.string == expectedText,
+                          self.model?.settings.showInlayHints == true else { return }
+                    self.lastInlayHintLineRange = fetchedRange
+                    self.cachedInlayHints = hints
+                    self.renderInlayHintsOverlay()
+                }
+            }
+        }
+
+        private func renderInlayHintsOverlay() {
+            guard let model, model.settings.showInlayHints else {
+                inlayHintOverlay?.clear()
+                return
+            }
+            var collapsedLines: Set<Int> = []
+            for region in foldRegions where collapsedFoldIDs.contains(region.id) {
+                if region.endLine > region.startLine {
+                    for line in (region.startLine + 1)...region.endLine {
+                        collapsedLines.insert(line)
+                    }
+                }
+            }
+            inlayHintOverlay?.update(
+                hints: cachedInlayHints,
+                collapsedLineSet: collapsedLines,
+                isDark: isDarkAppearance
+            )
+        }
+
+        func scheduleDocumentHighlightRefresh() {
+            documentHighlightRefreshTask?.cancel()
+            documentHighlightRefreshTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(110))
+                guard !Task.isCancelled,
+                      let self,
+                      let model = self.model,
+                      let document = self.document,
+                      let codeTextView = self.textView as? CodeTextView,
+                      !codeTextView.hasMarkedText(),
+                      codeTextView.languageServerFeatures.contains(.documentHighlight) else { return }
+                let selection = codeTextView.selectedRange()
+                let expectedDocumentID = document.id
+                let expectedLength = (codeTextView.string as NSString).length
+                let pos = codeTextView.currentLanguageServerPosition(at: selection.location)
+                model.requestLanguageDocumentHighlight(
+                    for: document,
+                    line: pos.line,
+                    utf16Column: pos.utf16Column
+                ) { [weak self] highlights in
+                    guard let self,
+                          self.document?.id == expectedDocumentID,
+                          let codeTextView = self.textView as? CodeTextView,
+                          codeTextView.selectedRange() == selection,
+                          (codeTextView.string as NSString).length == expectedLength else { return }
+                    codeTextView.updateSemanticDocumentHighlights(
+                        highlights,
+                        expectedTextLength: expectedLength
+                    )
+                }
+            }
+        }
+
+        func scheduleDocumentSymbolRefresh() {
+            documentSymbolRefreshTask?.cancel()
+            documentSymbolRefreshTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(180))
+                guard !Task.isCancelled,
+                      let self,
+                      let model = self.model,
+                      let document = self.document,
+                      model.activeDocumentID == document.id else { return }
+                model.refreshDocumentSymbols(for: document)
+            }
+        }
+
+        func scheduleSemanticTokensRefresh() {
+            semanticTokensRefreshTask?.cancel()
+            semanticTokensRefreshTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(220))
+                guard !Task.isCancelled,
+                      let self,
+                      let model = self.model,
+                      let document = self.document,
+                      let codeTextView = self.textView as? CodeTextView,
+                      codeTextView.languageServerFeatures.contains(.semanticTokens) else { return }
+                let expectedDocumentID = document.id
+                let expectedText = codeTextView.string
+                model.requestLanguageSemanticTokens(for: document) { [weak self] tokens in
+                    guard let self,
+                          self.document?.id == expectedDocumentID,
+                          self.textView?.string == expectedText else { return }
+                    self.cachedSemanticTokens = tokens
+                    self.reapplyCachedSemanticTokens()
+                }
             }
         }
 
@@ -2276,57 +2574,7 @@ struct CodeEditorView: NSViewRepresentable {
         }
 
         private static func discoverRunnables(in text: String, url: URL) -> [DocumentRunnable] {
-            if url.pathExtension.lowercased() == "rs" {
-                return discoverRustRunnables(in: text, url: url)
-            }
-            return discoverGoRunnables(in: text, url: url)
-        }
-
-        private static func discoverGoRunnables(in text: String, url: URL) -> [DocumentRunnable] {
-            guard url.pathExtension.lowercased() == "go" else { return [] }
-            let lines = text.components(separatedBy: .newlines)
-            let isTestFile = url.lastPathComponent.hasSuffix("_test.go")
-            let isMainPackage = lines.contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("package main") }
-            return lines.enumerated().compactMap { index, raw in
-                let line = raw.trimmingCharacters(in: .whitespaces)
-                guard line.hasPrefix("func ") else { return nil }
-                let suffix = String(line.dropFirst(5))
-                let name = suffix.components(separatedBy: CharacterSet(charactersIn: "({")).first?.trimmingCharacters(in: .whitespaces) ?? ""
-                let kind: DocumentRunnable.Kind?
-                if name == "main" && isMainPackage { kind = .application }
-                else if isTestFile && name.hasPrefix("Test") { kind = .test }
-                else if isTestFile && name.hasPrefix("Benchmark") { kind = .benchmark }
-                else if isTestFile && name.hasPrefix("Example") { kind = .example }
-                else { kind = nil }
-                guard let kind else { return nil }
-                let position = LanguageServerPosition(line: index, utf16Column: 0)
-                let displayName = kind == .application
-                    ? url.deletingLastPathComponent().lastPathComponent
-                    : name
-                return DocumentRunnable(id: "go:\(kind.rawValue):\(name):\(index + 1)", configurationID: nil, displayName: displayName, kind: kind, line: index + 1, symbolRange: LanguageServerRange(start: position, end: position))
-            }
-        }
-
-        private static func discoverRustRunnables(in text: String, url: URL) -> [DocumentRunnable] {
-            guard text.components(separatedBy: .newlines).contains(where: {
-                $0.replacingOccurrences(of: " ", with: "").hasPrefix("fnmain(")
-            }) else { return [] }
-            let line = text.components(separatedBy: .newlines).firstIndex(where: {
-                $0.replacingOccurrences(of: " ", with: "").hasPrefix("fnmain(")
-            }) ?? 0
-            let position = LanguageServerPosition(line: line, utf16Column: 0)
-            // `main.rs` normally lives under `<package>/src`; use the Cargo
-            // package directory so the gutter action selects the generated
-            // package configuration instead of a synthetic `src` target.
-            let packageRoot = url.deletingLastPathComponent().deletingLastPathComponent()
-            let name = packageRoot.lastPathComponent.isEmpty
-                ? url.deletingLastPathComponent().lastPathComponent
-                : packageRoot.lastPathComponent
-            return [DocumentRunnable(
-                id: "rust:main:\(url.path)", configurationID: nil, displayName: name,
-                kind: .application, line: line + 1,
-                symbolRange: LanguageServerRange(start: position, end: position)
-            )]
+            DocumentRunnableDiscovery.discover(in: text, url: url)
         }
 
         func applyInitialRunnableMarkers() {
@@ -2414,6 +2662,19 @@ struct CodeEditorView: NSViewRepresentable {
                     line: inlineDebugLine,
                     values: inlineDebugValues
                 )
+            }
+            let showInlayHints = model.settings.showInlayHints
+            if appliedShowInlayHints != showInlayHints {
+                appliedShowInlayHints = showInlayHints
+                if showInlayHints {
+                    scheduleInlayHintRefresh()
+                } else {
+                    cachedInlayHints = []
+                    lastInlayHintLineRange = nil
+                    inlayHintOverlay?.clear()
+                }
+            } else if overlayLayoutChanged, showInlayHints, !cachedInlayHints.isEmpty {
+                renderInlayHintsOverlay()
             }
             appliedEditorOverlayLayoutRevision = editorOverlayLayoutRevision
 
@@ -2814,6 +3075,27 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         defer { endNativeEditScope() }
         // AppKit routes arrow chords through keyDown rather than only through
         // performKeyEquivalent. Keep the shared undo and suspension checks above.
+        if completionPopup.isVisible, !hasMarkedText() {
+            switch event.keyCode {
+            case 125: // Down arrow
+                completionPopup.moveSelection(delta: 1)
+                return
+            case 126: // Up arrow
+                completionPopup.moveSelection(delta: -1)
+                return
+            case 36, 76, 48: // Return, Enter, Tab
+                if completionPopup.acceptSelected() { return }
+            case 53: // Escape
+                dismissCompletionPopup()
+                return
+            default:
+                break
+            }
+        }
+        if event.keyCode == 53, signatureHelpPanel.isVisible {
+            signatureHelpPanel.dismiss()
+            return
+        }
         if isEditable, handleLineEditingShortcut(
             modifiers: event.modifierFlags,
             character: event.charactersIgnoringModifiers,
@@ -2881,6 +3163,8 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     var indentationWidth = 4
     var isLanguageNavigationEnabled = false
     var isLanguageIntelligenceEnabled = false
+    var hasActivePrecisionLanguageServer = false
+    var documentFileURL: URL?
     var languageServerFeatures: LanguageServerFeatureSet = []
     var onWindowAttached: (() -> Void)?
     var onNavigateToSymbol: ((Int, Int) -> Void)?
@@ -2893,13 +3177,29 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     var onFindPreviousRequested: (() -> Void)?
     var onFindStateChange: ((Int, Int) -> Void)?
     var onQuickDocumentation: ((Int, Int) -> Void)?
+    var onHoverDwell: ((Int, Int, @escaping (LanguageServerHover?) -> Void) -> Void)?
     var onCompletionRequested: ((Int, Int) -> Void)?
     var onCompletionSelected: ((LanguageServerCompletionItem, LanguageServerRange) -> Void)?
+    var onCompletionPreviewResolveRequested: ((LanguageServerCompletionItem, @escaping (LanguageServerCompletionItem?) -> Void) -> Void)?
+    private let completionPopup = CompletionPopupController()
+    private var autoCompletionTask: Task<Void, Never>?
+    private var completionTextRevision: UInt64 = 0
+    private var completionPopupFetchedRevision: UInt64 = 0
+    private var completionAnchorStart: Int?
+    private var completionAnchorLine: Int?
     var onPrepareRenameRequested: ((Int, Int, @escaping (Result<LanguageServerPrepareRenameResult?, Error>) -> Void) -> Void)?
     var onRenameRequested: ((Int, Int, String) -> Void)?
     var onLanguageActionMessage: ((String) -> Void)?
     var onFormatRequested: (() -> Void)?
     var onCodeActionsRequested: ((LanguageServerRange) -> Void)?
+    var onSignatureHelpRequested: ((Int, Int, @escaping (LanguageServerSignatureHelp?) -> Void) -> Void)?
+    var onRefactorCodeActionsRequested: ((LanguageServerRange, @escaping ([LanguageServerCodeAction]) -> Void) -> Void)?
+    var onRefactorCodeActionSelected: ((LanguageServerCodeAction) -> Void)?
+    private let signatureHelpPanel = SignatureHelpPanelController()
+    private let inlineRenamePanel = InlineRenamePanelController()
+    private var signatureHelpGeneration = 0
+    private var semanticDocumentHighlights: [LanguageServerDocumentHighlight] = []
+    private var semanticDocumentHighlightTextLength = -1
     var onRunToCursor: ((Int, Int) -> Void)?
     var isRunToCursorEnabled = false
     var onDebugHover: ((String, @escaping (String?) -> Void) -> Void)?
@@ -2939,9 +3239,12 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     private var languageHoverPopover: NSPopover?
     private weak var languageHoverTextView: NSTextView?
     private weak var languageHoverScrollView: NSScrollView?
+    private var languageHoverWorkItem: DispatchWorkItem?
+    private var pendingLanguageHoverRange: NSRange?
     private var debugHoverPopover: NSPopover?
     private var debugHoverWorkItem: DispatchWorkItem?
     private var pendingDebugHover: (expression: String, range: NSRange)?
+    private var collapsedHiddenRanges: [NSRange] = []
 
     private var currentLineColor = CodeEditorPalette.dark.currentLine
     private var executionLineColor = CodeEditorPalette.dark.executionLine
@@ -3029,6 +3332,36 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
             }
         }
         super.insertText(insertString, replacementRange: replacementRange)
+        completionTextRevision &+= 1
+        if !hasMarkedText(),
+           let inserted = (insertString as? String) ?? (insertString as? NSAttributedString)?.string {
+            if inserted == "(" || inserted == "," {
+                if languageServerFeatures.contains(.signatureHelp) {
+                    requestSignatureHelp()
+                }
+            } else if inserted == ")" || inserted.contains("\n") {
+                signatureHelpPanel.dismiss()
+            }
+            handlePostInsertCompletionTrigger(inserted: inserted)
+        }
+    }
+
+    override func deleteBackward(_ sender: Any?) {
+        super.deleteBackward(sender)
+        completionTextRevision &+= 1
+        cancelLanguageDwellHover()
+        languageHoverPopover?.close()
+        if completionPopup.isVisible {
+            refreshLiveCompletionPopupFilter()
+            if completionPopup.isVisible,
+               !hasMarkedText(),
+               languageServerFeatures.contains(.completion) {
+                let queryLength = currentCompletionWordRangeAndQuery().query.utf16.count
+                if hasActivePrecisionLanguageServer || queryLength >= 2 {
+                    scheduleAutoCompletion(delayMilliseconds: 85)
+                }
+            }
+        }
     }
 
     override func setMarkedText(
@@ -3038,7 +3371,13 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     ) {
         let wasComposing = hasMarkedText()
         let beginsComposition = !wasComposing
-        if beginsComposition { onNativeCompositionBegan?() }
+        if beginsComposition {
+            autoCompletionTask?.cancel()
+            if completionPopup.isVisible {
+                dismissCompletionPopup()
+            }
+            onNativeCompositionBegan?()
+        }
         super.setMarkedText(
             string,
             selectedRange: selectedRange,
@@ -3334,6 +3673,161 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         updateEditorDecorations()
     }
 
+    func updateSemanticDocumentHighlights(
+        _ highlights: [LanguageServerDocumentHighlight],
+        expectedTextLength: Int
+    ) {
+        guard (string as NSString).length == expectedTextLength else { return }
+        semanticDocumentHighlights = highlights
+        semanticDocumentHighlightTextLength = expectedTextLength
+        updateCaretDecorations()
+    }
+
+    func clearSemanticDocumentHighlights() {
+        guard !semanticDocumentHighlights.isEmpty else { return }
+        semanticDocumentHighlights = []
+        semanticDocumentHighlightTextLength = -1
+        updateCaretDecorations()
+    }
+
+    func currentLanguageServerPosition(at location: Int) -> (line: Int, utf16Column: Int) {
+        languageServerPosition(at: location)
+    }
+
+    private func applySymbolHighlights(in source: NSString, caret: Int, layoutManager: NSLayoutManager) {
+        if !semanticDocumentHighlights.isEmpty,
+           semanticDocumentHighlightTextLength == source.length {
+            let isDark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let writeColor = NSColor.systemOrange.withAlphaComponent(isDark ? 0.24 : 0.18)
+            for highlight in semanticDocumentHighlights {
+                guard let range = characterRange(for: highlight.range, in: source) else { continue }
+                let color = highlight.kind == .write ? writeColor : symbolColor
+                layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: range)
+                lastCaretBackgroundRanges.append(range)
+            }
+            return
+        }
+        guard let symbol = identifier(at: caret, in: source),
+              symbol.text.utf16.count >= 2 else { return }
+        if let profile = documentFileURL.flatMap({
+            LanguageSyntaxProfileRegistry.shared.profile(forLanguageID: nil, fileURL: $0)
+        }), profile.keywords.contains(symbol.text) {
+            return
+        }
+        let targetUnits = Array(symbol.text.utf16)
+        let targetLen = targetUnits.count
+        let totalLen = source.length
+        let windowStart = max(0, caret - 8_000)
+        let windowEnd = min(totalLen, caret + 8_000)
+        guard windowEnd > windowStart else { return }
+
+        let lineCommentKind: Int = {
+            let ext = documentFileURL?.pathExtension.lowercased() ?? ""
+            if ["py", "pyi", "pyw", "sh", "bash", "zsh", "yaml", "yml", "toml", "rb"].contains(ext) {
+                return 1 // '#'
+            }
+            return 2 // '//'
+        }()
+
+        @inline(__always)
+        func isWordUnit(_ unit: unichar) -> Bool {
+            (unit >= 65 && unit <= 90)
+                || (unit >= 97 && unit <= 122)
+                || (unit >= 48 && unit <= 57)
+                || unit == 95
+                || unit == 36
+        }
+
+        // Fast zero-regex UTF-16 whole-word scan over the active context window.
+        var matches: [NSRange] = []
+        matches.reserveCapacity(16)
+        var cursor = windowStart
+        var inLineComment = false
+        var activeQuote: unichar = 0
+        // Align comment/quote state cleanly at line start of `windowStart`.
+        var lineOrigin = windowStart
+        while lineOrigin > 0 && source.character(at: lineOrigin - 1) != 10 {
+            lineOrigin -= 1
+        }
+        cursor = lineOrigin
+
+        while cursor < windowEnd && matches.count < 200 {
+            let unit = source.character(at: cursor)
+            if unit == 10 {
+                inLineComment = false
+                activeQuote = 0
+                cursor += 1
+                continue
+            }
+            if inLineComment {
+                cursor += 1
+                continue
+            }
+            if activeQuote != 0 {
+                if unit == 92 && cursor + 1 < windowEnd {
+                    cursor += 2
+                    continue
+                }
+                if unit == activeQuote {
+                    activeQuote = 0
+                }
+                cursor += 1
+                continue
+            }
+            if lineCommentKind == 1 && unit == 35 {
+                inLineComment = true
+                cursor += 1
+                continue
+            }
+            if lineCommentKind == 2 && unit == 47 && cursor + 1 < windowEnd && source.character(at: cursor + 1) == 47 {
+                inLineComment = true
+                cursor += 2
+                continue
+            }
+            if unit == 34 || unit == 96 {
+                activeQuote = unit
+                cursor += 1
+                continue
+            }
+            if unit == targetUnits[0], cursor + targetLen <= windowEnd {
+                let leftBoundary = cursor == 0 || !isWordUnit(source.character(at: cursor - 1))
+                let rightBoundary = (cursor + targetLen == totalLen) || !isWordUnit(source.character(at: cursor + targetLen))
+                if leftBoundary && rightBoundary {
+                    var equal = true
+                    var offset = 1
+                    while offset < targetLen {
+                        if source.character(at: cursor + offset) != targetUnits[offset] {
+                            equal = false
+                            break
+                        }
+                        offset += 1
+                    }
+                    if equal {
+                        matches.append(NSRange(location: cursor, length: targetLen))
+                        cursor += targetLen
+                        continue
+                    }
+                }
+            }
+            cursor += 1
+        }
+
+        // Only highlight when at least one occurrence exists (skip single-occurrence noise only if desired?
+        // Matching IDEA/Zed: highlight when >= 2 occurrences OR always highlight the identifier at caret).
+        guard matches.count >= 2 else { return }
+        for range in matches {
+            layoutManager.addTemporaryAttribute(.backgroundColor, value: symbolColor, forCharacterRange: range)
+            lastCaretBackgroundRanges.append(range)
+        }
+    }
+
+    private func characterRange(for range: LanguageServerRange, in source: NSString) -> NSRange? {
+        let start = lineIndex.characterOffset(forLine: max(0, range.start.line)) + max(0, range.start.utf16Column)
+        let end = lineIndex.characterOffset(forLine: max(0, range.end.line)) + max(0, range.end.utf16Column)
+        guard start >= 0, end > start, end <= source.length else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
     func updateCaretDecorations() {
         guard let layoutManager else { return }
         let fullLength = (string as NSString).length
@@ -3351,22 +3845,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
             lastCaretBackgroundRanges.append(range)
         }
 
-        if isLanguageNavigationEnabled,
-           let symbol = identifier(at: caret, in: source),
-           let scope = enclosingCodeScope(at: caret, in: source) {
-            let escaped = NSRegularExpression.escapedPattern(for: symbol.text)
-            if let expression = try? NSRegularExpression(pattern: "\\b\(escaped)\\b") {
-                expression.enumerateMatches(in: string, range: scope) { [weak layoutManager] match, _, _ in
-                    guard let match else { return }
-                    layoutManager?.addTemporaryAttribute(
-                        .backgroundColor,
-                        value: self.symbolColor,
-                        forCharacterRange: match.range
-                    )
-                    self.lastCaretBackgroundRanges.append(match.range)
-                }
-            }
-        }
+        applySymbolHighlights(in: source, caret: caret, layoutManager: layoutManager)
 
         if !findMatchRanges.isEmpty {
             applyFindHighlights()
@@ -3397,22 +3876,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
             lastCaretBackgroundRanges.append(range)
         }
 
-        if isLanguageNavigationEnabled,
-           let symbol = identifier(at: caret, in: source),
-           let scope = enclosingCodeScope(at: caret, in: source) {
-            let escaped = NSRegularExpression.escapedPattern(for: symbol.text)
-            if let expression = try? NSRegularExpression(pattern: "\\b\(escaped)\\b") {
-                expression.enumerateMatches(in: string, range: scope) { [weak layoutManager] match, _, _ in
-                    guard let match else { return }
-                    layoutManager?.addTemporaryAttribute(
-                        .backgroundColor,
-                        value: self.symbolColor,
-                        forCharacterRange: match.range
-                    )
-                    self.lastCaretBackgroundRanges.append(match.range)
-                }
-            }
-        }
+        applySymbolHighlights(in: source, caret: caret, layoutManager: layoutManager)
 
         for diagnostic in diagnostics {
             guard let range = diagnosticRange(for: diagnostic, in: source) else { continue }
@@ -3632,6 +4096,11 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         let hadFoldState = !foldRegions.isEmpty || !collapsedFoldIDs.isEmpty
         foldRegions = regions
         collapsedFoldIDs = collapsedIDs
+        collapsedHiddenRanges = Self.mergeCollapsedRanges(
+            regions
+                .filter { collapsedIDs.contains($0.id) && $0.hiddenRange.length > 0 }
+                .map(\.hiddenRange)
+        )
         onToggleFold = onToggle
         if let hoveredFoldID,
            !collapsedIDs.contains(hoveredFoldID) {
@@ -3723,10 +4192,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         forGlyphRange glyphRange: NSRange
     ) -> Bool {
         let characterRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
-        let isCollapsedLine = collapsedFoldIDs.contains(where: { id in
-            guard let region = foldRegions.first(where: { $0.id == id }) else { return false }
-            return NSLocationInRange(characterRange.location, region.hiddenRange)
-        })
+        let isCollapsedLine = isCharacterCollapsed(characterRange.location)
 
         if isCollapsedLine {
             lineFragmentRect.pointee.size.height = 0
@@ -3736,6 +4202,51 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
             baselineOffset.pointee -= LitheTheme.editorBaselineLift
         }
         return true
+    }
+
+    /// Merges overlapping or adjacent hidden fold ranges into sorted disjoint intervals
+    /// so binary search stays exact even when nested outer + inner folds are both collapsed.
+    static func mergeCollapsedRanges(_ ranges: [NSRange]) -> [NSRange] {
+        let nonEmpty = ranges.filter { $0.length > 0 }
+        guard nonEmpty.count > 1 else { return nonEmpty }
+        let sorted = nonEmpty.sorted { lhs, rhs in
+            lhs.location != rhs.location ? lhs.location < rhs.location : lhs.length < rhs.length
+        }
+        var merged: [NSRange] = [sorted[0]]
+        merged.reserveCapacity(sorted.count)
+        for next in sorted.dropFirst() {
+            var last = merged[merged.count - 1]
+            let lastEnd = NSMaxRange(last)
+            if next.location <= lastEnd {
+                let combinedEnd = max(lastEnd, NSMaxRange(next))
+                last.length = combinedEnd - last.location
+                merged[merged.count - 1] = last
+            } else {
+                merged.append(next)
+            }
+        }
+        return merged
+    }
+
+    static func containsLocation(_ location: Int, inMergedRanges ranges: [NSRange]) -> Bool {
+        var low = 0
+        var high = ranges.count
+        while low < high {
+            let mid = (low + high) / 2
+            let range = ranges[mid]
+            if location < range.location {
+                high = mid
+            } else if location >= NSMaxRange(range) {
+                low = mid + 1
+            } else {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func isCharacterCollapsed(_ location: Int) -> Bool {
+        Self.containsLocation(location, inMergedRanges: collapsedHiddenRanges)
     }
 
     /// Draws IDEA-style indentation guides for every text file. Guides are
@@ -4158,11 +4669,13 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         updateFoldHover(to: summaryRegion?.id)
         if summaryRegion != nil {
             clearDebugHover()
+            cancelLanguageDwellHover()
             NSCursor.pointingHand.set()
             return
         }
         if hitTest(point) is CodeVisionLinkButton {
             clearDebugHover()
+            cancelLanguageDwellHover()
             NSCursor.pointingHand.set()
             return
         }
@@ -4171,10 +4684,17 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
             updateLinkHighlight(at: point)
             if linkRange != nil {
                 clearDebugHover()
+                cancelLanguageDwellHover()
                 return
             }
         }
-        updateDebugHover(at: point)
+        if isDebugHoverEnabled {
+            cancelLanguageDwellHover()
+            updateDebugHover(at: point)
+        } else {
+            clearDebugHover()
+            updateLanguageDwellHover(at: point)
+        }
         NSCursor.iBeam.set()
     }
 
@@ -4207,12 +4727,17 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         updateFoldHover(to: nil)
         clearLinkHighlight()
         clearDebugHover()
+        cancelLanguageDwellHover()
     }
 
     override func resignFirstResponder() -> Bool {
         updateFoldHover(to: nil)
         clearLinkHighlight()
         clearDebugHover()
+        cancelLanguageDwellHover()
+        completionPopup.dismiss()
+        signatureHelpPanel.dismiss()
+        autoCompletionTask?.cancel()
         let resigned = super.resignFirstResponder()
         if resigned {
             needsDisplay = true
@@ -4534,6 +5059,67 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         debugHoverPopover = nil
     }
 
+    private func updateLanguageDwellHover(at point: NSPoint) {
+        guard languageServerFeatures.contains(.hover),
+              !hasMarkedText(),
+              !completionPopup.isVisible,
+              !inlineRenamePanel.isVisible,
+              let onHoverDwell,
+              let characterIndex = characterIndex(at: point),
+              let ident = identifier(at: characterIndex, in: string as NSString),
+              let layoutManager,
+              let textContainer else {
+            cancelLanguageDwellHover()
+            return
+        }
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: ident.range,
+            actualCharacterRange: nil
+        )
+        let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        let containerPoint = NSPoint(
+            x: point.x - textContainerOrigin.x,
+            y: point.y - textContainerOrigin.y
+        )
+        guard glyphRect.insetBy(dx: -2, dy: -2).contains(containerPoint) else {
+            cancelLanguageDwellHover()
+            return
+        }
+        if pendingLanguageHoverRange == ident.range { return }
+        cancelLanguageDwellHover()
+        pendingLanguageHoverRange = ident.range
+        let expectedTextRevision = completionTextRevision
+        let position = languageServerPosition(at: ident.range.location)
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.pendingLanguageHoverRange == ident.range,
+                  self.completionTextRevision == expectedTextRevision,
+                  !self.completionPopup.isVisible,
+                  !self.inlineRenamePanel.isVisible,
+                  !self.hasMarkedText() else { return }
+            onHoverDwell(position.line, position.utf16Column) { [weak self] hover in
+                guard let self,
+                      let hover,
+                      self.pendingLanguageHoverRange == ident.range,
+                      self.completionTextRevision == expectedTextRevision else { return }
+                let trimmed = hover.contents.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Suppress bare `` `identifier` `` fallback stubs on passive mouse dwell;
+                // explicit Quick Documentation (F1) continues to display them.
+                guard !trimmed.isEmpty, trimmed != "`\(ident.text)`" else { return }
+                let anchor = self.rectForCharacterRange(ident.range)
+                self.presentLanguageHover(hover, anchorRect: anchor)
+            }
+        }
+        languageHoverWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: workItem)
+    }
+
+    private func cancelLanguageDwellHover() {
+        languageHoverWorkItem?.cancel()
+        languageHoverWorkItem = nil
+        pendingLanguageHoverRange = nil
+    }
+
     private func enclosingCodeScope(at caret: Int, in source: NSString) -> NSRange? {
         var start: Int?
         var depth = 0
@@ -4726,6 +5312,81 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         case .quickDocumentation:
             guard languageServerFeatures.contains(.hover) else { return }
             showQuickDocumentationFromMenu()
+        case .parameterInfo:
+            guard languageServerFeatures.contains(.signatureHelp) else { return }
+            requestSignatureHelp()
+        case .refactorThis:
+            refactorThisFromMenu()
+        }
+    }
+
+    func requestSignatureHelp() {
+        guard !hasMarkedText(),
+              languageServerFeatures.contains(.signatureHelp),
+              let onSignatureHelpRequested else { return }
+        let selection = selectedRange()
+        let position = languageServerPosition(at: selection.location)
+        signatureHelpGeneration &+= 1
+        let expectedGeneration = signatureHelpGeneration
+        let expectedDocumentID = documentID
+        let expectedLength = (string as NSString).length
+        onSignatureHelpRequested(position.line, position.utf16Column) { [weak self] help in
+            guard let self,
+                  self.signatureHelpGeneration == expectedGeneration,
+                  self.documentID == expectedDocumentID,
+                  !self.hasMarkedText(),
+                  (self.string as NSString).length == expectedLength else { return }
+            if let help, help.currentSignature != nil {
+                self.signatureHelpPanel.show(help, anchoredTo: self.caretAnchorRect(), in: self)
+            } else {
+                self.signatureHelpPanel.dismiss()
+            }
+        }
+    }
+
+    private func refactorThisFromMenu() {
+        guard !hasMarkedText(), window != nil else { return }
+        let canRename = languageServerFeatures.contains(.rename)
+        guard languageServerFeatures.contains(.codeActions),
+              let onRefactorCodeActionsRequested else {
+            if canRename { renameSymbolFromMenu() }
+            return
+        }
+        let range = selectedLanguageServerRange()
+        onRefactorCodeActionsRequested(range) { [weak self] actions in
+            guard let self, self.window != nil else { return }
+            let refactorActions = actions.filter { action in
+                guard let kind = action.kind?.lowercased() else { return false }
+                return kind.hasPrefix("refactor") || kind.hasPrefix("source")
+            }
+            let displayed = refactorActions.isEmpty ? actions : refactorActions
+            guard canRename || !displayed.isEmpty else {
+                self.onLanguageActionMessage?(String(localized: "No refactoring actions are available here"))
+                return
+            }
+            var items: [LitheContextMenuItem] = []
+            if canRename {
+                items.append(.action("Rename Symbol…", systemImage: "pencil") { [weak self] in
+                    self?.renameSymbolFromMenu()
+                })
+            }
+            if canRename && !displayed.isEmpty {
+                items.append(.separator)
+            }
+            for action in displayed.prefix(30) {
+                items.append(.action(action.title, systemImage: "wand.and.stars") { [weak self] in
+                    self?.onRefactorCodeActionSelected?(action)
+                })
+            }
+            if let window = self.window {
+                let pointInWindow = self.convert(self.caretMenuPoint(), to: nil)
+                LitheContextMenuPresenter.shared.show(
+                    items: items,
+                    at: window.convertPoint(toScreen: pointInWindow),
+                    appearance: self.effectiveAppearance,
+                    locale: Locale.current
+                )
+            }
         }
     }
 
@@ -4737,7 +5398,13 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
 
         guard languageServerFeatures.contains(.prepareRename),
               let onPrepareRenameRequested else {
-            presentRenamePrompt(line: position.line, utf16Column: position.utf16Column, initialName: fallbackPrefill)
+            let fallbackRange = identifier(at: min(selection.location, (string as NSString).length), in: string as NSString)?.range
+            presentRenamePrompt(
+                line: position.line,
+                utf16Column: position.utf16Column,
+                initialName: fallbackPrefill,
+                anchorNSRange: fallbackRange
+            )
             return
         }
         renameRequestGeneration &+= 1
@@ -4760,16 +5427,38 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
                 let prefill = prepared.placeholder
                     ?? prepared.range.flatMap { self.substring(for: $0) }
                     ?? fallbackPrefill
+                let anchorNSRange = prepared.range.flatMap { self.characterRange(for: $0, in: self.string as NSString) }
+                    ?? self.identifier(at: min(selection.location, (self.string as NSString).length), in: self.string as NSString)?.range
                 self.presentRenamePrompt(
                     line: position.line,
                     utf16Column: position.utf16Column,
-                    initialName: prefill
+                    initialName: prefill,
+                    anchorNSRange: anchorNSRange
                 )
             }
         }
     }
 
-    private func presentRenamePrompt(line: Int, utf16Column: Int, initialName: String) {
+    private func presentRenamePrompt(
+        line: Int,
+        utf16Column: Int,
+        initialName: String,
+        anchorNSRange: NSRange?
+    ) {
+        completionPopup.dismiss()
+        signatureHelpPanel.dismiss()
+        if window != nil {
+            let anchorRect = anchorNSRange.flatMap { rectForCharacterRange($0) } ?? caretAnchorRect()
+            inlineRenamePanel.show(
+                initialName: initialName,
+                anchoredTo: anchorRect,
+                in: self,
+                onCommit: { [weak self] newName in
+                    self?.onRenameRequested?(line, utf16Column, newName)
+                }
+            )
+            return
+        }
         let alert = NSAlert()
         alert.messageText = "Rename Symbol"
         alert.informativeText = "Enter the new symbol name."
@@ -4783,6 +5472,19 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         guard alert.runModal() == .alertFirstButtonReturn,
               !field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         onRenameRequested?(line, utf16Column, field.stringValue)
+    }
+
+    private func rectForCharacterRange(_ range: NSRange) -> NSRect? {
+        guard let layoutManager, let textContainer,
+              range.location >= 0, NSMaxRange(range) <= (string as NSString).length else {
+            return nil
+        }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return nil }
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        rect.origin.x += textContainerOrigin.x
+        rect.origin.y += textContainerOrigin.y
+        return rect
     }
 
     @objc private func formatDocumentFromMenu() { onFormatRequested?() }
@@ -4820,30 +5522,209 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     private func requestLanguageCompletions() {
+        autoCompletionTask?.cancel()
         let position = languageServerPosition(at: selectedRange().location)
         onCompletionRequested?(position.line, position.utf16Column)
     }
 
-    func presentLanguageCompletions(_ items: [LanguageServerCompletionItem]) {
-        guard !items.isEmpty, window != nil, !hasMarkedText() else { return }
-        completionMenuSelection = selectedRange()
-        let completionRange = rangeForUserCompletion
-        completionMenuFallbackRange = completionRange.location == NSNotFound ? selectedRange() : completionRange
-        completionItemsByID = [:]
-        for item in items.prefix(200) { completionItemsByID[item.id] = item }
-        let menu = NSMenu(title: "Completions")
-        for item in items.prefix(200) {
-            let title = item.detail.map { "\(item.label)  —  \($0)" } ?? item.label
-            let entry = NSMenuItem(
-                title: title,
-                action: #selector(insertLanguageCompletion(_:)),
-                keyEquivalent: ""
-            )
-            entry.target = self
-            entry.representedObject = item.id
-            menu.addItem(entry)
+    private func handlePostInsertCompletionTrigger(inserted: String) {
+        cancelLanguageDwellHover()
+        languageHoverPopover?.close()
+        guard isEditable,
+              !hasMarkedText(),
+              languageServerFeatures.contains(.completion),
+              inserted.count == 1,
+              let scalar = inserted.unicodeScalars.first else {
+            if completionPopup.isVisible {
+                completionPopup.dismiss()
+            }
+            return
         }
-        menu.popUp(positioning: nil, at: caretMenuPoint(), in: self)
+        let isTriggerPunctuation = inserted == "." || inserted == ":"
+        let isIdentifierChar = CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
+        if isTriggerPunctuation {
+            if hasActivePrecisionLanguageServer {
+                scheduleAutoCompletion(delayMilliseconds: 45)
+            } else {
+                autoCompletionTask?.cancel()
+                completionPopup.dismiss()
+            }
+        } else if isIdentifierChar {
+            if completionPopup.isVisible {
+                refreshLiveCompletionPopupFilter()
+                scheduleAutoCompletion(delayMilliseconds: 85)
+            } else if hasActivePrecisionLanguageServer || currentCompletionWordRangeAndQuery().query.utf16.count >= 2 {
+                scheduleAutoCompletion(delayMilliseconds: 85)
+            }
+        } else {
+            autoCompletionTask?.cancel()
+            completionPopup.dismiss()
+        }
+    }
+
+    private func scheduleAutoCompletion(delayMilliseconds: Int) {
+        autoCompletionTask?.cancel()
+        let expectedRevision = completionTextRevision
+        let expectedSelection = selectedRange()
+        autoCompletionTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(delayMilliseconds))
+            guard !Task.isCancelled,
+                  let self,
+                  self.window != nil,
+                  !self.hasMarkedText(),
+                  self.completionTextRevision == expectedRevision,
+                  self.selectedRange() == expectedSelection else { return }
+            let position = self.languageServerPosition(at: expectedSelection.location)
+            self.onCompletionRequested?(position.line, position.utf16Column)
+        }
+    }
+
+    private func currentCompletionWordRangeAndQuery() -> (range: NSRange, query: String) {
+        let source = string as NSString
+        let caret = min(selectedRange().location, source.length)
+        var start = caret
+        while start > 0 {
+            let unit = source.character(at: start - 1)
+            let isIdent = (unit >= 65 && unit <= 90)
+                || (unit >= 97 && unit <= 122)
+                || (unit >= 48 && unit <= 57)
+                || unit == 95
+            guard isIdent else { break }
+            start -= 1
+        }
+        let range = NSRange(location: start, length: max(0, caret - start))
+        let query = range.length > 0 ? source.substring(with: range) : ""
+        return (range, query)
+    }
+
+    private func refreshLiveCompletionPopupFilter() {
+        let current = currentCompletionWordRangeAndQuery()
+        if current.query.isEmpty {
+            completionPopup.dismiss()
+            return
+        }
+        completionPopup.updateQuery(
+            current.query,
+            fallbackRange: current.range,
+            anchoredTo: caretAnchorRect(),
+            in: self
+        )
+    }
+
+    private func dismissCompletionPopup() {
+        completionAnchorStart = nil
+        completionAnchorLine = nil
+        completionPopup.dismiss()
+    }
+
+    func handleSelectionDidChange() {
+        guard completionPopup.isVisible else { return }
+        let selection = selectedRange()
+        guard selection.length == 0,
+              let anchorStart = completionAnchorStart,
+              let anchorLine = completionAnchorLine else {
+            dismissCompletionPopup()
+            return
+        }
+        let source = string as NSString
+        let currentLine = lineNumber(at: min(selection.location, source.length), in: source)
+        guard currentLine == anchorLine, selection.location >= anchorStart else {
+            dismissCompletionPopup()
+            return
+        }
+        // If the user clicked or arrowed past a separator/whitespace after the completion anchor, dismiss.
+        let word = currentCompletionWordRangeAndQuery()
+        if word.range.location != anchorStart && selection.location != anchorStart {
+            dismissCompletionPopup()
+        }
+    }
+
+    func presentLanguageCompletions(_ items: [LanguageServerCompletionItem]) {
+        guard !items.isEmpty, window != nil, !hasMarkedText() else {
+            dismissCompletionPopup()
+            return
+        }
+        completionPopupFetchedRevision = completionTextRevision
+        let word = currentCompletionWordRangeAndQuery()
+        let fallbackRange = word.range.length > 0 ? word.range : selectedRange()
+        completionAnchorStart = fallbackRange.location
+        completionAnchorLine = lineNumber(at: min(fallbackRange.location, (string as NSString).length), in: string as NSString)
+        completionPopup.onRequestResolve = { [weak self] item, completion in
+            self?.onCompletionPreviewResolveRequested?(item, completion)
+        }
+        completionPopup.onAccept = { [weak self] item, acceptedRange in
+            self?.applySelectedCompletion(item, fallbackRange: acceptedRange)
+        }
+        completionPopup.show(
+            items: items,
+            query: word.query,
+            fallbackRange: fallbackRange,
+            anchoredTo: caretAnchorRect(),
+            in: self
+        )
+    }
+
+    private func applySelectedCompletion(_ item: LanguageServerCompletionItem, fallbackRange: NSRange) {
+        let savedAnchorStart = completionAnchorStart
+        let savedAnchorLine = completionAnchorLine
+        completionAnchorStart = nil
+        completionAnchorLine = nil
+        guard !hasMarkedText() else { return }
+        let source = string as NSString
+        let selection = selectedRange()
+        guard selection.length == 0,
+              fallbackRange.location >= 0,
+              NSMaxRange(fallbackRange) <= source.length else { return }
+        if let savedAnchorStart, let savedAnchorLine {
+            let currentLine = lineNumber(at: min(selection.location, source.length), in: source)
+            guard currentLine == savedAnchorLine, selection.location >= savedAnchorStart else { return }
+        }
+        var effectiveItem = item
+        // If the user typed extra prefix characters after this popup snapshot was
+        // fetched and the item has no server-side additional edits/resolve payload,
+        // re-bind as a live local edit over the current prefix range so insertion succeeds.
+        if completionPopupFetchedRevision != completionTextRevision,
+           effectiveItem.additionalTextEdits.isEmpty,
+           effectiveItem.data == nil {
+            effectiveItem = LanguageServerCompletionItem(
+                label: effectiveItem.label,
+                detail: effectiveItem.detail,
+                documentation: effectiveItem.documentation,
+                insertText: effectiveItem.insertText,
+                sortText: effectiveItem.sortText,
+                filterText: effectiveItem.filterText,
+                kind: effectiveItem.kind,
+                textEdit: nil,
+                additionalTextEdits: [],
+                data: nil,
+                insertTextFormat: effectiveItem.insertTextFormat,
+                preselect: effectiveItem.preselect
+            )
+        }
+        let start = languageServerPosition(at: fallbackRange.location)
+        let end = languageServerPosition(at: NSMaxRange(fallbackRange))
+        let languageRange = LanguageServerRange(
+            start: LanguageServerPosition(line: start.line, utf16Column: start.utf16Column),
+            end: LanguageServerPosition(line: end.line, utf16Column: end.utf16Column)
+        )
+        if let onCompletionSelected {
+            onCompletionSelected(effectiveItem, languageRange)
+        } else {
+            let expanded = effectiveItem.insertTextFormat == 1
+                ? LanguageServerSnippet.Expanded(
+                    text: effectiveItem.insertText,
+                    selectionUTF16Range: NSRange(location: effectiveItem.insertText.utf16.count, length: 0)
+                )
+                : LanguageServerSnippet.expand(effectiveItem.insertText)
+            insertText(expanded.text, replacementRange: fallbackRange)
+            let target = NSRange(
+                location: fallbackRange.location + expanded.selectionUTF16Range.location,
+                length: expanded.selectionUTF16Range.length
+            )
+            if NSMaxRange(target) <= (string as NSString).length {
+                setSelectedRange(target)
+            }
+        }
     }
 
     func presentLanguageCodeActions(
@@ -4871,9 +5752,11 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         languageCodeActionHandler = nil
     }
 
-    func presentLanguageHover(_ hover: LanguageServerHover) {
+    func presentLanguageHover(_ hover: LanguageServerHover, anchorRect: NSRect? = nil) {
         languageHoverPopover?.close()
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 480, height: 220))
+        let lineCount = max(2, hover.contents.split(separator: "\n", omittingEmptySubsequences: false).count)
+        let preferredHeight = min(240, max(72, CGFloat(lineCount) * 18 + 26))
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 480, height: preferredHeight))
         textView.string = hover.contents
         textView.isEditable = false
         textView.isSelectable = true
@@ -4889,12 +5772,12 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         refreshLanguageHoverAppearance()
         let controller = NSViewController()
         controller.view = scrollView
-        controller.preferredContentSize = NSSize(width: 480, height: 220)
+        controller.preferredContentSize = NSSize(width: 480, height: preferredHeight)
         let popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
         popover.contentViewController = controller
-        popover.show(relativeTo: caretAnchorRect(), of: self, preferredEdge: .maxY)
+        popover.show(relativeTo: anchorRect ?? caretAnchorRect(), of: self, preferredEdge: .maxY)
         languageHoverPopover = popover
     }
 

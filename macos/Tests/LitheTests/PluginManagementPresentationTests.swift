@@ -8,10 +8,10 @@ struct PluginManagementPresentationTests {
     func languagePluginsAreGroupedSeparatelyFromStandalonePlugins() throws {
         let databaseManifest = try #require(BuiltInPluginCatalog.manifest(forModule: .database))
         let pythonManifest = try #require(
-            BundledLanguagePluginCatalog.manifests.first { $0.languageSupports?.first?.id == "python" }
+            OfficialPluginCatalog.manifests.first { $0.languageSupports?.first?.id == "python" }
         )
         let rustManifest = try #require(
-            BundledLanguagePluginCatalog.manifests.first { $0.languageSupports?.first?.id == "rust" }
+            OfficialPluginCatalog.manifests.first { $0.languageSupports?.first?.id == "rust" }
         )
         let content = PluginManagementListContent(plugins: [
             snapshot(databaseManifest),

@@ -65,12 +65,15 @@ extension AppModel {
         let execution = workspace && available(.execution)
         let language = available(.languageIntelligence)
         let history = available(.localHistory)
+        let canEscalatePrecisionLSP = isLightweightIntelligenceMode
+            && workspace
+            && document.map { languageProviderCatalog.provider(for: $0.url)?.capabilities.contains(.languageServer) == true } == true
         for command in ProjectMenuCommand.allCases {
             let enabled: Bool
             switch command {
             case .newProject, .openProject, .openFile, .cloneRepository, .settings,
                  .languageSettings, .appearanceSettings, .checkUpdates: enabled = true
-            case .newFile, .newDirectory, .closeProject, .synchronize, .project:
+            case .newFile, .newDirectory, .closeProject, .synchronize, .project, .structure:
                 enabled = workspace
             case .save, .replaceInFile: enabled = writable
             case .saveAll: enabled = openDocuments.contains { $0.isDirty && !$0.isReadOnly }
@@ -90,12 +93,19 @@ extension AppModel {
             case .forward: enabled = canNavigateForward
             case .goToLine, .findInFile: enabled = document != nil
             case .definition: enabled = language && supportsLanguageServerFeature(.definition)
-            case .implementation: enabled = language && supportsLanguageServerFeature(.implementation)
+            case .implementation:
+                enabled = language && (supportsLanguageServerFeature(.implementation) || canEscalatePrecisionLSP)
             case .usages: enabled = language && supportsLanguageServerFeature(.references)
-            case .renameSymbol: enabled = language && writable && supportsLanguageServerFeature(.rename)
-            case .formatDocument: enabled = language && writable && supportsLanguageServerFeature(.formatting)
-            case .sourceActions: enabled = language && writable && supportsLanguageServerFeature(.codeActions)
+            case .renameSymbol:
+                enabled = language && writable && (supportsLanguageServerFeature(.rename) || canEscalatePrecisionLSP)
+            case .formatDocument:
+                enabled = language && writable && (supportsLanguageServerFeature(.formatting) || canEscalatePrecisionLSP)
+            case .sourceActions:
+                enabled = language && writable && (supportsLanguageServerFeature(.codeActions) || canEscalatePrecisionLSP)
+            case .refactorThis:
+                enabled = language && writable && (supportsLanguageServerFeature(.rename) || supportsLanguageServerFeature(.codeActions) || canEscalatePrecisionLSP)
             case .completeSymbol: enabled = language && writable && supportsLanguageServerFeature(.completion)
+            case .parameterInfo: enabled = language && supportsLanguageServerFeature(.signatureHelp)
             case .quickDocumentation: enabled = language && supportsLanguageServerFeature(.hover)
             case .findNext, .findPrevious: enabled = isFindBarVisible && findMatchCount > 0
             case .restartLanguageServers: enabled = workspace && language
@@ -116,6 +126,7 @@ extension AppModel {
         if isSidebarVisible {
             switch selectedSidebar {
             case .project: result.selected.insert(.project)
+            case .structure: result.selected.insert(.structure)
             case .changes: result.selected.insert(.commit)
             case .search: result.selected.insert(.find)
             default: break
@@ -151,7 +162,7 @@ extension AppModel {
         case .saveAll: scheduleMenuCommand(request, canBegin: canBegin) { model in _ = await model.saveAllDocuments() }
         case .closeEditor: _ = requestCloseActiveWorkbenchItem()
         case .synchronize: scheduleMenuCommand(request, canBegin: canBegin) { model in await model.refreshWorkspace() }
-        case .project, .commit, .find, .terminal, .run, .debug, .tests, .problems:
+        case .project, .structure, .commit, .find, .terminal, .run, .debug, .tests, .problems:
             if let id = command.shortcutID { performShortcutCommand(id: id) }
         case .git: scheduleMenuCommand(request, canBegin: canBegin) { model in await model.toggleGitLog() }
         case .back: navigateBack()
@@ -164,7 +175,9 @@ extension AppModel {
         case .renameSymbol: triggerRenameSymbol()
         case .formatDocument: triggerFormatDocument()
         case .sourceActions: triggerSourceActions()
+        case .refactorThis: triggerRefactorThis()
         case .completeSymbol: triggerCompleteSymbol()
+        case .parameterInfo: triggerParameterInfo()
         case .quickDocumentation: triggerQuickDocumentation()
         case .findInFile: showFindBar()
         case .replaceInFile: showReplaceBar()

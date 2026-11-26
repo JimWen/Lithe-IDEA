@@ -1203,6 +1203,8 @@ struct WorkbenchView: View {
             switch model.selectedSidebar {
             case .project:
                 ProjectSidebarView(rowHeight: projectTreeRowHeight)
+            case .structure:
+                StructureSidebarView()
             case .changes:
                 ChangesSidebarView()
             case .pullRequests:
@@ -1271,6 +1273,16 @@ struct WorkbenchView: View {
                         if index < components.count - 1 {
                             breadcrumbSeparator
                         }
+                    }
+                    EditorSymbolBreadcrumbsView(
+                        chrome: model.editorChrome,
+                        documentURL: document.url
+                    ) { symbol in
+                        model.navigateToEditorLocation(
+                            url: document.url,
+                            line: symbol.selectionRange.start.line,
+                            utf16Column: symbol.selectionRange.start.utf16Column
+                        )
                     }
                 } else {
                     HStack(spacing: 5) {
@@ -1342,6 +1354,7 @@ struct WorkbenchView: View {
             .help(LocalizedStringKey(
                 model.activeDocument?.isReadOnly == true ? "Read-only document" : "Save"
             ))
+            LanguageIntelligenceStatusView()
             MemoryUsageStatusView()
             FrameRateStatusView()
             gitStatus
@@ -1351,6 +1364,7 @@ struct WorkbenchView: View {
     private var compactStatusItems: some View {
         HStack(spacing: 10) {
             EditorCaretPositionLabel(chrome: model.editorChrome) { model.showGoToLine() }
+            LanguageIntelligenceStatusView()
             MemoryUsageStatusView()
             FrameRateStatusView()
             gitStatus

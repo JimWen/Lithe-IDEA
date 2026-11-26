@@ -504,8 +504,7 @@ final class MacServiceContainer {
                 if specification.supportsExecution {
                     let executionModule = BundledLanguageExecutionModule(
                         languageID: specification.id,
-                        executionHost: languageExecutionHost,
-                        projectToolHost: specification.id == "rust" ? languageProjectToolHost : nil
+                        executionHost: languageExecutionHost
                     )
                     try moduleRegistry.register(ModuleFactory(
                         manifest: executionModule.manifest,
@@ -513,8 +512,7 @@ final class MacServiceContainer {
                     ) {
                         BundledLanguageExecutionModule(
                             languageID: specification.id,
-                            executionHost: languageExecutionHost,
-                            projectToolHost: specification.id == "rust" ? languageProjectToolHost : nil
+                            executionHost: languageExecutionHost
                         )
                     })
                 }
@@ -557,7 +555,9 @@ final class MacServiceContainer {
             ),
             rustDebugBuildService: RustDebugBuildService(
                 processRunner: processRunner,
-                runtimeService: runtimeService
+                runtimeService: runtimeService,
+                fileExists: { FileManager.default.fileExists(atPath: $0) },
+                readFile: { try? String(contentsOfFile: $0, encoding: .utf8) }
             ),
             debugPortAvailabilityChecker: MacDebugPortAvailabilityChecker(),
             javaTestResultServerFactory: { MacJavaTestResultServer() },

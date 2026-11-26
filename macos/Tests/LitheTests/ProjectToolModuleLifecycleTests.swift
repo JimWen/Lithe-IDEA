@@ -4,6 +4,7 @@ import LitheCoreContracts
 import LitheExecutionModule
 import LitheGoSupportModule
 import LitheModuleAPI
+import LitheRustSupportModule
 import Testing
 @testable import Lithe
 
@@ -22,7 +23,7 @@ struct ProjectToolModuleLifecycleTests {
             try runtime.register(ModuleFactory(manifest: workspace) { ProjectToolWorkspaceModule(manifest: workspace) })
             let module: any LitheModule = language == "go"
                 ? GoExecutionModule(executionHost: execution, projectToolHost: host)
-                : BundledLanguageExecutionModule(languageID: language, executionHost: execution, projectToolHost: host)
+                : RustExecutionModule(executionHost: execution, projectToolHost: host)
             try runtime.register(ModuleFactory(manifest: module.manifest, contributions: module.contributions()) { module })
             try await runtime.setEnabled(true, for: module.manifest.id)
             let capability = try #require(try await runtime.activateCapability(.languageProjectTools(language)) as? any LanguageProjectToolsProviding)
@@ -47,11 +48,14 @@ struct ProjectToolModuleLifecycleTests {
 
     @Test
     func onlyGoAndRustDeclareProjectToolCapture() {
-        for language in ["python", "node", "rust"] {
-            let manifest = BundledLanguagePluginCatalog.manifests.flatMap(\.modules)
+        for language in ["go", "rust", "python"] {
+            let manifest = OfficialPluginCatalog.manifests.flatMap(\.modules)
                 .first { $0.manifest.id == .languageExecutionExtension(language) }?.manifest
-            #expect(manifest?.providedCapabilities.contains(.languageProjectTools(language)) == (language == "rust"))
+            #expect(manifest?.providedCapabilities.contains(.languageProjectTools(language)) == (language == "go" || language == "rust"))
         }
+        let nodeManifest = BundledLanguagePluginCatalog.manifests.flatMap(\.modules)
+            .first { $0.manifest.id == .languageExecutionExtension("node") }?.manifest
+        #expect(nodeManifest?.providedCapabilities.contains(.languageProjectTools("node")) == false)
     }
 }
 

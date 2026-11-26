@@ -47,6 +47,11 @@ package struct LanguageServerFeatureSet: OptionSet, Hashable, Sendable {
     package static let codeActionResolve = Self(rawValue: 1 << 9)
     package static let executeCommand = Self(rawValue: 1 << 10)
     package static let prepareRename = Self(rawValue: 1 << 11)
+    package static let inlayHints = Self(rawValue: 1 << 12)
+    package static let signatureHelp = Self(rawValue: 1 << 13)
+    package static let documentHighlight = Self(rawValue: 1 << 14)
+    package static let documentSymbol = Self(rawValue: 1 << 15)
+    package static let semanticTokens = Self(rawValue: 1 << 16)
 
     package static let standardEditing: Self = [
         .definition, .references, .implementation, .hover, .completion,
@@ -58,6 +63,17 @@ package struct LanguageServerFeatureSet: OptionSet, Hashable, Sendable {
 package enum ToolingActivationPolicy: String, Codable, Hashable, Sendable {
     case onDemand
     case always
+}
+
+/// Controls whether Lithe operates in zero-LSP Lightweight Mode by default or
+/// starts language servers automatically for precision semantic features.
+package enum LanguageIntelligenceMode: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
+    /// Default fast mode backed by Rust Core indexing, symbols, folding, and syntax profiles.
+    case lightweight
+    /// Opt-in precision mode backed by external language servers (e.g. gopls, rust-analyzer, basedpyright).
+    case lsp
+
+    package var id: String { rawValue }
 }
 
 package struct LanguageServerLaunchDescriptor: Hashable, Sendable {
@@ -322,12 +338,20 @@ package struct LanguageServerCompletionItem: Identifiable, Equatable, Sendable {
     package let detail: String?
     package let documentation: String?
     package let insertText: String
+    /// LSP `InsertTextFormat` (`1` = plain text, `2` = snippet).
+    package let insertTextFormat: Int?
+    /// Indicates that the server prefers preselecting this item when shown.
+    package let preselect: Bool
     package let sortText: String?
     package let filterText: String?
     package let kind: Int?
     package let textEdit: LanguageServerTextEdit?
     package let additionalTextEdits: [LanguageServerTextEdit]
     package let data: ToolingJSONValue?
+
+    package var isSnippet: Bool {
+        insertTextFormat == 2
+    }
 
     package init(
         label: String,
@@ -339,12 +363,16 @@ package struct LanguageServerCompletionItem: Identifiable, Equatable, Sendable {
         kind: Int?,
         textEdit: LanguageServerTextEdit?,
         additionalTextEdits: [LanguageServerTextEdit],
-        data: ToolingJSONValue?
+        data: ToolingJSONValue?,
+        insertTextFormat: Int? = nil,
+        preselect: Bool = false
     ) {
         self.label = label
         self.detail = detail
         self.documentation = documentation
         self.insertText = insertText
+        self.insertTextFormat = insertTextFormat
+        self.preselect = preselect
         self.sortText = sortText
         self.filterText = filterText
         self.kind = kind
@@ -354,7 +382,210 @@ package struct LanguageServerCompletionItem: Identifiable, Equatable, Sendable {
     }
 
     package var id: String {
-        [label, detail ?? "", insertText, sortText ?? ""].joined(separator: "\u{1F}")
+        let rangeKey: String
+        if let range = textEdit?.range {
+            rangeKey = "\(range.start.line):\(range.start.utf16Column)-\(range.end.line):\(range.end.utf16Column)"
+        } else {
+            rangeKey = ""
+        }
+        return [
+            originSessionIdentity ?? "local",
+            label,
+            detail ?? "",
+            insertText,
+            sortText ?? "",
+            rangeKey,
+        ].joined(separator: "\u{1F}")
+    }
+}
+
+package struct LanguageServerInlayHint: Equatable, Sendable {
+    package enum Kind: Int, Equatable, Sendable {
+        case type = 1
+        case parameter = 2
+    }
+
+    package let position: LanguageServerPosition
+    package let label: String
+    package let kind: Kind?
+    package let tooltip: String?
+    package let paddingLeft: Bool
+    package let paddingRight: Bool
+
+    package init(
+        position: LanguageServerPosition,
+        label: String,
+        kind: Kind? = nil,
+        tooltip: String? = nil,
+        paddingLeft: Bool = false,
+        paddingRight: Bool = false
+    ) {
+        self.position = position
+        self.label = label
+        self.kind = kind
+        self.tooltip = tooltip
+        self.paddingLeft = paddingLeft
+        self.paddingRight = paddingRight
+    }
+}
+
+package struct LanguageServerParameterInformation: Equatable, Sendable {
+    package let label: String
+    package let labelStart: Int?
+    package let labelEnd: Int?
+    package let documentation: String?
+
+    package init(
+        label: String,
+        labelStart: Int? = nil,
+        labelEnd: Int? = nil,
+        documentation: String? = nil
+    ) {
+        self.label = label
+        self.labelStart = labelStart
+        self.labelEnd = labelEnd
+        self.documentation = documentation
+    }
+}
+
+package struct LanguageServerSignatureInformation: Equatable, Sendable {
+    package let label: String
+    package let documentation: String?
+    package let parameters: [LanguageServerParameterInformation]
+    package let activeParameter: Int?
+
+    package init(
+        label: String,
+        documentation: String? = nil,
+        parameters: [LanguageServerParameterInformation] = [],
+        activeParameter: Int? = nil
+    ) {
+        self.label = label
+        self.documentation = documentation
+        self.parameters = parameters
+        self.activeParameter = activeParameter
+    }
+}
+
+package struct LanguageServerSignatureHelp: Equatable, Sendable {
+    package let signatures: [LanguageServerSignatureInformation]
+    package let activeSignature: Int?
+    package let activeParameter: Int?
+
+    package init(
+        signatures: [LanguageServerSignatureInformation],
+        activeSignature: Int? = nil,
+        activeParameter: Int? = nil
+    ) {
+        self.signatures = signatures
+        self.activeSignature = activeSignature
+        self.activeParameter = activeParameter
+    }
+
+    package var currentSignature: LanguageServerSignatureInformation? {
+        guard !signatures.isEmpty else { return nil }
+        let index = min(max(0, activeSignature ?? 0), signatures.count - 1)
+        return signatures[index]
+    }
+
+    package var effectiveActiveParameter: Int? {
+        guard let signature = currentSignature, !signature.parameters.isEmpty else { return nil }
+        let raw = signature.activeParameter ?? activeParameter ?? 0
+        guard raw >= 0 && raw < signature.parameters.count else { return nil }
+        return raw
+    }
+}
+
+package struct LanguageServerDocumentHighlight: Equatable, Sendable {
+    package enum Kind: Int, Equatable, Sendable {
+        case text = 1
+        case read = 2
+        case write = 3
+    }
+
+    package let range: LanguageServerRange
+    package let kind: Kind
+
+    package init(range: LanguageServerRange, kind: Kind = .text) {
+        self.range = range
+        self.kind = kind
+    }
+}
+
+package struct LanguageServerDocumentSymbol: Identifiable, Equatable, Sendable {
+    package let name: String
+    package let detail: String?
+    package let kind: Int
+    package let range: LanguageServerRange
+    package let selectionRange: LanguageServerRange
+    package let children: [LanguageServerDocumentSymbol]
+
+    package var id: String {
+        "\(name):\(kind):\(selectionRange.start.line):\(selectionRange.start.utf16Column):\(range.end.line)"
+    }
+
+    package init(
+        name: String,
+        detail: String? = nil,
+        kind: Int,
+        range: LanguageServerRange,
+        selectionRange: LanguageServerRange,
+        children: [LanguageServerDocumentSymbol] = []
+    ) {
+        self.name = name
+        self.detail = detail
+        self.kind = kind
+        self.range = range
+        self.selectionRange = selectionRange
+        self.children = children
+    }
+
+    /// Returns the deepest enclosing symbol chain containing the given zero-based position.
+    package static func enclosingPath(
+        in symbols: [LanguageServerDocumentSymbol],
+        line: Int,
+        utf16Column: Int
+    ) -> [LanguageServerDocumentSymbol] {
+        let target = LanguageServerPosition(line: line, utf16Column: utf16Column)
+        for symbol in symbols {
+            guard contains(range: symbol.range, position: target) else { continue }
+            let childPath = enclosingPath(in: symbol.children, line: line, utf16Column: utf16Column)
+            return [symbol] + childPath
+        }
+        // Offline flat symbols have single-line ranges; fall back to the nearest preceding symbol.
+        if let preceding = symbols.last(where: { $0.selectionRange.start.line <= line && $0.range.start.line == $0.range.end.line }) {
+            return [preceding]
+        }
+        return []
+    }
+
+    private static func contains(range: LanguageServerRange, position: LanguageServerPosition) -> Bool {
+        if position.line < range.start.line || position.line > range.end.line { return false }
+        if position.line == range.start.line && position.utf16Column < range.start.utf16Column { return false }
+        if position.line == range.end.line && position.utf16Column > range.end.utf16Column { return false }
+        return true
+    }
+}
+
+package struct LanguageServerSemanticToken: Equatable, Sendable {
+    package let line: Int
+    package let utf16Column: Int
+    package let length: Int
+    package let tokenType: String
+    package let tokenModifiers: [String]
+
+    package init(
+        line: Int,
+        utf16Column: Int,
+        length: Int,
+        tokenType: String,
+        tokenModifiers: [String] = []
+    ) {
+        self.line = line
+        self.utf16Column = utf16Column
+        self.length = length
+        self.tokenType = tokenType
+        self.tokenModifiers = tokenModifiers
     }
 }
 
@@ -411,6 +642,10 @@ package enum LanguageServerOperation: String, Equatable, Sendable {
     case resolveCodeAction
     case executeCommand
     case inlayHints
+    case signatureHelp
+    case documentHighlight
+    case documentSymbols
+    case semanticTokensFull
     case foldingRanges
     case codeLens
     /// Resolving a server-owned source that has no file on disk, such as a
@@ -639,6 +874,29 @@ package protocol LanguageServerSession: AnyObject {
         marker: JavaNavigationMarker,
         completion: @escaping (Result<[LanguageServerLocation], Error>) -> Void
     ) throws
+    func inlayHints(
+        fileURL: URL,
+        range: LanguageServerRange,
+        completion: @escaping (Result<[LanguageServerInlayHint], Error>) -> Void
+    ) throws
+    func signatureHelp(
+        fileURL: URL,
+        position: LanguageServerPosition,
+        completion: @escaping (Result<LanguageServerSignatureHelp?, Error>) -> Void
+    ) throws
+    func documentHighlight(
+        fileURL: URL,
+        position: LanguageServerPosition,
+        completion: @escaping (Result<[LanguageServerDocumentHighlight], Error>) -> Void
+    ) throws
+    func documentSymbols(
+        fileURL: URL,
+        completion: @escaping (Result<[LanguageServerDocumentSymbol], Error>) -> Void
+    ) throws
+    func semanticTokens(
+        fileURL: URL,
+        completion: @escaping (Result<[LanguageServerSemanticToken], Error>) -> Void
+    ) throws
     func stop()
 }
 
@@ -699,11 +957,49 @@ package extension LanguageServerSession {
     ) throws {
         completion(.failure(LanguageServerFeatureUnavailable.prepareRename))
     }
+    func inlayHints(
+        fileURL _: URL,
+        range _: LanguageServerRange,
+        completion: @escaping (Result<[LanguageServerInlayHint], Error>) -> Void
+    ) throws {
+        completion(.failure(LanguageServerFeatureUnavailable.inlayHints))
+    }
+    func signatureHelp(
+        fileURL _: URL,
+        position _: LanguageServerPosition,
+        completion: @escaping (Result<LanguageServerSignatureHelp?, Error>) -> Void
+    ) throws {
+        completion(.failure(LanguageServerFeatureUnavailable.signatureHelp))
+    }
+    func documentHighlight(
+        fileURL _: URL,
+        position _: LanguageServerPosition,
+        completion: @escaping (Result<[LanguageServerDocumentHighlight], Error>) -> Void
+    ) throws {
+        completion(.failure(LanguageServerFeatureUnavailable.documentHighlight))
+    }
+    func documentSymbols(
+        fileURL _: URL,
+        completion: @escaping (Result<[LanguageServerDocumentSymbol], Error>) -> Void
+    ) throws {
+        completion(.failure(LanguageServerFeatureUnavailable.documentSymbols))
+    }
+    func semanticTokens(
+        fileURL _: URL,
+        completion: @escaping (Result<[LanguageServerSemanticToken], Error>) -> Void
+    ) throws {
+        completion(.failure(LanguageServerFeatureUnavailable.semanticTokens))
+    }
 }
 
 private enum LanguageServerFeatureUnavailable: LocalizedError {
     case javaNavigation
     case prepareRename
+    case inlayHints
+    case signatureHelp
+    case documentHighlight
+    case documentSymbols
+    case semanticTokens
 
     var errorDescription: String? {
         switch self {
@@ -711,6 +1007,16 @@ private enum LanguageServerFeatureUnavailable: LocalizedError {
             "Java navigation is not supported by this language server."
         case .prepareRename:
             "Prepare rename is not supported by this language server."
+        case .inlayHints:
+            "Inlay hints are not supported by this language server."
+        case .signatureHelp:
+            "Signature help is not supported by this language server."
+        case .documentHighlight:
+            "Document highlight is not supported by this language server."
+        case .documentSymbols:
+            "Document symbols are not supported by this language server."
+        case .semanticTokens:
+            "Semantic tokens are not supported by this language server."
         }
     }
 }

@@ -31,13 +31,6 @@ public final class BundledLanguageExecutionModule: LitheModule {
         guard let executionHost else {
             throw LanguageExtensionHostError.missingExecutionHost(languageID: languageID)
         }
-        if languageID == "rust" {
-            guard let projectToolHost else { throw LanguageProjectToolHostError.missingHost(languageID: languageID) }
-            await releaseProjectTools()
-            let resource = try LanguageProjectToolResource.register(host: projectToolHost, context: context)
-            projectToolResource = resource
-            projectTools = resource.makeCapability(languageID: languageID)
-        }
         let resource = BundledLanguageExecutionResource(
             executionHost: executionHost,
             ownerModuleID: manifest.id,
@@ -89,26 +82,6 @@ public final class BundledLanguageExecutionCapability: NSObject,
     public let languageID: String
     public var debugAdapterLaunch: LanguageDebugAdapterLaunch {
         switch languageID {
-        case "python":
-            return LanguageDebugAdapterLaunch(
-                adapterID: "python",
-                transport: .stdio,
-                executableNames: ["python3", "python"],
-                arguments: ["-m", "debugpy.adapter"]
-            )
-        case "rust":
-            return LanguageDebugAdapterLaunch(
-                adapterID: "lldb",
-                transport: .stdio,
-                executableNames: ["lldb-dap"],
-                arguments: [],
-                fallbacks: [
-                    LanguageDebugAdapterLaunchFallback(
-                        executableName: "xcrun",
-                        argumentPrefix: ["lldb-dap"]
-                    )
-                ]
-            )
         case "node":
             return LanguageDebugAdapterLaunch(
                 adapterID: "pwa-node",
@@ -140,13 +113,9 @@ public final class BundledLanguageExecutionCapability: NSObject,
     public func launchPlan(for request: LanguageRunExtensionRequest) throws -> LanguageRunExtensionPlan {
         let path = try Self.checkedPath(request.relativeFilePath)
         switch languageID {
-        case "python":
-            return LanguageRunExtensionPlan(executable: .toolchain("project-python"), arguments: [path] + request.arguments, environment: request.environment)
         case "node":
             let toolchain = path.hasSuffix(".ts") || path.hasSuffix(".tsx") ? "project-tsx" : "project-node"
             return LanguageRunExtensionPlan(executable: .toolchain(toolchain), arguments: [path] + request.arguments, environment: request.environment)
-        case "rust":
-            return LanguageRunExtensionPlan(executable: .toolchain("project-cargo"), arguments: ["run"] + request.arguments, environment: request.environment)
         default:
             throw LanguageTestExtensionError.unsupportedProject(languageID: languageID)
         }
@@ -172,12 +141,8 @@ public final class BundledLanguageExecutionCapability: NSObject,
         case .testCase(_, let path): try path.map(Self.checkedPath)
         }
         switch languageID {
-        case "python":
-            return testPlan(label: selectedPath ?? "All Python Tests", framework: "pytest", executable: .toolchain("project-python"), arguments: ["-m", "pytest"] + (selectedPath.map { [$0] } ?? []))
         case "node":
             return testPlan(label: selectedPath ?? "All Node.js Tests", framework: "npm", executable: .command("npm"), arguments: ["test"] + (selectedPath.map { ["--", $0] } ?? []))
-        case "rust":
-            return testPlan(label: selectedPath ?? "All Rust Tests", framework: "cargo", executable: .toolchain("project-cargo"), arguments: ["test"])
         default:
             throw LanguageTestExtensionError.unsupportedProject(languageID: languageID)
         }
@@ -195,9 +160,7 @@ public final class BundledLanguageExecutionCapability: NSObject,
     private func supportsProject(_ paths: [String]) -> Bool {
         let names = Set(paths.map { $0.split(separator: "/").last.map(String.init)?.lowercased() ?? "" })
         switch languageID {
-        case "python": return !names.isDisjoint(with: ["pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"])
         case "node": return names.contains("package.json")
-        case "rust": return names.contains("cargo.toml")
         default: return false
         }
     }
@@ -205,9 +168,7 @@ public final class BundledLanguageExecutionCapability: NSObject,
     private func isTestFile(_ path: String) -> Bool {
         let name = path.split(separator: "/").last.map(String.init)?.lowercased() ?? ""
         switch languageID {
-        case "python": return name.hasPrefix("test_") && name.hasSuffix(".py") || name.hasSuffix("_test.py")
         case "node": return name.contains(".test.") || name.contains(".spec.")
-        case "rust": return path.lowercased().contains("/tests/") || name.hasSuffix("_test.rs")
         default: return false
         }
     }

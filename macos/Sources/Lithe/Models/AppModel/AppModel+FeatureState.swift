@@ -402,7 +402,7 @@ extension AppModel {
             return projectCommandState().enabled.contains(command)
         }
         return switch id {
-        case "open-project", "settings":
+        case "open-project", "settings", "toggle-language-intelligence-mode":
             true
         case "toggle-cargo":
             isCargoAvailable

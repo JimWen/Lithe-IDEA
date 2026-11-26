@@ -55,11 +55,15 @@ extension AppModel {
     }
 
     func prepareLanguageSettings() async {
-        guard languageServerToolsIfActive == nil else { return }
+        if let capability = languageCapability {
+            capability.ensureDiscoveryStarted()
+            return
+        }
         do {
             let value = try await services.moduleRuntime.activateCapability(.languageIntelligence)
             guard let capability = value as? LitheLanguageIntelligenceModule.LanguageIntelligenceCapability else { return }
             bindLanguageIntelligenceCapability(capability)
+            capability.ensureDiscoveryStarted()
         } catch {
             showNotification(error.localizedDescription, severity: .error, title: "Could not load language settings")
         }

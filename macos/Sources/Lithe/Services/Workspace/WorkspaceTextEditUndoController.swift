@@ -192,9 +192,13 @@ final class WorkspaceTextEditUndoController: ObservableObject {
     }
 
     /// Completion commits during NSTextView's callback and performs no file I/O.
+    /// When `preserveActiveSaveOwner` is true (save-time formatting inside an active
+    /// manual/autosave transaction), skip `willMutate` so the owning autosave task is
+    /// not cancelled and still records Local History after writing.
     func applyOpenDocumentEdits(_ edits: [WorkspaceTextEdit], at workspaceURL: URL,
                                 expectedBuffers: [URL: WorkspaceTextEditBufferSnapshot],
-                                selection: SelectionRestoration? = nil) -> WorkspaceTextEditTransactionResult {
+                                selection: SelectionRestoration? = nil,
+                                preserveActiveSaveOwner: Bool = false) -> WorkspaceTextEditTransactionResult {
         guard !isApplying else { return rejected(edits) }
         breakNativeEditCoalescing()
         isApplying = true
@@ -204,7 +208,9 @@ final class WorkspaceTextEditUndoController: ObservableObject {
         }
         defer { release(batch) }
         let changed = batch.buffers.filter { $0.edit.changesText }
-        willMutate(batch.buffers.map(\.document))
+        if !preserveActiveSaveOwner {
+            willMutate(batch.buffers.map(\.document))
+        }
         changed.forEach { $0.document.commitMutationText($0.edit.replacementText, lease: $0.lease) }
         if let selection { selection.restore(selection.after) }
         let history = Dictionary(uniqueKeysWithValues: changed.map {

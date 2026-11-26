@@ -462,6 +462,64 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
         }
     }
 
+    package func inlayHints(
+        fileURL: URL,
+        range: LanguageServerRange,
+        completion: @escaping (Result<[LanguageServerInlayHint], Error>) -> Void
+    ) throws {
+        try request(.inlayHints, fileURL: fileURL, range: range) { result in
+            completion(result.flatMap {
+                Self.decodeEventResult($0, as: InlayHintsPayload.self)
+            }.map { $0.makeModels() })
+        }
+    }
+
+    package func signatureHelp(
+        fileURL: URL,
+        position: LanguageServerPosition,
+        completion: @escaping (Result<LanguageServerSignatureHelp?, Error>) -> Void
+    ) throws {
+        try request(.signatureHelp, fileURL: fileURL, position: position) { result in
+            completion(result.flatMap {
+                Self.decodeEventResult($0, as: SignatureHelpPayload.self)
+            }.map { $0.signatureHelp?.makeModel() })
+        }
+    }
+
+    package func documentHighlight(
+        fileURL: URL,
+        position: LanguageServerPosition,
+        completion: @escaping (Result<[LanguageServerDocumentHighlight], Error>) -> Void
+    ) throws {
+        try request(.documentHighlight, fileURL: fileURL, position: position) { result in
+            completion(result.flatMap {
+                Self.decodeEventResult($0, as: DocumentHighlightsPayload.self)
+            }.map { $0.makeModels() })
+        }
+    }
+
+    package func documentSymbols(
+        fileURL: URL,
+        completion: @escaping (Result<[LanguageServerDocumentSymbol], Error>) -> Void
+    ) throws {
+        try request(.documentSymbols, fileURL: fileURL) { result in
+            completion(result.flatMap {
+                Self.decodeEventResult($0, as: DocumentSymbolsPayload.self)
+            }.map { $0.makeModels() })
+        }
+    }
+
+    package func semanticTokens(
+        fileURL: URL,
+        completion: @escaping (Result<[LanguageServerSemanticToken], Error>) -> Void
+    ) throws {
+        try request(.semanticTokensFull, fileURL: fileURL) { result in
+            completion(result.flatMap {
+                Self.decodeEventResult($0, as: SemanticTokensPayload.self)
+            }.map { $0.makeModels() })
+        }
+    }
+
     package func stop() {
         guard let sessionID else {
             failPendingOperations(with: LanguageServerRuntimeSessionError.sessionStopped)
@@ -703,6 +761,11 @@ package final class LanguageServerRuntimeSession: LanguageServerSession {
             case "completionResolve": result.insert(.completionResolve)
             case "codeActionResolve": result.insert(.codeActionResolve)
             case "executeCommand": result.insert(.executeCommand)
+            case "inlayHints": result.insert(.inlayHints)
+            case "signatureHelp": result.insert(.signatureHelp)
+            case "documentHighlight": result.insert(.documentHighlight)
+            case "documentSymbol": result.insert(.documentSymbol)
+            case "semanticTokens": result.insert(.semanticTokens)
             default: break
             }
         }
@@ -879,6 +942,8 @@ private struct TextEditPayload: Decodable {
 private struct CompletionItemPayload: Decodable {
     let label: String
     let insertText: String
+    let insertTextFormat: Int?
+    let preselect: Bool?
     let kind: Int?
     let detail: String?
     let documentation: String?
@@ -899,7 +964,9 @@ private struct CompletionItemPayload: Decodable {
             kind: kind,
             textEdit: textEdit?.makeModel(),
             additionalTextEdits: additionalTextEdits?.map { $0.makeModel() } ?? [],
-            data: data
+            data: data,
+            insertTextFormat: insertTextFormat,
+            preselect: preselect ?? false
         )
     }
 }
@@ -1086,4 +1153,144 @@ private struct PrepareRenamePayload: Decodable {
     }
 
     let prepareRename: Entry?
+}
+
+private struct InlayHintsPayload: Decodable {
+    struct Entry: Decodable {
+        let position: PositionPayload
+        let label: String
+        let kind: Int?
+        let tooltip: String?
+        let paddingLeft: Bool?
+        let paddingRight: Bool?
+
+        func makeModel() -> LanguageServerInlayHint {
+            LanguageServerInlayHint(
+                position: position.makeModel(),
+                label: label,
+                kind: kind.flatMap(LanguageServerInlayHint.Kind.init(rawValue:)),
+                tooltip: tooltip,
+                paddingLeft: paddingLeft ?? false,
+                paddingRight: paddingRight ?? false
+            )
+        }
+    }
+
+    let hints: [Entry]
+    func makeModels() -> [LanguageServerInlayHint] { hints.map { $0.makeModel() } }
+}
+
+private struct SignatureHelpPayload: Decodable {
+    struct Parameter: Decodable {
+        let label: String
+        let labelStart: Int?
+        let labelEnd: Int?
+        let documentation: String?
+
+        func makeModel() -> LanguageServerParameterInformation {
+            LanguageServerParameterInformation(
+                label: label,
+                labelStart: labelStart,
+                labelEnd: labelEnd,
+                documentation: documentation
+            )
+        }
+    }
+
+    struct Signature: Decodable {
+        let label: String
+        let documentation: String?
+        let parameters: [Parameter]?
+        let activeParameter: Int?
+
+        func makeModel() -> LanguageServerSignatureInformation {
+            LanguageServerSignatureInformation(
+                label: label,
+                documentation: documentation,
+                parameters: parameters?.map { $0.makeModel() } ?? [],
+                activeParameter: activeParameter
+            )
+        }
+    }
+
+    struct Entry: Decodable {
+        let signatures: [Signature]
+        let activeSignature: Int?
+        let activeParameter: Int?
+
+        func makeModel() -> LanguageServerSignatureHelp {
+            LanguageServerSignatureHelp(
+                signatures: signatures.map { $0.makeModel() },
+                activeSignature: activeSignature,
+                activeParameter: activeParameter
+            )
+        }
+    }
+
+    let signatureHelp: Entry?
+}
+
+private struct DocumentHighlightsPayload: Decodable {
+    struct Entry: Decodable {
+        let range: RangePayload
+        let kind: Int?
+
+        func makeModel() -> LanguageServerDocumentHighlight {
+            LanguageServerDocumentHighlight(
+                range: range.makeModel(),
+                kind: kind.flatMap(LanguageServerDocumentHighlight.Kind.init(rawValue:)) ?? .text
+            )
+        }
+    }
+
+    let highlights: [Entry]
+    func makeModels() -> [LanguageServerDocumentHighlight] { highlights.map { $0.makeModel() } }
+}
+
+private struct DocumentSymbolsPayload: Decodable {
+    struct Entry: Decodable {
+        let name: String
+        let detail: String?
+        let kind: Int
+        let range: RangePayload
+        let selectionRange: RangePayload
+        let children: [Entry]?
+
+        func makeModel() -> LanguageServerDocumentSymbol {
+            LanguageServerDocumentSymbol(
+                name: name,
+                detail: detail,
+                kind: kind,
+                range: range.makeModel(),
+                selectionRange: selectionRange.makeModel(),
+                children: children?.map { $0.makeModel() } ?? []
+            )
+        }
+    }
+
+    let symbols: [Entry]
+    func makeModels() -> [LanguageServerDocumentSymbol] { symbols.map { $0.makeModel() } }
+}
+
+private struct SemanticTokensPayload: Decodable {
+    struct Entry: Decodable {
+        let line: Int
+        let utf16Column: Int
+        let length: Int
+        let tokenType: String
+        let tokenModifiers: [String]?
+
+        func makeModel() -> LanguageServerSemanticToken {
+            LanguageServerSemanticToken(
+                line: line,
+                utf16Column: utf16Column,
+                length: length,
+                tokenType: tokenType,
+                tokenModifiers: tokenModifiers ?? []
+            )
+        }
+    }
+
+    let tokens: [Entry]
+    func makeModels() -> [LanguageServerSemanticToken] { tokens.map { $0.makeModel() } }
 }

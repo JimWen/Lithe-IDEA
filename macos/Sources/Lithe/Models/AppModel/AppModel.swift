@@ -143,6 +143,10 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     @Published var blameVisibleURL: URL?
     @Published var gitLogSearchQuery = ""
     @Published var commitEditorRequestVersion = 0
+    @Published var sessionLanguageIntelligenceModeOverride: LanguageIntelligenceMode?
+    var observedGlobalLanguageIntelligenceMode: LanguageIntelligenceMode = .lightweight
+    var appliedLanguageIntelligenceMode: LanguageIntelligenceMode = .lightweight
+    private var languageIntelligenceModeObservation: AnyCancellable?
     var shortcutDetector: (any ShortcutDetector)?
     var commandStateFeatureStorage: ProjectCommandStateFeatureModel?
     var menuCommandTasks: [UUID: Task<Void, Never>] = [:]
@@ -228,6 +232,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
             let moduleID: ModuleID?
             switch destination {
             case .project: moduleID = nil
+            case .structure: moduleID = nil
             case .changes: moduleID = .git
             case .pullRequests: moduleID = nil
             case .search: moduleID = .search
@@ -552,17 +557,36 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
                 }
             },
             warmSearchIndex: { [weak self] workspaceURL, rules in
-                self?.searchFeatureIfActive?.warmIndex(at: workspaceURL, visibilityRules: rules.searchRules)
+                guard let self else { return }
+                if let searchFeature = self.searchFeatureIfActive {
+                    searchFeature.warmIndex(at: workspaceURL, visibilityRules: rules.searchRules)
+                } else {
+                    self.warmWorkspaceSearchIndexForLightweightIntelligence(at: workspaceURL, rules: rules)
+                }
             },
             updateSearchIndex: { [weak self] workspaceURL, paths, rules in
-                await self?.searchFeatureIfActive?.updateIndex(
-                    at: workspaceURL,
-                    changedPaths: paths,
-                    visibilityRules: rules.searchRules
-                )
+                guard let self else { return }
+                if let searchFeature = self.searchFeatureIfActive {
+                    await searchFeature.updateIndex(
+                        at: workspaceURL,
+                        changedPaths: paths,
+                        visibilityRules: rules.searchRules
+                    )
+                } else {
+                    await self.updateWorkspaceSearchIndexForLightweightIntelligence(
+                        at: workspaceURL,
+                        changedPaths: paths,
+                        rules: rules
+                    )
+                }
             },
             invalidateSearchIndex: { [weak self] workspaceURL, rules in
-                self?.searchFeatureIfActive?.invalidateIndex(at: workspaceURL, visibilityRules: rules.searchRules)
+                guard let self else { return }
+                if let searchFeature = self.searchFeatureIfActive {
+                    searchFeature.invalidateIndex(at: workspaceURL, visibilityRules: rules.searchRules)
+                } else {
+                    self.invalidateWorkspaceSearchIndexForLightweightIntelligence(at: workspaceURL, rules: rules)
+                }
             }
         )
         languageToolingFeature.configure(
@@ -579,7 +603,10 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
             notify: { [weak self] message in self?.showNotification(message) },
             onDocumentOpened: { [weak self] document in
                 guard let self else { return }
-                self.activateLanguageServerIfAvailable(for: document)
+                self.ensureLightweightLanguageIntelligenceActive()
+                if self.effectiveLanguageIntelligenceMode == .lsp {
+                    self.activateLanguageServerIfAvailable(for: document)
+                }
                 guard self.javaFeature.handles(fileURL: document.url) else { return }
                 Task { await self.refreshCodeVision(for: document.url) }
             },
@@ -612,6 +639,11 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
             },
             notifyFailure: { [weak self] title, message in
                 self?.showNotification(message, severity: .error, title: title)
+            },
+            beforeSaveDocument: { [weak self] document in
+                guard let self else { return }
+                self.services.workspaceTextEditUndoController.breakNativeEditCoalescing(for: document)
+                await self.formatDocumentBeforeSave(document)
             }
         )
         documentFeatureObservation = documentFeature.objectWillChange.sink { [weak self] _ in
@@ -675,6 +707,14 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         shortcutRecordingObservation = keyboardShortcutFeature.$recordingCommandID
             .sink { [weak self] commandID in
                 self?.shortcutDetector?.setSuspended(commandID != nil)
+            }
+        observedGlobalLanguageIntelligenceMode = settings.languageIntelligenceMode
+        appliedLanguageIntelligenceMode = settings.languageIntelligenceMode
+        languageIntelligenceModeObservation = settings.$languageIntelligenceMode
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] mode in
+                self?.handleGlobalLanguageIntelligenceModeChanged(mode)
             }
         configureMediaViewerRegistry()
         shortcutDetector?.start()
@@ -838,6 +878,11 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
             isDisabled: languageToolingFeature.isDisabled(descriptor.id),
             sessionState: languageToolingSessionsIfActive?.languageServerStates[descriptor.id]
         )
+        if isLightweightIntelligenceMode && status == .stopped {
+            return usesChinese
+                ? "\(descriptor.displayName) 运行于轻量模式（零 LSP 进程，可按需开启精确 LSP）"
+                : "\(descriptor.displayName) is running in Lightweight Mode (enable Precision LSP on demand)"
+        }
         switch status {
         case .starting:
             return usesChinese
@@ -871,6 +916,17 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     }
 
     func restartLanguageServers() {
+        guard effectiveLanguageIntelligenceMode == .lsp else {
+            showNotification(
+                settings.language == .simplifiedChinese
+                    ? "当前处于轻量模式，未启动后台语言服务器。"
+                    : "Lightweight Mode is active; no background language servers are running.",
+                severity: .information,
+                title: settings.language == .simplifiedChinese ? "轻量模式" : "Lightweight Mode",
+                action: .enablePrecisionLSP
+            )
+            return
+        }
         languageToolingSessionsIfActive?.stopAllLanguageServers()
         languageToolingFeature.resetWorkspaceState()
         languageServerInstallPromptedProviderIDs.removeAll()
@@ -992,6 +1048,9 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         // document projection so no old-root documents, diagnostics, or
         // responses can survive into the next workspace.
         cancelJavaWorkspaceWorkflows()
+        sessionLanguageIntelligenceModeOverride = nil
+        observedGlobalLanguageIntelligenceMode = settings.languageIntelligenceMode
+        appliedLanguageIntelligenceMode = settings.languageIntelligenceMode
         languageToolingSessionsIfActive?.stopAll()
         reloadLanguageProviderCatalog(for: normalizedURL)
         stopTerminalSessions()
@@ -1121,6 +1180,9 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         isDebugVisible = false
         stopTerminalSessions()
         cancelJavaWorkspaceWorkflows()
+        sessionLanguageIntelligenceModeOverride = nil
+        observedGlobalLanguageIntelligenceMode = settings.languageIntelligenceMode
+        appliedLanguageIntelligenceMode = settings.languageIntelligenceMode
         languageToolingSessionsIfActive?.stopAll()
         languageTestServiceIfActive?.reset()
         runtimeFeature.closeProject()
@@ -1195,6 +1257,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
 
     func openStandaloneFile(_ url: URL) {
         let normalizedURL = url.standardizedFileURL
+        acceptsLanguageEdits = true
         workspaceURL = nil
         standaloneFileURL = normalizedURL
         documentFeature.reset()
@@ -1396,7 +1459,9 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
     }
 
     private func handleDocumentChanged(_ document: EditorDocument) {
-        activateLanguageServerIfAvailable(for: document)
+        if effectiveLanguageIntelligenceMode == .lsp {
+            activateLanguageServerIfAvailable(for: document)
+        }
         Task { @MainActor [weak self, weak document] in
             try? await Task.sleep(for: .milliseconds(450))
             guard !Task.isCancelled, let self, let document else { return }
@@ -1421,6 +1486,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
 
     @discardableResult
     func activateLanguageServerIfAvailable(for document: EditorDocument) -> Bool {
+        guard effectiveLanguageIntelligenceMode == .lsp else { return false }
         guard let workspaceURL,
               let descriptor = languageProviderCatalog.provider(for: document.url) else { return false }
         guard !languageToolingFeature.isDisabled(descriptor.id) else {
@@ -1510,6 +1576,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         }
         do {
             guard let languageToolingSessions = languageToolingSessionsIfActive else { return false }
+            ensureLanguageServerDiscoveryStarted(for: descriptor.id)
             if let effectiveDescriptor = languageToolingSessions.provider(for: document.url),
                effectiveDescriptor.languageServerLaunch?.validationArguments.isEmpty == false,
                let tools = languageServerToolsIfActive,

@@ -79,25 +79,174 @@ enum LanguageServerTextEditApplicator {
 }
 
 enum LanguageServerSnippet {
+    struct Expanded: Equatable, Sendable {
+        let text: String
+        let selectionUTF16Range: NSRange
+    }
+
+    /// Expands LSP snippet placeholders (`$0`, `$1`, `${1:default}`, `${1|a,b|}`)
+    /// into plain insertion text plus the initial caret/placeholder UTF-16 range.
+    static func expand(_ value: String) -> Expanded {
+        let chars = Array(value)
+        var output = ""
+        var utf16Offset = 0
+        var tabStops: [Int: NSRange] = [:]
+        var index = 0
+
+        func appendText(_ chunk: String) {
+            output.append(chunk)
+            utf16Offset += chunk.utf16.count
+        }
+
+        func recordTabStop(_ number: Int, range: NSRange) {
+            if tabStops[number] == nil {
+                tabStops[number] = range
+            }
+        }
+
+        while index < chars.count {
+            let ch = chars[index]
+            if ch == "\\", index + 1 < chars.count {
+                let next = chars[index + 1]
+                if next == "$" || next == "}" || next == "\\" {
+                    appendText(String(next))
+                    index += 2
+                    continue
+                }
+            }
+            if ch == "$", index + 1 < chars.count {
+                let next = chars[index + 1]
+                if next.isASCII, next.isNumber {
+                    var cursor = index + 1
+                    var digits = ""
+                    while cursor < chars.count, chars[cursor].isASCII, chars[cursor].isNumber {
+                        digits.append(chars[cursor])
+                        cursor += 1
+                    }
+                    if let number = Int(digits) {
+                        recordTabStop(number, range: NSRange(location: utf16Offset, length: 0))
+                        index = cursor
+                        continue
+                    }
+                } else if next == "{" {
+                    if let parsed = parseBracedSnippet(chars, from: index + 2) {
+                        let startOffset = utf16Offset
+                        appendText(parsed.resolvedText)
+                        let endOffset = utf16Offset
+                        if let number = parsed.tabStopNumber {
+                            recordTabStop(
+                                number,
+                                range: NSRange(location: startOffset, length: endOffset - startOffset)
+                            )
+                        }
+                        index = parsed.nextIndex
+                        continue
+                    }
+                }
+            }
+            appendText(String(ch))
+            index += 1
+        }
+
+        let selection: NSRange
+        if let firstPositive = tabStops.keys.filter({ $0 > 0 }).min(),
+           let range = tabStops[firstPositive] {
+            selection = range
+        } else if let finalStop = tabStops[0] {
+            selection = finalStop
+        } else {
+            selection = NSRange(location: utf16Offset, length: 0)
+        }
+        return Expanded(text: output, selectionUTF16Range: selection)
+    }
+
+    private struct ParsedBracedSnippet {
+        let tabStopNumber: Int?
+        let resolvedText: String
+        let nextIndex: Int
+    }
+
+    private static func parseBracedSnippet(
+        _ chars: [Character],
+        from start: Int
+    ) -> ParsedBracedSnippet? {
+        var cursor = start
+        var digits = ""
+        while cursor < chars.count, chars[cursor].isASCII, chars[cursor].isNumber {
+            digits.append(chars[cursor])
+            cursor += 1
+        }
+        guard !digits.isEmpty, let tabStop = Int(digits), cursor < chars.count else {
+            return nil
+        }
+        if chars[cursor] == "}" {
+            return ParsedBracedSnippet(tabStopNumber: tabStop, resolvedText: "", nextIndex: cursor + 1)
+        }
+        if chars[cursor] == "|" {
+            // Choice syntax: ${1|one,two,three|}
+            cursor += 1
+            var choiceBody = ""
+            while cursor + 1 < chars.count {
+                if chars[cursor] == "|" && chars[cursor + 1] == "}" {
+                    let firstChoice = choiceBody.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
+                        .first.map(String.init) ?? ""
+                    return ParsedBracedSnippet(
+                        tabStopNumber: tabStop,
+                        resolvedText: firstChoice,
+                        nextIndex: cursor + 2
+                    )
+                }
+                choiceBody.append(chars[cursor])
+                cursor += 1
+            }
+            return nil
+        }
+        if chars[cursor] == ":" {
+            cursor += 1
+            var depth = 1
+            var rawInner = ""
+            while cursor < chars.count {
+                let c = chars[cursor]
+                if c == "\\", cursor + 1 < chars.count {
+                    let escaped = chars[cursor + 1]
+                    if escaped == "}" || escaped == "$" || escaped == "\\" {
+                        // Preserve escape sequences so the recursive `expand(rawInner)`
+                        // unescapes them once without reinterpreting `\$100` as a tabstop.
+                        rawInner.append("\\")
+                        rawInner.append(escaped)
+                        cursor += 2
+                        continue
+                    }
+                }
+                if c == "$" && cursor + 1 < chars.count && chars[cursor + 1] == "{" {
+                    depth += 1
+                    rawInner.append(c)
+                    rawInner.append("{")
+                    cursor += 2
+                    continue
+                }
+                if c == "}" {
+                    depth -= 1
+                    if depth == 0 {
+                        let nested = expand(rawInner)
+                        return ParsedBracedSnippet(
+                            tabStopNumber: tabStop,
+                            resolvedText: nested.text,
+                            nextIndex: cursor + 1
+                        )
+                    }
+                }
+                rawInner.append(c)
+                cursor += 1
+            }
+        }
+        return nil
+    }
+
     static func plainText(_ value: String) -> String {
         if let text = RustCoreBridge().plainLanguageServerSnippet(value) {
             return text
         }
-        var result = value
-        if let placeholders = try? NSRegularExpression(pattern: #"\$\{\d+:([^}]*)\}"#) {
-            result = placeholders.stringByReplacingMatches(
-                in: result,
-                range: NSRange(location: 0, length: (result as NSString).length),
-                withTemplate: "$1"
-            )
-        }
-        if let tabStops = try? NSRegularExpression(pattern: #"\$\{?\d+\}?"#) {
-            result = tabStops.stringByReplacingMatches(
-                in: result,
-                range: NSRange(location: 0, length: (result as NSString).length),
-                withTemplate: ""
-            )
-        }
-        return result
+        return expand(value).text
     }
 }

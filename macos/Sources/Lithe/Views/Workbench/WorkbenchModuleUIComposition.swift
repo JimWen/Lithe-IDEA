@@ -112,7 +112,7 @@ enum WorkbenchModuleUIComposition {
     )
 
     private static let cargoRegistration = WorkbenchModuleUIRegistry.Registration(
-        contributions: BundledLanguagePluginCatalog.executionContributions(languageID: "rust"),
+        contributions: OfficialPluginCatalog.cargoProjectToolsContributions,
         actions: [.init(id: "cargo.toggle", commandID: "toggle-cargo")],
         renderers: [.init(
             id: "cargo.project", ideaAssetPath: "toolwindows/toolWindowCargo.svg",
@@ -124,7 +124,7 @@ enum WorkbenchModuleUIComposition {
     )
 
     private static let goRegistration = WorkbenchModuleUIRegistry.Registration(
-        contributions: BundledLanguagePluginCatalog.executionContributions(languageID: "go"),
+        contributions: OfficialPluginCatalog.projectToolsContributions,
         actions: [.init(id: "go.toggle", commandID: "toggle-go")],
         renderers: [.init(
             id: "go.project", ideaAssetPath: "toolwindows/toolWindowGo.svg",

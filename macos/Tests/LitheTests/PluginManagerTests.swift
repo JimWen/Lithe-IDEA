@@ -9,7 +9,7 @@ struct PluginManagerTests {
     @Test
     func bundledLanguageCatalogOnlyCreatesPluginsForImplementedProcessFeatures() throws {
         let expectedIDs: Set<String> = [
-            "python", "node", "rust", "clangd", "csharp", "fsharp", "swift", "kotlin", "scala", "groovy",
+            "node", "clangd", "csharp", "fsharp", "swift", "kotlin", "scala", "groovy",
             "ruby", "php", "dart", "lua", "shell", "powershell", "html", "css", "vue", "svelte", "astro",
             "json", "yaml", "xml", "markdown", "sql", "terraform", "dockerfile", "cmake", "make", "toml",
             "graphql", "protobuf", "prisma", "elixir", "erlang", "haskell", "ocaml", "clojure", "julia",
@@ -41,15 +41,14 @@ struct PluginManagerTests {
         let officialLanguagePlugins = OfficialPluginCatalog.manifests.filter {
             !($0.languageSupports ?? []).isEmpty
         }
+        #expect(Set(officialLanguagePlugins.compactMap { $0.languageSupports?.first?.id }) == ["go", "rust", "python"])
         let officialModuleStates = Dictionary(uniqueKeysWithValues: officialLanguagePlugins
             .flatMap(\.modules)
             .map { ($0.manifest.id, $0.manifest.defaultState) })
-        #expect(officialModuleStates[.languageExecutionExtension("go")] == .enabled)
-        #expect(officialModuleStates[.languageServerExtension("go")] == .enabled)
-        #expect(officialModuleStates
-            .filter { $0.key != .languageExecutionExtension("go") && $0.key != .languageServerExtension("go") }
-            .values
-            .allSatisfy { $0 == .disabled })
+        for languageID in ["go", "rust", "python"] {
+            #expect(officialModuleStates[.languageExecutionExtension(languageID)] == .enabled)
+            #expect(officialModuleStates[.languageServerExtension(languageID)] == .enabled)
+        }
         _ = try ValidatedPluginCatalog(
             manifests: BuiltInPluginCatalog.manifests
                 + BundledLanguagePluginCatalog.manifests

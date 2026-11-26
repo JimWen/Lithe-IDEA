@@ -145,6 +145,13 @@ struct MacRuntimeToolDiscovery: RuntimeToolDiscovery {
             }
         }
 
+        let standardUserBin = homeDirectoryURL.appendingPathComponent(".local/bin")
+        add(
+            standardUserBin.appendingPathComponent(command),
+            source: .environment,
+            detail: "User local bin: \(standardUserBin.path)"
+        )
+
         let homebrewRoots = [
             "/opt/homebrew/bin",
             "/usr/local/bin",

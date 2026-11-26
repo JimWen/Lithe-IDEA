@@ -149,6 +149,7 @@ final class DocumentFeatureModel: ObservableObject {
     private var onRecordExternalChanges: (@MainActor ([URL]) -> Void)?
     private var onDocumentCollectionChanged: (@MainActor () -> Void)?
     private var onProjectCloseReady: (@MainActor () -> Void)?
+    private var beforeSaveDocument: (@MainActor (EditorDocument) async -> Void)?
     private var deferredExternalChanges: Set<URL> = []
     private var previewGeneration: UInt64 = 0
     private var onCloseFailed: (@MainActor () -> Void)?
@@ -200,7 +201,8 @@ final class DocumentFeatureModel: ObservableObject {
         onDocumentCollectionChanged: @escaping @MainActor () -> Void,
         onProjectCloseReady: @escaping @MainActor () -> Void,
         notifyFailure: (@MainActor (String, String) -> Void)? = nil,
-        onCloseFailed: @escaping @MainActor () -> Void = {}
+        onCloseFailed: @escaping @MainActor () -> Void = {},
+        beforeSaveDocument: (@MainActor (EditorDocument) async -> Void)? = nil
     ) {
         self.workspaceURLProvider = workspaceURLProvider
         self.autoSaveEnabledProvider = autoSaveEnabledProvider
@@ -216,6 +218,7 @@ final class DocumentFeatureModel: ObservableObject {
         self.onDocumentCollectionChanged = onDocumentCollectionChanged
         self.onProjectCloseReady = onProjectCloseReady
         self.onCloseFailed = onCloseFailed
+        self.beforeSaveDocument = beforeSaveDocument
     }
 
     var activeDocument: EditorDocument? {
@@ -1036,6 +1039,12 @@ final class DocumentFeatureModel: ObservableObject {
             }
             try Task.checkCancellation()
             guard self.persistenceGeneration == generation else { throw CancellationError() }
+            if !document.isReadOnly, !document.hasMutationLease, document.isDirty,
+               let beforeSaveDocument = self.beforeSaveDocument {
+                await beforeSaveDocument(document)
+                try Task.checkCancellation()
+                guard self.persistenceGeneration == generation else { throw CancellationError() }
+            }
             return try await self.performDocumentSave(document, generation: generation)
         }
         saveTasks[document.id] = task

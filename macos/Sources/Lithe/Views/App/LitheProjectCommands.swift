@@ -46,9 +46,11 @@ struct LitheProjectCommands: Commands {
         }
         CommandMenu("Code") {
             items.button("Complete Symbol", .completeSymbol)
+            items.button("Parameter Info", .parameterInfo)
             items.button("Quick Documentation", .quickDocumentation)
             Divider()
             items.button("Rename Symbol…", .renameSymbol)
+            items.button("Refactor This…", .refactorThis)
             items.button("Format Document", .formatDocument)
             items.button("Source Actions…", .sourceActions)
         }
@@ -62,6 +64,7 @@ private struct LitheViewCommands: Commands {
         CommandGroup(before: .toolbar) {
             Menu("Tool Windows") {
                 items.toggle("Project", .project)
+                items.toggle("Structure", .structure)
                 items.toggle("Commit", .commit)
                 items.toggle("Find", .find)
                 Divider()

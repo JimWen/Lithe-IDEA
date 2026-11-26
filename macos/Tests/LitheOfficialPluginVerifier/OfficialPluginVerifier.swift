@@ -88,7 +88,16 @@ struct OfficialPluginVerifier {
         for factory in factories { try runtime.register(factory) }
         try runtime.validateGraph()
         do {
-            try await exerciseGo(runtime: runtime, services: services, legacy: legacy)
+            switch manifest.id.rawValue {
+            case "dev.lithe.plugin.go-support":
+                try await exerciseGo(runtime: runtime, services: services, legacy: legacy)
+            case "dev.lithe.plugin.rust-support":
+                try await exerciseRust(runtime: runtime, services: services)
+            case "dev.lithe.plugin.python-support":
+                try await exercisePython(runtime: runtime, services: services)
+            default:
+                throw VerificationError.behavior("No official verification routine for \(manifest.id)")
+            }
         } catch {
             await runtime.shutdownAll()
             throw error
@@ -100,7 +109,7 @@ struct OfficialPluginVerifier {
                 throw VerificationError.behavior("Plugin retained resources after shutdown")
             }
         }
-        print("Verified \(legacy ? "legacy 0.3.0" : "current") \(manifest.id): native Bundle, Run/LSP\(legacy ? "" : "/capture"), shutdown (\(started.duration(to: .now)))")
+        print("Verified \(legacy ? "legacy 0.3.0" : "current") \(manifest.id): native Bundle, Run/LSP/Debug\(legacy ? "" : "/Syntax"), shutdown (\(started.duration(to: .now)))")
     }
 
     private static func verifyFactories(_ factories: [ModuleFactory], match manifest: PluginManifest) throws {
@@ -250,6 +259,164 @@ struct OfficialPluginVerifier {
               services.projectTools.sessions.count == 1 else {
             throw VerificationError.behavior("A retired plugin reference started capture")
         }
+    }
+
+    @MainActor
+    private static func exerciseRust(
+        runtime: ModuleRuntime, services: VerificationHostServices
+    ) async throws {
+        let executionID = ModuleID.languageExecutionExtension("rust")
+        let lspID = ModuleID.languageServerExtension("rust")
+        try await runtime.setEnabled(true, for: executionID)
+        try await runtime.setEnabled(true, for: lspID)
+        guard let execution = try await runtime.activateCapability(.languageExecutionExtension("rust"))
+            as? any LanguageRunExtensionProviding,
+              let testing = try await runtime.activateCapability(.languageTestingExtension("rust"))
+            as? any LanguageTestExtensionProviding,
+              let lsp = try await runtime.activateCapability(.languageServerExtension("rust"))
+            as? any LanguageServerExtensionProviding else {
+            throw VerificationError.behavior("Rust Run, Test, or LSP capability is unavailable")
+        }
+        guard let syntax = lsp as? any LanguageSyntaxExtensionProviding,
+              syntax.syntaxProfile.languageID == "rust",
+              syntax.syntaxProfile.supportsRustSyntax else {
+            throw VerificationError.behavior("Rust syntax profile capability is unavailable")
+        }
+        let plan = try execution.launchPlan(for: LanguageRunExtensionRequest(
+            relativeFilePath: "src/main.rs", arguments: ["--", "--fixture"],
+            environment: ["FIXTURE": "rust-run"]
+        ))
+        guard plan.executable == .toolchain("project-cargo"),
+              plan.arguments == ["run", "--", "--fixture"],
+              plan.environment == ["FIXTURE": "rust-run"] else {
+            throw VerificationError.behavior("Rust run plan changed across the native Bundle boundary")
+        }
+        let testPlan = try testing.testPlan(for: LanguageTestExtensionRequest(
+            scope: .workspace,
+            relativeProjectFilePaths: ["Cargo.toml", "src/lib.rs"]
+        ))
+        guard testPlan.frameworkID == "cargo", testPlan.launchPlan.arguments == ["test"] else {
+            throw VerificationError.behavior("Rust test plan changed across the native Bundle boundary")
+        }
+        let runSession = execution.makeExecutionSession()
+        try runSession.start(LanguageExecutionProcessRequest(
+            operationID: "bundle-rust-run", executablePath: "/fixture/cargo", arguments: plan.arguments
+        ))
+        guard runSession.isRunning, services.execution.owners == [executionID],
+              await runSession.stopAndWait(), !runSession.isRunning else {
+            throw VerificationError.behavior("Rust run session could not start and stop through the host")
+        }
+        guard lsp.configuration.languageID == "rust",
+              lsp.configuration.executableNames == ["rust-analyzer"],
+              lsp.configuration.validationArguments == ["--version"] else {
+            throw VerificationError.behavior("Rust LSP configuration changed across the native Bundle boundary")
+        }
+        let lspState = VerificationLSPState()
+        lsp.lifecycle.attach(isRunning: { lspState.isRunning }, stop: {
+            lspState.isRunning = false
+            lspState.stopCalls += 1
+        })
+        try await runtime.setEnabled(false, for: lspID)
+        guard !lspState.isRunning, lspState.stopCalls > 0 else {
+            throw VerificationError.behavior("Disabling Rust LSP did not stop its owned lifecycle")
+        }
+        guard let tools = try await runtime.activateCapability(.languageProjectTools("rust"))
+            as? any LanguageProjectToolsProviding, tools.languageID == "rust" else {
+            throw VerificationError.behavior("Rust project tools capture capability is unavailable")
+        }
+        guard let debug = try await runtime.activateCapability(.languageDebugExtension("rust"))
+            as? any LanguageDebugExtensionProviding,
+              debug.languageID == "rust",
+              debug.debugAdapterLaunch.adapterID == "lldb",
+              debug.debugAdapterLaunch.transport == .stdio else {
+            throw VerificationError.behavior("Rust debug extension capability is unavailable")
+        }
+        let idleSession = tools.makeProjectToolSession()
+        let request = LanguageProjectToolRequest(
+            operationID: "bundle-cargo-capture", executablePath: "/fixture/cargo",
+            arguments: ["metadata", "--no-deps"], workingDirectory: "/fixture/workspace",
+            environment: ["FIXTURE": "cargo"]
+        )
+        let result = await tools.makeProjectToolSession().capture(request)
+        guard result.operationID == request.operationID, result.status == .succeeded,
+              services.projectTools.owners == [executionID] else {
+            throw VerificationError.behavior("Rust capture result changed across the native Bundle boundary")
+        }
+        try await runtime.setEnabled(false, for: executionID)
+        let oldIdle = await idleSession.capture(request)
+        guard oldIdle.status == .unavailable, services.projectTools.sessions.count == 1 else {
+            throw VerificationError.behavior("Retired Rust plugin reference started capture")
+        }
+    }
+
+    @MainActor
+    private static func exercisePython(
+        runtime: ModuleRuntime, services: VerificationHostServices
+    ) async throws {
+        let executionID = ModuleID.languageExecutionExtension("python")
+        let lspID = ModuleID.languageServerExtension("python")
+        try await runtime.setEnabled(true, for: executionID)
+        try await runtime.setEnabled(true, for: lspID)
+        guard let execution = try await runtime.activateCapability(.languageExecutionExtension("python"))
+            as? any LanguageRunExtensionProviding,
+              let testing = try await runtime.activateCapability(.languageTestingExtension("python"))
+            as? any LanguageTestExtensionProviding,
+              let lsp = try await runtime.activateCapability(.languageServerExtension("python"))
+            as? any LanguageServerExtensionProviding else {
+            throw VerificationError.behavior("Python Run, Test, or LSP capability is unavailable")
+        }
+        guard let syntax = lsp as? any LanguageSyntaxExtensionProviding,
+              syntax.syntaxProfile.languageID == "python",
+              syntax.syntaxProfile.supportsTripleQuotedStrings else {
+            throw VerificationError.behavior("Python syntax profile capability is unavailable")
+        }
+        let plan = try execution.launchPlan(for: LanguageRunExtensionRequest(
+            relativeFilePath: "scripts/app.py", arguments: ["--fixture"],
+            environment: ["FIXTURE": "py-run"]
+        ))
+        guard plan.executable == .toolchain("project-python"),
+              plan.arguments == ["scripts/app.py", "--fixture"],
+              plan.environment == ["FIXTURE": "py-run"] else {
+            throw VerificationError.behavior("Python run plan changed across the native Bundle boundary")
+        }
+        let testPlan = try testing.testPlan(for: LanguageTestExtensionRequest(
+            scope: .file(relativePath: "tests/test_app.py"),
+            relativeProjectFilePaths: ["pyproject.toml", "tests/test_app.py"]
+        ))
+        guard testPlan.frameworkID == "pytest",
+              testPlan.launchPlan.arguments == ["-m", "pytest", "tests/test_app.py"] else {
+            throw VerificationError.behavior("Python test plan changed across the native Bundle boundary")
+        }
+        let runSession = execution.makeExecutionSession()
+        try runSession.start(LanguageExecutionProcessRequest(
+            operationID: "bundle-python-run", executablePath: "/fixture/python3", arguments: plan.arguments
+        ))
+        guard runSession.isRunning, services.execution.owners == [executionID],
+              await runSession.stopAndWait(), !runSession.isRunning else {
+            throw VerificationError.behavior("Python run session could not start and stop through the host")
+        }
+        guard lsp.configuration.languageID == "python",
+              lsp.configuration.executableNames == ["basedpyright-langserver", "pyright-langserver"],
+              lsp.configuration.arguments == ["--stdio"] else {
+            throw VerificationError.behavior("Python LSP configuration changed across the native Bundle boundary")
+        }
+        let lspState = VerificationLSPState()
+        lsp.lifecycle.attach(isRunning: { lspState.isRunning }, stop: {
+            lspState.isRunning = false
+            lspState.stopCalls += 1
+        })
+        try await runtime.setEnabled(false, for: lspID)
+        guard !lspState.isRunning, lspState.stopCalls > 0 else {
+            throw VerificationError.behavior("Disabling Python LSP did not stop its owned lifecycle")
+        }
+        guard let debug = try await runtime.activateCapability(.languageDebugExtension("python"))
+            as? any LanguageDebugExtensionProviding,
+              debug.languageID == "python",
+              debug.debugAdapterLaunch.adapterID == "python",
+              debug.debugAdapterLaunch.transport == .stdio else {
+            throw VerificationError.behavior("Python debug extension capability is unavailable")
+        }
+        try await runtime.setEnabled(false, for: executionID)
     }
 }
 

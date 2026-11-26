@@ -71,6 +71,7 @@ enum WorkbenchNotificationSeverity: Equatable {
 
 enum WorkbenchNotificationAction: Equatable {
     case installLanguageServer(providerID: String)
+    case enablePrecisionLSP
     case identifyRunConfiguration
     case configureGoRuntime
     case configureRustRuntime
@@ -78,6 +79,7 @@ enum WorkbenchNotificationAction: Equatable {
     var title: String {
         switch self {
         case .installLanguageServer: "Install"
+        case .enablePrecisionLSP: "Enable Precision LSP"
         case .identifyRunConfiguration: "Configure"
         case .configureGoRuntime: "Configure Go"
         case .configureRustRuntime: "Configure Rust"
@@ -125,6 +127,7 @@ struct DebugBreakpointPresentationState {
 
 enum SidebarDestination: String, CaseIterable, Identifiable {
     case project
+    case structure
     case changes
     case pullRequests
     case search
@@ -134,6 +137,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .project: "Project"
+        case .structure: "Structure"
         case .changes: "Commit"
         case .pullRequests: "Pull Requests"
         case .search: "Find"
@@ -143,6 +147,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .project: "folder"
+        case .structure: "list.bullet.indent"
         case .changes: "slider.horizontal.3"
         case .pullRequests: "arrow.triangle.pull"
         case .search: "magnifyingglass"
@@ -152,6 +157,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     var commandID: String? {
         switch self {
         case .project: "toggle-project"
+        case .structure: "toggle-structure"
         case .changes: "toggle-commit"
         case .search: "toggle-find"
         default: nil
@@ -160,6 +166,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     var ideaAssetPath: String? {
         switch self {
         case .project: "toolwindows/toolWindowProject.svg"
+        case .structure: nil
         case .changes: "toolwindows/toolWindowCommit.svg"
         case .pullRequests: nil
         case .search: "toolwindows/toolWindowFind.svg"
@@ -171,7 +178,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         switch self {
         case .pullRequests:
             LitheFeatureAvailability.githubPullRequests
-        case .project, .changes, .search, .database:
+        case .project, .structure, .changes, .search, .database:
             true
         }
     }

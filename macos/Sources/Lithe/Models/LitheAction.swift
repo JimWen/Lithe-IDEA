@@ -68,6 +68,7 @@ enum LitheActionRegistry {
             action("open-project", model: model) { model.chooseProject() },
             action("close-project", model: model) { model.closeProject() },
             action("settings", model: model) { model.showSettings() },
+            action("toggle-language-intelligence-mode", model: model) { model.toggleSessionLanguageIntelligenceMode() },
             action("rebuild-java-index", model: model) { model.rebuildJavaIndex() },
             action("save", model: model) { model.saveActiveDocument() },
             action("search-everywhere", model: model) { model.toggleSearchEverywhere() },
@@ -77,6 +78,7 @@ enum LitheActionRegistry {
             action("find-previous", model: model) { model.navigateFind(offset: -1) },
             action("go-to-implementation", model: model) { model.goToImplementation() },
             action("toggle-project", model: model) { model.toggleSidebar(.project) },
+            action("toggle-structure", model: model) { model.toggleSidebar(.structure) },
             action("toggle-commit", model: model) { model.toggleSidebar(.changes) },
             action("toggle-find", model: model) { model.toggleSidebar(.search) },
             action("toggle-terminal", model: model) { model.toggleTerminal() },
@@ -101,7 +103,9 @@ enum LitheActionRegistry {
             action("rename-symbol", model: model) { model.triggerRenameSymbol() },
             action("format-document", model: model) { model.triggerFormatDocument() },
             action("source-actions", model: model) { model.triggerSourceActions() },
+            action("refactor-this", model: model) { model.triggerRefactorThis() },
             action("complete-symbol", model: model) { model.triggerCompleteSymbol() },
+            action("parameter-info", model: model) { model.triggerParameterInfo() },
             action("quick-documentation", model: model) { model.triggerQuickDocumentation() },
             action("local-history", model: model) {
                 if let url = model.activeDocument?.url { model.showLocalHistory(for: url) }

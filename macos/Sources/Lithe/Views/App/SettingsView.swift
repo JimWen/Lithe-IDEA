@@ -555,6 +555,14 @@ struct SettingsView: View {
                     isOn: $settings.showCodeVision,
                     title: "Show usages and Git author"
                 )
+                LitheSettingsCheckbox(
+                    isOn: $settings.showInlayHints,
+                    title: "Show inlay hints"
+                )
+                LitheSettingsCheckbox(
+                    isOn: $settings.formatOnSave,
+                    title: "Format document on save"
+                )
             }
             group("Editor tabs") {
                 row("Layout") {

@@ -340,12 +340,24 @@ extension AppModel {
         }
     }
 
-    /// Resolve an editor gutter entry against the generated project inventory
-    /// before launching. This keeps Go main markers tied to their own target
-    /// instead of silently using whichever configuration was last selected.
+    /// Resolve an editor gutter entry against the active language test runner or
+    /// generated project inventory before launching.
     func runDocumentRunnable(_ runnable: DocumentRunnable, in fileURL: URL, debug: Bool) {
+        if runnable.kind != .application {
+            guard let providerID = languageProviderID(for: fileURL) else { return }
+            let scope = LanguageTestScope.testCase(
+                identifier: runnable.displayName,
+                fileURL: fileURL.standardizedFileURL
+            )
+            if debug {
+                debugTest(providerID: providerID, scope: scope)
+            } else {
+                runTest(providerID: providerID, scope: scope)
+            }
+            return
+        }
         Task { @MainActor [weak self] in
-            guard let self, runnable.kind == DocumentRunnable.Kind.application else { return }
+            guard let self else { return }
             guard let identity = currentWorkspaceIdentity else { return }
             guard let feature = await activateExecutionModule()?.runFeature else { return }
             guard case .ready = await ensureRunProjectReady(feature, for: identity) else {
@@ -362,7 +374,7 @@ extension AppModel {
                 $0.name == runnable.displayName && $0.execution == applicationExecution
             } ?? feature.configurations.first { config in
                 guard config.execution == applicationExecution,
-                      config.kind.languageID == languageProviderID(for: fileURL) else {
+                      config.kind.languageID == self.languageProviderID(for: fileURL) else {
                     return false
                 }
                 guard let modulePath = config.modulePath, !modulePath.isEmpty else {
@@ -373,13 +385,29 @@ extension AppModel {
                     .standardizedFileURL.path
                 return fileDirectoryPath == configDirectory
                     || fileDirectoryPath.hasPrefix(configDirectory + "/")
-            }
+            } ?? feature.configurations.first(where: \.usesCurrentEditorFile)
             guard let configuration else {
                 showNotification("未找到该入口的运行配置，请先重新生成运行配置。", severity: .error, title: runnable.displayName)
                 return
             }
+            if configuration.usesCurrentEditorFile,
+               activeDocument?.url.standardizedFileURL != fileURL.standardizedFileURL {
+                await documentFeature.openFileAsync(
+                    fileURL,
+                    isReadOnly: false,
+                    displayPath: nil,
+                    activateWhenReady: true
+                )
+                guard isCurrentWorkspace(identity) else { return }
+            }
             selectRunConfiguration(configuration)
-            if debug { startDebugging() } else { startRunConfiguration(configuration) }
+            if debug {
+                startDebugging()
+            } else if configuration.usesCurrentEditorFile {
+                runSelectedConfiguration()
+            } else {
+                startRunConfiguration(configuration)
+            }
         }
     }
 
@@ -1234,7 +1262,16 @@ extension AppModel {
     }
 
     func runTest(providerID: String, scope: LanguageTestScope) {
-        guard let workspaceURL else { return }
+        guard let workspaceURL, let identity = currentWorkspaceIdentity else { return }
+        let targetFileURL: URL?
+        switch scope {
+        case .workspace:
+            targetFileURL = nil
+        case .file(let url):
+            targetFileURL = url.standardizedFileURL
+        case .testCase(_, let url):
+            targetFileURL = url?.standardizedFileURL
+        }
         isTestsVisible = true
         isGitLogVisible = false
         isTerminalVisible = false
@@ -1243,7 +1280,28 @@ extension AppModel {
         isRunVisible = false
         isDebugVisible = false
         Task { [weak self] in
-            guard let self, let execution = await activateExecutionModule() else { return }
+            guard let self, let execution = await activateExecutionModule(),
+                  isCurrentWorkspace(identity), !Task.isCancelled else { return }
+            if let targetFileURL,
+               let document = openDocuments.first(where: {
+                   $0.url.standardizedFileURL == targetFileURL
+               }),
+               document.isDirty {
+                do {
+                    let previousText = document.savedText
+                    let wrote = try await saveDocument(document)
+                    guard !document.isDirty, isCurrentWorkspace(identity), !Task.isCancelled else { return }
+                    if wrote { recordSave(document, previousText: previousText) }
+                } catch {
+                    showNotification(
+                        error.localizedDescription,
+                        severity: .error,
+                        title: "Could not save \(document.url.lastPathComponent)"
+                    )
+                    return
+                }
+            }
+            guard isCurrentWorkspace(identity), !Task.isCancelled else { return }
             if let ownership = services.pluginCatalog.languageSupports[providerID],
                !(await activateLanguageTestExtension(
                    ownership.declaration,
@@ -1251,6 +1309,7 @@ extension AppModel {
                )) {
                 return
             }
+            guard isCurrentWorkspace(identity), !Task.isCancelled else { return }
             _ = execution.tests.run(
                 providerID: providerID,
                 scope: scope,
@@ -1261,8 +1320,13 @@ extension AppModel {
     }
 
     func debugTest(providerID: String, scope: LanguageTestScope) {
-        guard providerID == "java", let workspaceURL else {
-            showNotification("Java test debugging is currently available for Java projects only")
+        guard let workspaceURL else { return }
+        if providerID != "java" {
+            guard ["go", "rust", "python"].contains(providerID) else {
+                showNotification("Test debugging is not supported for \(providerID) yet")
+                return
+            }
+            debugLanguageTest(providerID: providerID, scope: scope, workspaceURL: workspaceURL)
             return
         }
         let fileURL: URL
@@ -1344,6 +1408,119 @@ extension AppModel {
                 finishJavaTestDebugLaunch(operationID, stopResultServer: true)
                 showNotification(error.localizedDescription)
             }
+        }
+    }
+
+    private func debugLanguageTest(
+        providerID: String,
+        scope: LanguageTestScope,
+        workspaceURL: URL
+    ) {
+        let fileURL: URL
+        switch scope {
+        case .workspace:
+            fileURL = workspaceURL.standardizedFileURL
+        case .file(let url):
+            fileURL = url.standardizedFileURL
+        case .testCase(_, let url):
+            guard let url else {
+                showNotification("The selected \(providerID) test has no source file")
+                return
+            }
+            fileURL = url.standardizedFileURL
+        }
+        guard let identity = currentWorkspaceIdentity else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let runFeature = await activateExecutionModule()?.runFeature,
+                  let genericDebugFeature = await activateDebugModule()?.genericFeature,
+                  isCurrentWorkspace(identity),
+                  !Task.isCancelled else { return }
+            guard await activateLanguageDebugExtensionIfNeeded(for: fileURL, debugFeature: genericDebugFeature),
+                  isCurrentWorkspace(identity),
+                  !Task.isCancelled else { return }
+            guard let provider = languageProviderCatalog.provider(for: fileURL),
+                  provider.capabilities.contains(.debugAdapter) else {
+                showNotification("Debug support is not available for \(fileURL.lastPathComponent)")
+                isDebugVisible = true
+                return
+            }
+            if let document = openDocuments.first(where: {
+                $0.url.standardizedFileURL == fileURL
+            }), document.isDirty {
+                do {
+                    let previousText = document.savedText
+                    let wrote = try await saveDocument(document)
+                    guard !document.isDirty, isCurrentWorkspace(identity), !Task.isCancelled else { return }
+                    if wrote { recordSave(document, previousText: previousText) }
+                } catch {
+                    showNotification(
+                        error.localizedDescription,
+                        severity: .error,
+                        title: "Could not save \(document.url.lastPathComponent)"
+                    )
+                    return
+                }
+            }
+            let preBuiltRustTestExecutableURL: URL?
+            if provider.id == "rust" {
+                guard let rustBuilder = services.rustDebugBuildService else {
+                    showNotification("Rust debug test build service is unavailable", severity: .error)
+                    return
+                }
+                let cargoConfigs = runFeature.configurations.filter { $0.kind.providerID == "cargo" }
+                let matchingConfig = cargoConfigs
+                    .filter { cfg in
+                        guard let modulePath = cfg.modulePath, !modulePath.isEmpty else { return true }
+                        let moduleDir = workspaceURL.appendingPathComponent(modulePath, isDirectory: true).standardizedFileURL.path
+                        return fileURL.path == moduleDir || fileURL.path.hasPrefix(moduleDir + "/")
+                    }
+                    .max { ($0.modulePath?.count ?? 0) < ($1.modulePath?.count ?? 0) }
+                let moduleURL = workspaceURL
+                    .appendingPathComponent(matchingConfig?.modulePath ?? "", isDirectory: true)
+                    .standardizedFileURL
+                let envOverrides = matchingConfig.map { runFeature.options(for: $0).environment } ?? [:]
+                do {
+                    preBuiltRustTestExecutableURL = try await rustBuilder.buildDebugTestExecutable(
+                        fileURL: fileURL,
+                        workspaceURL: workspaceURL,
+                        workingDirectory: moduleURL,
+                        environmentOverrides: envOverrides
+                    )
+                } catch {
+                    guard isCurrentWorkspace(identity), !Task.isCancelled else { return }
+                    showNotification(error.localizedDescription, severity: .error, title: "Rust Test Build Failed")
+                    return
+                }
+            } else {
+                preBuiltRustTestExecutableURL = nil
+            }
+            guard isCurrentWorkspace(identity), !Task.isCancelled else { return }
+            let configuration: DebugLaunchConfiguration
+            do {
+                configuration = try debugLaunchConfigurationResolver.resolveLanguageTest(
+                    provider: provider,
+                    scope: scope,
+                    workspaceURL: workspaceURL,
+                    configurations: runFeature.configurations,
+                    selectedConfiguration: runFeature.selectedConfiguration,
+                    preBuiltRustTestExecutableURL: preBuiltRustTestExecutableURL,
+                    options: { runFeature.options(for: $0) }
+                )
+            } catch {
+                showNotification(error.localizedDescription, severity: .error)
+                return
+            }
+            guard genericDebugFeature.start(
+                fileURL: fileURL,
+                rootURL: workspaceURL,
+                configuration: configuration
+            ) else {
+                showNotification(genericDebugFeature.errorMessage ?? "Could not start test debugging")
+                isDebugVisible = true
+                return
+            }
+            showDebugToolWindow()
         }
     }
 
@@ -1788,6 +1965,15 @@ extension AppModel {
     }
 
     func goToImplementation() {
+        if let document = activeDocument,
+           !supportsLanguageServerFeature(.implementation),
+           isLightweightIntelligenceMode {
+            requestPrecisionLSPEscalation(
+                forAction: settings.language == .simplifiedChinese ? "跳转到实现" : "Go to Implementation",
+                fileURL: document.url
+            )
+            return
+        }
         guard languageServerFeatureIsReady(
             .implementation,
             unsupportedMessage: "Implementation navigation is not supported by this language server"
@@ -1797,20 +1983,18 @@ extension AppModel {
 
     func navigateToSymbol(line: Int, utf16Column: Int, in fileURL: URL) {
         let normalizedURL = fileURL.standardizedFileURL
-        guard languageProviderCatalog.provider(for: normalizedURL)?.capabilities.contains(.languageServer) == true
+        guard languageToolingSessionsIfActive?.features(for: normalizedURL).contains(.definition) == true
         else { return }
         editorCaret = EditorCaret(
             url: normalizedURL,
             line: max(0, line),
             utf16Column: max(0, utf16Column)
         )
-        if (languageToolingSessionsIfActive?.features(for: normalizedURL).contains(.definition) == true) {
-            performGenericNavigation(
-                method: "textDocument/definition",
-                kind: .definitions,
-                fallbackToImplementationsIfSelf: true
-            )
-        }
+        performGenericNavigation(
+            method: "textDocument/definition",
+            kind: .definitions,
+            fallbackToImplementationsIfSelf: true
+        )
     }
 
     func findReferences() {
@@ -2079,25 +2263,32 @@ extension AppModel {
         completion: @escaping (LanguageServerHover?) -> Void
     ) {
         guard let document = activeDocument,
-              (languageToolingSessionsIfActive?.features(for: document.url).contains(.hover) == true),
-              let workspaceURL else {
+              (languageToolingSessionsIfActive?.features(for: document.url).contains(.hover) == true) else {
             completion(nil)
             return
         }
+        let expectedURL = document.url.standardizedFileURL
+        let expectedText = document.text
         do {
             try languageToolingSessionsIfActive?.hover(
                 fileURL: document.url,
-                text: document.text,
+                text: expectedText,
                 position: LanguageServerPosition(
                     line: max(0, line),
                     utf16Column: max(0, utf16Column)
                 ),
                 rootURL: workspaceURL
             ) { [weak self] result in
+                guard let self,
+                      self.activeDocument?.url.standardizedFileURL == expectedURL,
+                      self.activeDocument?.text.utf8.elementsEqual(expectedText.utf8) == true else {
+                    completion(nil)
+                    return
+                }
                 switch result {
                 case .success(let hover): completion(hover)
                 case .failure(let error):
-                    if !(error is CancellationError) { self?.showNotification(error.localizedDescription) }
+                    if !(error is CancellationError) { self.showNotification(error.localizedDescription) }
                     completion(nil)
                 }
             }
@@ -2137,18 +2328,19 @@ extension AppModel {
         guard !languageNavigationState.isLoading,
               let document = activeDocument,
               let caret = editorCaret,
-              caret.url.standardizedFileURL == document.url.standardizedFileURL,
-              let workspaceURL,
-              let provider = languageProviderCatalog.provider(for: document.url) else {
+              caret.url.standardizedFileURL == document.url.standardizedFileURL else {
             showNotification("Place the caret on a language symbol first")
             return
         }
-        let operationID = beginLanguageNavigation(providerID: provider.id, kind: kind)
+        let providerID = languageProviderCatalog.provider(for: document.url)?.id ?? "builtin"
+        let operationID = beginLanguageNavigation(providerID: providerID, kind: kind)
+        let expectedURL = document.url.standardizedFileURL
+        let expectedText = document.text
         do {
             try languageToolingSessionsIfActive?.navigate(
                 method: method,
                 fileURL: document.url,
-                text: document.text,
+                text: expectedText,
                 position: LanguageServerPosition(
                     line: max(0, caret.line),
                     utf16Column: max(0, caret.utf16Column)
@@ -2157,6 +2349,11 @@ extension AppModel {
             ) { [weak self] result in
                 guard let self,
                       self.languageNavigationState.owns(operationID: operationID) else { return }
+                guard self.activeDocument?.url.standardizedFileURL == expectedURL,
+                      self.activeDocument?.text.utf8.elementsEqual(expectedText.utf8) == true else {
+                    self.languageNavigationState = .idle
+                    return
+                }
                 switch result {
                 case .failure(let error):
                     self.languageNavigationState = .idle
@@ -2166,6 +2363,7 @@ extension AppModel {
                        kind == .definitions,
                        values.count == 1,
                        values[0].url.standardizedFileURL == document.url.standardizedFileURL,
+                       let workspaceURL = self.workspaceURL,
                        self.languageToolingSessionsIfActive?.features(for: document.url).contains(.implementation) == true {
                         self.requestGenericImplementationFallback(
                             document: document,
@@ -2173,7 +2371,7 @@ extension AppModel {
                             workspaceURL: workspaceURL,
                             originalValues: values,
                             navigateToSingleResult: navigateToSingleResult,
-                            providerID: provider.id
+                            providerID: providerID
                         )
                         return
                     }
@@ -2181,7 +2379,7 @@ extension AppModel {
                         values,
                         kind: kind,
                         navigateToSingleResult: navigateToSingleResult,
-                        providerID: provider.id
+                        providerID: providerID
                     )
                 }
             }

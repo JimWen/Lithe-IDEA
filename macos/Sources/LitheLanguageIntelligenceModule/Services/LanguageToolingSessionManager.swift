@@ -49,6 +49,8 @@ package final class LanguageToolingSessionManager: ObservableObject,
     @Published package private(set) var languageServerInfos: [String: LanguageServerInfo] = [:]
     @Published package private(set) var languageServerOperationIDs: [String: UUID] = [:]
     package var onLanguageServerStateChange: ((String, LanguageServerSessionState, UUID?) -> Void)?
+    /// Optional host closure providing unsaved/open editor buffers for zero-LSP cross-file intelligence.
+    package var openBuffersProvider: (@MainActor () -> [String: String])?
     private var baseCatalog: LanguageProviderCatalog
     private var catalog: LanguageProviderCatalog { catalogSnapshot }
     private let extensionRequiredProviderIDs: Set<String>
@@ -196,6 +198,9 @@ package final class LanguageToolingSessionManager: ObservableObject,
         extensionLifecycles[support.id] = WeakLanguageServerExtensionLifecycle(
             provider.lifecycle
         )
+        if let syntaxProvider = provider as? any LanguageSyntaxExtensionProviding {
+            LanguageSyntaxProfileRegistry.shared.register(syntaxProvider.syntaxProfile)
+        }
         publishCatalog()
         return true
     }
@@ -203,6 +208,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
     package func unregisterLanguageServerExtension(languageID: String) {
         guard extensionRuntimeIDs.contains(languageID) else { return }
         stopLanguageServer(providerID: languageID)
+        LanguageSyntaxProfileRegistry.shared.unregister(languageID: languageID)
         runtimesByID[languageID] = nil
         extensionRuntimeIDs.remove(languageID)
         extensionProviderIdentities[languageID] = nil
@@ -248,6 +254,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
         for provider in languageFeatureProviders {
             if provider.supports(.completion, in: context) { result.insert(.completion) }
             if provider.supports(.hover, in: context) { result.insert(.hover) }
+            if provider.supports(.signatureHelp, in: context) { result.insert(.signatureHelp) }
             if provider.supports(.navigation(method: "textDocument/definition"), in: context) {
                 result.insert(.definition)
             }
@@ -962,13 +969,13 @@ package final class LanguageToolingSessionManager: ObservableObject,
         fileURL: URL,
         text: String,
         position: LanguageServerPosition,
-        rootURL: URL,
+        rootURL: URL?,
         completion: @escaping (Result<[LanguageServerLocation], Error>) -> Void
     ) throws {
         // A document can remain in the editor while the language server is
         // restarted. Re-sync it before navigation so the server owns the URI
         // before handling definition, implementation, or reference requests.
-        if readyLanguageServerSession(for: fileURL) != nil {
+        if let rootURL, readyLanguageServerSession(for: fileURL) != nil {
             try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
         }
         let context = featureContext(
@@ -997,7 +1004,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
         fileURL: URL,
         text: String,
         position: LanguageServerPosition,
-        rootURL: URL,
+        rootURL: URL?,
         completion: @escaping (Result<LanguageServerHover?, Error>) -> Void
     ) throws {
         let context = featureContext(
@@ -1022,7 +1029,7 @@ package final class LanguageToolingSessionManager: ObservableObject,
         fileURL: URL,
         text: String,
         position: LanguageServerPosition,
-        rootURL: URL,
+        rootURL: URL?,
         completion: @escaping (Result<[LanguageServerCompletionItem], Error>) -> Void
     ) throws {
         let context = featureContext(
@@ -1040,7 +1047,9 @@ package final class LanguageToolingSessionManager: ObservableObject,
             index: 0,
             context: context,
             items: [],
-            seenLabels: [],
+            seenCompositeKeys: [],
+            seenHigherProviderLabels: [],
+            firstRecoverableError: nil,
             completion: completion
         )
     }
@@ -1053,17 +1062,16 @@ package final class LanguageToolingSessionManager: ObservableObject,
         rootURL: URL,
         completion: @escaping (Result<LanguageServerWorkspaceEdit, Error>) -> Void
     ) throws {
-        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
-        if let session = readyLanguageServerSession(for: fileURL) {
-            try session.rename(
-                fileURL: fileURL,
-                position: position,
-                newName: newName,
-                completion: completion
-            )
-            return
+        guard let session = readyLanguageServerSession(for: fileURL) else {
+            throw unavailableLanguageServerError(for: fileURL)
         }
-        throw unavailableLanguageServerError(for: fileURL)
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
+        try session.rename(
+            fileURL: fileURL,
+            position: position,
+            newName: newName,
+            completion: completion
+        )
     }
 
     package func format(
@@ -1079,12 +1087,11 @@ package final class LanguageToolingSessionManager: ObservableObject,
         ],
         completion: @escaping (Result<[LanguageServerTextEdit], Error>) -> Void
     ) throws {
-        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
-        if let session = readyLanguageServerSession(for: fileURL) {
-            try session.format(fileURL: fileURL, completion: completion)
-            return
+        guard let session = readyLanguageServerSession(for: fileURL) else {
+            throw unavailableLanguageServerError(for: fileURL)
         }
-        throw unavailableLanguageServerError(for: fileURL)
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
+        try session.format(fileURL: fileURL, completion: completion)
     }
 
     package func codeActions(
@@ -1095,17 +1102,16 @@ package final class LanguageToolingSessionManager: ObservableObject,
         rootURL: URL,
         completion: @escaping (Result<[LanguageServerCodeAction], Error>) -> Void
     ) throws {
-        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
-        if let session = readyLanguageServerSession(for: fileURL) {
-            try session.codeActions(
-                fileURL: fileURL,
-                range: range,
-                diagnostics: diagnostics,
-                completion: completion
-            )
-            return
+        guard let session = readyLanguageServerSession(for: fileURL) else {
+            throw unavailableLanguageServerError(for: fileURL)
         }
-        throw unavailableLanguageServerError(for: fileURL)
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
+        try session.codeActions(
+            fileURL: fileURL,
+            range: range,
+            diagnostics: diagnostics,
+            completion: completion
+        )
     }
 
     package func execute(
@@ -1190,6 +1196,98 @@ package final class LanguageToolingSessionManager: ObservableObject,
             marker: marker,
             completion: completion
         )
+    }
+
+    package func inlayHints(
+        fileURL: URL,
+        text: String,
+        range: LanguageServerRange,
+        rootURL: URL,
+        completion: @escaping (Result<[LanguageServerInlayHint], Error>) -> Void
+    ) throws {
+        guard let session = readyLanguageServerSession(for: fileURL),
+              session.features.contains(.inlayHints) else {
+            completion(.success([]))
+            return
+        }
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
+        try session.inlayHints(fileURL: fileURL, range: range, completion: completion)
+    }
+
+    package func signatureHelp(
+        fileURL: URL,
+        text: String,
+        position: LanguageServerPosition,
+        rootURL: URL?,
+        completion: @escaping (Result<LanguageServerSignatureHelp?, Error>) -> Void
+    ) throws {
+        if let rootURL, let session = readyLanguageServerSession(for: fileURL),
+           session.features.contains(.signatureHelp) {
+            try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
+        }
+        let context = featureContext(
+            fileURL: fileURL,
+            text: text,
+            position: position,
+            rootURL: rootURL
+        )
+        let providers = featureProviders(for: .signatureHelp, context: context)
+        guard !providers.isEmpty else {
+            completion(.success(nil))
+            return
+        }
+        routeSignatureHelp(
+            providers: providers,
+            index: 0,
+            context: context,
+            completion: completion
+        )
+    }
+
+    package func documentHighlight(
+        fileURL: URL,
+        text: String,
+        position: LanguageServerPosition,
+        rootURL: URL,
+        completion: @escaping (Result<[LanguageServerDocumentHighlight], Error>) -> Void
+    ) throws {
+        guard let session = readyLanguageServerSession(for: fileURL),
+              session.features.contains(.documentHighlight) else {
+            completion(.success([]))
+            return
+        }
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
+        try session.documentHighlight(fileURL: fileURL, position: position, completion: completion)
+    }
+
+    package func documentSymbols(
+        fileURL: URL,
+        text: String,
+        rootURL: URL,
+        completion: @escaping (Result<[LanguageServerDocumentSymbol], Error>) -> Void
+    ) throws {
+        guard let session = readyLanguageServerSession(for: fileURL),
+              session.features.contains(.documentSymbol) else {
+            completion(.success([]))
+            return
+        }
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
+        try session.documentSymbols(fileURL: fileURL, completion: completion)
+    }
+
+    package func semanticTokens(
+        fileURL: URL,
+        text: String,
+        rootURL: URL,
+        completion: @escaping (Result<[LanguageServerSemanticToken], Error>) -> Void
+    ) throws {
+        guard let session = readyLanguageServerSession(for: fileURL),
+              session.features.contains(.semanticTokens) else {
+            completion(.success([]))
+            return
+        }
+        try synchronizeLanguageServer(for: fileURL, text: text, rootURL: rootURL)
+        try session.semanticTokens(fileURL: fileURL, completion: completion)
     }
 
     package func resolveCompletion(
@@ -1519,7 +1617,8 @@ package final class LanguageToolingSessionManager: ObservableObject,
             text: text,
             position: position,
             languageID: descriptor?.languageIdentifier(for: fileURL),
-            workspaceURL: rootURL
+            workspaceURL: rootURL,
+            openBuffers: openBuffersProvider?() ?? [:]
         )
     }
 
@@ -1542,37 +1641,84 @@ package final class LanguageToolingSessionManager: ObservableObject,
         index: Int,
         context: LanguageFeatureRequestContext,
         items: [LanguageServerCompletionItem],
-        seenLabels: Set<String>,
+        seenCompositeKeys: Set<String>,
+        seenHigherProviderLabels: Set<String>,
+        firstRecoverableError: Error?,
         completion: @escaping (Result<[LanguageServerCompletionItem], Error>) -> Void
     ) {
         guard index < providers.count else {
-            completion(.success(items))
+            if items.isEmpty, let firstRecoverableError {
+                completion(.failure(firstRecoverableError))
+            } else {
+                completion(.success(items))
+            }
             return
         }
+        let continueToNext: ([LanguageServerCompletionItem], Set<String>, Set<String>, Error?) -> Void = {
+            [self] merged, keys, higherLabels, error in
+            self.routeCompletions(
+                providers: providers,
+                index: index + 1,
+                context: context,
+                items: merged,
+                seenCompositeKeys: keys,
+                seenHigherProviderLabels: higherLabels,
+                firstRecoverableError: error,
+                completion: completion
+            )
+        }
         do {
-            try providers[index].completions(in: context) { [self] result in
+            try providers[index].completions(in: context) { result in
                 switch result {
                 case .success(let providerItems):
                     var merged = items
-                    var labels = seenLabels
-                    for item in providerItems where labels.insert(item.label).inserted {
+                    var keys = seenCompositeKeys
+                    var batchLabels: Set<String> = []
+                    for item in providerItems {
+                        if seenHigherProviderLabels.contains(item.label) {
+                            continue
+                        }
+                        let compositeKey = Self.completionCompositeKey(for: item)
+                        guard keys.insert(compositeKey).inserted else { continue }
+                        batchLabels.insert(item.label)
                         merged.append(item)
                     }
-                    routeCompletions(
-                        providers: providers,
-                        index: index + 1,
-                        context: context,
-                        items: merged,
-                        seenLabels: labels,
-                        completion: completion
+                    continueToNext(
+                        merged,
+                        keys,
+                        seenHigherProviderLabels.union(batchLabels),
+                        firstRecoverableError
                     )
                 case .failure(let error):
-                    completion(.failure(error))
+                    if error is CancellationError {
+                        completion(.failure(error))
+                        return
+                    }
+                    continueToNext(items, seenCompositeKeys, seenHigherProviderLabels, firstRecoverableError ?? error)
                 }
             }
         } catch {
-            completion(.failure(error))
+            if error is CancellationError {
+                completion(.failure(error))
+                return
+            }
+            continueToNext(items, seenCompositeKeys, seenHigherProviderLabels, firstRecoverableError ?? error)
         }
+    }
+
+    private static func completionCompositeKey(for item: LanguageServerCompletionItem) -> String {
+        let rangeKey: String
+        if let range = item.textEdit?.range {
+            rangeKey = "\(range.start.line):\(range.start.utf16Column)-\(range.end.line):\(range.end.utf16Column)"
+        } else {
+            rangeKey = ""
+        }
+        return [
+            item.label,
+            item.detail ?? "",
+            item.insertText,
+            rangeKey,
+        ].joined(separator: "\u{1F}")
     }
 
     private func routeHover(
@@ -1603,6 +1749,55 @@ package final class LanguageToolingSessionManager: ObservableObject,
             }
         } catch {
             completion(.failure(error))
+        }
+    }
+
+    private func routeSignatureHelp(
+        providers: [any LanguageFeatureProvider],
+        index: Int,
+        context: LanguageFeatureRequestContext,
+        completion: @escaping (Result<LanguageServerSignatureHelp?, Error>) -> Void
+    ) {
+        guard index < providers.count else {
+            completion(.success(nil))
+            return
+        }
+        do {
+            try providers[index].signatureHelp(in: context) { [self] result in
+                switch result {
+                case .success(let help?) where !help.signatures.isEmpty:
+                    completion(.success(help))
+                case .success:
+                    routeSignatureHelp(
+                        providers: providers,
+                        index: index + 1,
+                        context: context,
+                        completion: completion
+                    )
+                case .failure(let error):
+                    if error is CancellationError {
+                        completion(.failure(error))
+                        return
+                    }
+                    routeSignatureHelp(
+                        providers: providers,
+                        index: index + 1,
+                        context: context,
+                        completion: completion
+                    )
+                }
+            }
+        } catch {
+            if error is CancellationError {
+                completion(.failure(error))
+                return
+            }
+            routeSignatureHelp(
+                providers: providers,
+                index: index + 1,
+                context: context,
+                completion: completion
+            )
         }
     }
 

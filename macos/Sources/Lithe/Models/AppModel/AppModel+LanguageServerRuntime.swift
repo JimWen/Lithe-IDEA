@@ -73,6 +73,7 @@ extension AppModel {
         files: [URL],
         fallbackDocument: EditorDocument? = nil
     ) {
+        guard effectiveLanguageIntelligenceMode == .lsp else { return }
         guard services.projectRuntimeService.hasJavaLanguageServerRuntime else { return }
         let normalizedRoot = workspaceURL.standardizedFileURL
         guard services.javaOperations.javaWorkspacePolicy(

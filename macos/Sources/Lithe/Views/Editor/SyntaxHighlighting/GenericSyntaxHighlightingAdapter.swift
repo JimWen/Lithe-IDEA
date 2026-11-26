@@ -1,4 +1,5 @@
 import AppKit
+import LitheCoreContracts
 
 /// Single-pass lexical highlighter for source languages not handled by a
 /// dedicated structured-config adapter.
@@ -6,205 +7,12 @@ import AppKit
 /// Consuming strings and comments atomically in one left-to-right pass ensures
 /// comment markers inside string literals (for example `"return // marker"` or
 /// `"return # marker"`) stay string-colored and keywords inside comments or
-/// strings are never mis-colored. Line-ending state is cached on `NSTextStorage`
-/// so incremental edits resume in O(1) and stop scanning once multiline state
-/// converges.
+/// strings are never mis-colored. Lexical profiles are supplied declaratively
+/// by `LanguageSyntaxProfileRegistry` (built-in highlight-only profiles and
+/// activated official language plugins). Line-ending state is cached on
+/// `NSTextStorage` so incremental edits resume in O(1) and stop scanning once
+/// multiline state converges.
 enum GenericSyntaxHighlightingAdapter {
-    private enum LanguageProfile {
-        case go
-        case rust
-        case python
-        case cFamily(nestedBlockComments: Bool, supportsBacktickStrings: Bool)
-        case hashScript(escapedSingleQuote: Bool)
-        case generic
-
-        init(fileExtension: String) {
-            switch fileExtension.lowercased() {
-            case "go":
-                self = .go
-            case "rs":
-                self = .rust
-            case "py", "pyi", "pyw":
-                self = .python
-            case "swift", "kt", "kts":
-                self = .cFamily(nestedBlockComments: true, supportsBacktickStrings: false)
-            case "js", "jsx", "ts", "tsx", "mjs", "cjs":
-                self = .cFamily(nestedBlockComments: false, supportsBacktickStrings: true)
-            case "java", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "m", "mm", "cs",
-                 "scala", "groovy", "dart", "php", "css", "scss", "less", "proto":
-                self = .cFamily(nestedBlockComments: false, supportsBacktickStrings: false)
-            case "sh", "bash", "zsh", "fish", "awk", "mk", "makefile", "dockerfile":
-                self = .hashScript(escapedSingleQuote: false)
-            case "rb", "pl", "pm", "r":
-                self = .hashScript(escapedSingleQuote: true)
-            default:
-                self = .generic
-            }
-        }
-
-        var supportsSlashComments: Bool {
-            switch self {
-            case .go, .rust, .cFamily, .generic: true
-            case .python, .hashScript: false
-            }
-        }
-
-        var supportsBlockComments: Bool {
-            switch self {
-            case .go, .rust, .cFamily, .generic: true
-            case .python, .hashScript: false
-            }
-        }
-
-        var supportsNestedBlockComments: Bool {
-            switch self {
-            case .rust: true
-            case .cFamily(let nested, _): nested
-            case .go, .python, .hashScript, .generic: false
-            }
-        }
-
-        var supportsHashComments: Bool {
-            switch self {
-            case .python, .hashScript, .generic: true
-            case .go, .rust, .cFamily: false
-            }
-        }
-
-        var supportsBacktickMultilineStrings: Bool {
-            switch self {
-            case .go: true
-            case .cFamily(_, let backtick): backtick
-            case .rust, .python, .hashScript, .generic: false
-            }
-        }
-
-        var backtickAllowsEscape: Bool {
-            switch self {
-            case .cFamily(_, true): true
-            default: false
-            }
-        }
-
-        var supportsTripleQuotedStrings: Bool {
-            if case .python = self { return true }
-            return false
-        }
-
-        var supportsRustSyntax: Bool {
-            if case .rust = self { return true }
-            return false
-        }
-
-        var supportsAtAnnotations: Bool {
-            switch self {
-            case .python, .cFamily, .generic: true
-            case .go, .rust, .hashScript: false
-            }
-        }
-
-        var singleQuoteAllowsEscape: Bool {
-            switch self {
-            case .hashScript(let escaped): escaped
-            default: true
-            }
-        }
-
-        var keywords: Set<String> {
-            switch self {
-            case .go: Self.goKeywords
-            case .rust: Self.rustKeywords
-            case .python: Self.pythonKeywords
-            case .cFamily: Self.cFamilyKeywords
-            case .hashScript: Self.hashScriptKeywords
-            case .generic: Self.genericKeywords
-            }
-        }
-
-        var builtinTypes: Set<String> {
-            switch self {
-            case .go: Self.goBuiltinTypes
-            case .rust: Self.rustBuiltinTypes
-            case .python: Self.pythonBuiltinTypes
-            default: []
-            }
-        }
-
-        private static let goKeywords: Set<String> = [
-            "break", "case", "chan", "const", "continue", "default", "defer", "else",
-            "fallthrough", "for", "func", "go", "goto", "if", "import", "interface",
-            "map", "package", "range", "return", "select", "struct", "switch", "type",
-            "var", "true", "false", "iota", "nil"
-        ]
-
-        private static let goBuiltinTypes: Set<String> = [
-            "any", "bool", "byte", "comparable", "complex64", "complex128", "error",
-            "float32", "float64", "int", "int8", "int16", "int32", "int64", "rune",
-            "string", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr"
-        ]
-
-        private static let rustKeywords: Set<String> = [
-            "as", "async", "await", "break", "const", "continue", "crate", "dyn",
-            "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
-            "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
-            "self", "Self", "static", "struct", "super", "trait", "true", "type",
-            "unsafe", "use", "where", "while"
-        ]
-
-        private static let rustBuiltinTypes: Set<String> = [
-            "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize",
-            "str", "u8", "u16", "u32", "u64", "u128", "usize"
-        ]
-
-        private static let pythonKeywords: Set<String> = [
-            "False", "None", "True", "and", "as", "assert", "async", "await", "break",
-            "case", "class", "continue", "def", "del", "elif", "else", "except",
-            "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
-            "match", "nonlocal", "not", "or", "pass", "raise", "return", "try",
-            "while", "with", "yield", "self", "cls"
-        ]
-
-        private static let pythonBuiltinTypes: Set<String> = [
-            "bool", "bytes", "dict", "float", "frozenset", "int", "list", "object",
-            "set", "str", "tuple", "type"
-        ]
-
-        private static let cFamilyKeywords: Set<String> = [
-            "abstract", "as", "async", "await", "bool", "boolean", "break", "byte",
-            "case", "catch", "char", "class", "const", "continue", "debugger",
-            "default", "defer", "deinit", "delete", "do", "double", "else", "enum",
-            "export", "extends", "extension", "extern", "fallthrough", "false",
-            "fileprivate", "final", "finally", "float", "for", "from", "func",
-            "function", "get", "goto", "guard", "if", "implements", "import", "in",
-            "init", "inout", "instanceof", "int", "interface", "internal", "is",
-            "let", "long", "namespace", "new", "nil", "null", "of", "open", "operator",
-            "override", "package", "private", "protected", "protocol", "public",
-            "readonly", "repeat", "rethrows", "return", "sealed", "self", "Self",
-            "set", "short", "sizeof", "static", "struct", "subscript", "super",
-            "switch", "synchronized", "template", "this", "throw", "throws", "true",
-            "try", "typealias", "typedef", "typeof", "typename", "undefined", "using",
-            "val", "var", "virtual", "void", "volatile", "where", "while", "yield"
-        ]
-
-        private static let hashScriptKeywords: Set<String> = [
-            "begin", "break", "case", "class", "continue", "def", "do", "done",
-            "elif", "else", "elsif", "end", "ensure", "esac", "export", "false",
-            "fi", "for", "function", "if", "in", "local", "module", "nil", "next",
-            "readonly", "rescue", "return", "select", "self", "then", "true", "unless",
-            "until", "when", "while", "yield"
-        ]
-
-        private static let genericKeywords: Set<String> = [
-            "class", "struct", "enum", "protocol", "extension", "func", "fn", "let",
-            "var", "if", "else", "guard", "switch", "case", "for", "while", "return",
-            "throw", "throws", "try", "catch", "async", "await", "public", "private",
-            "internal", "protected", "static", "final", "new", "import", "package",
-            "interface", "implements", "extends", "void", "boolean", "int", "long",
-            "const", "function", "def", "in", "from", "as", "true", "false", "null",
-            "nil", "self", "this", "type", "pub", "impl", "trait", "match", "use", "mod"
-        ]
-    }
-
     private enum LexerState: Equatable {
         case normal
         case blockComment(depth: Int)
@@ -251,13 +59,17 @@ enum GenericSyntaxHighlightingAdapter {
         to storage: NSTextStorage,
         palette: SyntaxHighlightingPalette,
         range target: NSRange,
-        fileExtension: String = ""
+        fileExtension: String = "",
+        fileName: String? = nil
     ) -> Int {
         let source = storage.string as NSString
         guard source.length > 0, target.length > 0 else { return 0 }
 
-        let profile = LanguageProfile(fileExtension: fileExtension)
-        let profileTag = fileExtension.lowercased()
+        let profile = LanguageSyntaxProfileRegistry.shared.profile(
+            forFileName: fileName,
+            fileExtension: fileExtension
+        )
+        let profileTag = profile.languageID
         let scanStart = lineRange(containing: target.location, in: source).location
         let requiredEnd = NSMaxRange(lineRange(containing: max(target.location, NSMaxRange(target) - 1), in: source))
 
@@ -335,7 +147,7 @@ enum GenericSyntaxHighlightingAdapter {
     private static func scanLine(
         in source: NSString,
         lineRange: NSRange,
-        profile: LanguageProfile,
+        profile: LanguageSyntaxProfile,
         palette: SyntaxHighlightingPalette,
         storage: NSTextStorage?,
         state: inout LexerState
@@ -464,6 +276,10 @@ enum GenericSyntaxHighlightingAdapter {
                 }
             }
             if profile.supportsHashComments, ch == 35 {
+                paint(palette.comment, range: NSRange(location: cursor, length: limit - cursor), to: storage)
+                return
+            }
+            if profile.supportsDashComments, ch == 45, cursor + 1 < limit, source.character(at: cursor + 1) == 45 {
                 paint(palette.comment, range: NSRange(location: cursor, length: limit - cursor), to: storage)
                 return
             }

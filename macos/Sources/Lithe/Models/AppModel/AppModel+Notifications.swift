@@ -46,6 +46,8 @@ extension AppModel {
         switch action {
         case .installLanguageServer(let providerID):
             Task { await installLanguageServer(providerID: providerID) }
+        case .enablePrecisionLSP:
+            setSessionLanguageIntelligenceMode(.lsp)
         case .identifyRunConfiguration:
             Task { await generateRunConfigurations() }
         case .configureGoRuntime:

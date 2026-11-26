@@ -348,7 +348,21 @@ struct PluginManagementView: View {
             return PluginPresentation(
                 systemImage: "g.circle.fill",
                 tint: LitheTheme.accent,
-                summary: "Adds Go language-server integration, formatting, running, and test support."
+                summary: "Official Go plugin providing gopls LSP, Delve debugging, running, testing, syntax profile, and Go Tools."
+            )
+        }
+        if id == "dev.lithe.plugin.rust-support" {
+            return PluginPresentation(
+                systemImage: "gearshape.2.fill",
+                tint: Color.orange,
+                summary: "Official Rust plugin providing rust-analyzer LSP, LLDB debugging, running, testing, syntax profile, and Cargo Tools."
+            )
+        }
+        if id == "dev.lithe.plugin.python-support" {
+            return PluginPresentation(
+                systemImage: "chevron.left.forwardslash.chevron.right",
+                tint: LitheTheme.warning,
+                summary: "Official Python plugin providing basedpyright/pyright LSP, debugpy debugging, running, pytest, and syntax profile."
             )
         }
 

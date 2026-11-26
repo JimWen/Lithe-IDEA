@@ -104,12 +104,25 @@ public final class GoExecutionCapability: NSObject,
             } else {
                 package = "./..."
             }
-            arguments = [
-                "test",
-                package,
-                "-run",
-                "^\(Self.goRegularExpressionLiteral(name))$"
-            ]
+            let escapedName = Self.goRegularExpressionLiteral(name)
+            if name.hasPrefix("Benchmark") {
+                arguments = [
+                    "test",
+                    package,
+                    "-run",
+                    "^$",
+                    "-bench",
+                    "^\(escapedName)$",
+                    "-benchmem"
+                ]
+            } else {
+                arguments = [
+                    "test",
+                    package,
+                    "-run",
+                    "^\(escapedName)$"
+                ]
+            }
             label = name
         }
         return LanguageTestExtensionPlan(

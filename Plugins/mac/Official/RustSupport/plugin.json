@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "id": "dev.lithe.plugin.rust-support",
+  "displayName": "Rust Support",
+  "version": "0.3.1",
+  "apiVersion": 1,
+  "hostCompatibility": {
+    "minimum": "0.3.1",
+    "maximumExclusive": "0.4.0"
+  },
+  "vendor": {
+    "id": "dev.lithe",
+    "displayName": "Lithe",
+    "signatureRequirement": "sameTeamAsHost"
+  },
+  "entrypoint": {
+    "kind": "nativeBundle",
+    "bundleIdentifier": "dev.lithe.plugin.rust-support.bundle",
+    "principalClass": "LitheRustSupportPluginEntrypoint",
+    "bundlePath": "RustSupport.bundle"
+  },
+  "modules": [
+    {
+      "id": "dev.lithe.language.rust.execution",
+      "displayName": "Rust Execution",
+      "scope": "workspace",
+      "defaultState": "enabled",
+      "activationPolicy": "onDemand",
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "moduleDependencies": [
+        "dev.lithe.workspace"
+      ],
+      "capabilityDependencies": [],
+      "providedCapabilities": [
+        "dev.lithe.capability.language.rust.debug",
+        "dev.lithe.capability.language.rust.execution",
+        "dev.lithe.capability.language.rust.project-tools",
+        "dev.lithe.capability.language.rust.testing"
+      ],
+      "contributions": [
+        {
+          "id": "language.rust.cargo",
+          "kind": "toolWindow",
+          "title": "Cargo",
+          "icon": "shippingbox",
+          "placement": "rightSidebar",
+          "order": 100,
+          "actionID": "cargo.toggle",
+          "rendererID": "cargo.project",
+          "visibility": {}
+        }
+      ],
+      "required": false
+    },
+    {
+      "id": "dev.lithe.language.rust.language-server",
+      "displayName": "Rust Language Server",
+      "scope": "workspace",
+      "defaultState": "enabled",
+      "activationPolicy": "onDemand",
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "moduleDependencies": [
+        "dev.lithe.workspace"
+      ],
+      "capabilityDependencies": [],
+      "providedCapabilities": [
+        "dev.lithe.capability.language.rust.language-server"
+      ],
+      "contributions": [],
+      "required": false
+    }
+  ],
+  "languageSupports": [
+    {
+      "id": "rust",
+      "displayName": "Rust",
+      "fileExtensions": [
+        "rs"
+      ],
+      "fileNames": [],
+      "projectFileNames": [
+        "cargo.toml"
+      ],
+      "languageServerModuleID": "dev.lithe.language.rust.language-server",
+      "executionModuleID": "dev.lithe.language.rust.execution",
+      "testingModuleID": "dev.lithe.language.rust.execution",
+      "debugModuleID": "dev.lithe.language.rust.execution"
+    }
+  ]
+}

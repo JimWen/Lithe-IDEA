@@ -14,18 +14,29 @@ package protocol LanguageIntelligenceServiceGraph: AnyObject {
     var hasActiveLanguageServers: Bool { get }
 
     func activate(context: ModuleContext)
+    func ensureDiscoveryStarted(for providerID: String?)
     func prepareForSleep() async throws
     func stop() async
+}
+
+package extension LanguageIntelligenceServiceGraph {
+    func ensureDiscoveryStarted(for _: String?) {}
 }
 
 @MainActor
 public final class LanguageIntelligenceCapability: NSObject {
     package let sessions: LanguageToolingSessionManager
     package let tools: LanguageServerToolService
+    private weak var graph: (any LanguageIntelligenceServiceGraph)?
 
     fileprivate init(graph: any LanguageIntelligenceServiceGraph) {
+        self.graph = graph
         sessions = graph.sessions
         tools = graph.tools
+    }
+
+    package func ensureDiscoveryStarted(for providerID: String? = nil) {
+        graph?.ensureDiscoveryStarted(for: providerID)
     }
 }
 
