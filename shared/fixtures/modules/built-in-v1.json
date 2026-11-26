@@ -2,6 +2,32 @@
   "version": 1,
   "modules": [
     {
+      "id": "dev.lithe.ai-agent",
+      "displayName": "AI Agent",
+      "scope": "workspace",
+      "defaultState": "enabled",
+      "activationPolicy": "onDemand",
+      "sleepPolicy": {
+        "kind": "whenIdle",
+        "afterSeconds": 600
+      },
+      "dependencies": [
+        "dev.lithe.workspace"
+      ],
+      "capabilities": [
+        "dev.lithe.capability.ai-agent-workspace"
+      ],
+      "contributions": [
+        {
+          "id": "ai.agent",
+          "kind": "toolWindow",
+          "actionID": "aiAgent.toggle",
+          "rendererID": "aiAgent.panel"
+        }
+      ],
+      "required": false
+    },
+    {
       "id": "dev.lithe.ai-assistance",
       "displayName": "AI Assistance",
       "scope": "application",

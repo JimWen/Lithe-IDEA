@@ -4,9 +4,9 @@ set -euo pipefail
 ROOT_DIR="${0:A:h:h}"
 cd "$ROOT_DIR"
 
-module_ids=(workspace git search localHistory languageIntelligence execution debug terminal database aiAssistance)
-module_types=(WorkspaceFoundation Database Git Search History LanguageIntelligence Execution Debug Terminal AIAssistance)
-module_targets=(LitheWorkspaceModule LitheDatabaseModule LitheGitModule LitheSearchModule LitheLocalHistoryModule LitheLanguageIntelligenceModule LitheExecutionModule LitheDebugModule LitheTerminalModule LitheAIAssistanceModule)
+module_ids=(workspace git search localHistory languageIntelligence execution debug terminal database aiAgent aiAssistance)
+module_types=(WorkspaceFoundation Database Git Search History LanguageIntelligence Execution Debug Terminal AIAgent AIAssistance)
+module_targets=(LitheWorkspaceModule LitheDatabaseModule LitheGitModule LitheSearchModule LitheLocalHistoryModule LitheLanguageIntelligenceModule LitheExecutionModule LitheDebugModule LitheTerminalModule LitheAIAgentModule LitheAIAssistanceModule)
 
 # This is a support library shared by execution modules and native plugins,
 # not another runtime module with an ID or a composition-root registration.
@@ -45,7 +45,7 @@ for index in {1..${#module_types[@]}}; do
     fi
 done
 
-for contribution_type in Database Git Search History LanguageIntelligence Execution Debug Terminal AIAssistance; do
+for contribution_type in Database Git Search History LanguageIntelligence Execution Debug Terminal AIAgent AIAssistance; do
     if ! rg -q "${contribution_type}Module\.moduleContributions" macos/Sources/Lithe/Platform/MacOS/MacServiceContainer.swift; then
         print -u2 "Missing lazy contribution registration: ${contribution_type}Module"
         exit 1
@@ -70,7 +70,7 @@ if rg -n 'Contents/PlugIns' scripts/package-app.sh scripts/preview.sh; then
     exit 1
 fi
 
-if rg -n "final class (WorkspaceFoundation|Database|Git|Search|History|LanguageIntelligence|Execution|Debug|Terminal|AIAssistance)Module([[:space:]:{])" macos/Sources/Lithe; then
+if rg -n "final class (WorkspaceFoundation|Database|Git|Search|History|LanguageIntelligence|Execution|Debug|Terminal|AIAgent|AIAssistance)Module([[:space:]:{])" macos/Sources/Lithe; then
     print -u2 "Module lifecycle implementation leaked back into the executable target"
     exit 1
 fi
