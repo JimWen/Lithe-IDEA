@@ -212,62 +212,74 @@ fn search_with_index(
     let file_limit = request.max_file_results.unwrap_or(limit).min(limit);
     let content_limit = request.max_content_results.unwrap_or(limit).min(limit);
     let mut matches = Vec::new();
-    let mut file_matches = 0;
 
-    for id in index.all_file_ids() {
-        crate::protocol::cancellation::check()?;
-        if matches.len() >= limit || file_matches >= file_limit {
-            break;
+    if file_limit > 0 {
+        let mut ranked_files: Vec<(i32, String)> = Vec::new();
+        for id in index.all_file_ids() {
+            crate::protocol::cancellation::check()?;
+            let Some(indexed_file) = index.file(id) else {
+                continue;
+            };
+            let path = &indexed_file.path;
+            if !file_mask_allows(&masks, path) {
+                continue;
+            }
+            if matcher.matches(path) {
+                ranked_files.push((file_match_score(path, query), path.clone()));
+            }
         }
-        let Some(indexed_file) = index.file(id) else {
-            continue;
-        };
-        let path = &indexed_file.path;
-        if !file_mask_allows(&masks, path) {
-            continue;
-        }
-        if matcher.matches(path) {
+        // Rank matching files before applying `file_limit` so exact filename matches
+        // late in directory traversal order are not dropped prematurely.
+        ranked_files.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| left.1.len().cmp(&right.1.len()))
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        for (_, path) in ranked_files.into_iter().take(file_limit.min(limit)) {
             matches.push(SearchMatch {
                 kind: "file".to_string(),
                 path: path.clone(),
                 line: None,
-                preview: path.clone(),
+                preview: path,
                 symbol_name: None,
             });
-            file_matches += 1;
         }
     }
 
     let mut content_matches = 0;
-    for id in index.candidate_ids(query, request.regular_expression, request.case_sensitive) {
-        crate::protocol::cancellation::check()?;
-        if matches.len() >= limit || content_matches >= content_limit {
-            break;
-        }
-        let Some(indexed_file) = index.file(id) else {
-            continue;
-        };
-        let path = &indexed_file.path;
-        if !file_mask_allows(&masks, path) {
-            continue;
-        }
-        let file = root.join(path);
-        let Some(text) = read_searchable_text(&file) else {
-            continue;
-        };
-        for (index, line) in text.split('\n').enumerate() {
+    if content_limit > 0 && matches.len() < limit {
+        for id in index.candidate_ids(query, request.regular_expression, request.case_sensitive) {
             crate::protocol::cancellation::check()?;
-            if matcher.matches(line) {
-                matches.push(SearchMatch {
-                    kind: "content".to_string(),
-                    path: path.clone(),
-                    line: Some(index + 1),
-                    preview: line.trim().to_string(),
-                    symbol_name: None,
-                });
-                content_matches += 1;
-                if matches.len() >= limit {
-                    break;
+            if matches.len() >= limit || content_matches >= content_limit {
+                break;
+            }
+            let Some(indexed_file) = index.file(id) else {
+                continue;
+            };
+            let path = &indexed_file.path;
+            if !file_mask_allows(&masks, path) {
+                continue;
+            }
+            let file = root.join(path);
+            let Some(text) = read_searchable_text(&file) else {
+                continue;
+            };
+            for (index, line) in text.split('\n').enumerate() {
+                crate::protocol::cancellation::check()?;
+                if matcher.matches(line) {
+                    matches.push(SearchMatch {
+                        kind: "content".to_string(),
+                        path: path.clone(),
+                        line: Some(index + 1),
+                        preview: line.trim().to_string(),
+                        symbol_name: None,
+                    });
+                    content_matches += 1;
+                    if matches.len() >= limit || content_matches >= content_limit {
+                        break;
+                    }
                 }
             }
         }
@@ -276,7 +288,7 @@ fn search_with_index(
     Ok(SearchResponse { matches })
 }
 
-/// Combines file, content, and Java-symbol results for Search Everywhere.
+/// Combines file, content, and multi-language symbol results for Search Everywhere.
 pub fn search_everywhere(request: SearchRequest) -> Result<SearchResponse, CoreError> {
     let root = existing_root(&request.root)?;
     let query = request.query.trim().to_string();
@@ -300,32 +312,63 @@ pub fn search_everywhere(request: SearchRequest) -> Result<SearchResponse, CoreE
         request.whole_words,
         request.regular_expression,
     )?;
-    let symbol_limit = request.max_symbol_results.unwrap_or(50).min(50);
-    let mut types = Vec::new();
-    let mut symbols = Vec::new();
-    for id in index.all_file_ids() {
-        crate::protocol::cancellation::check()?;
-        if types.len() >= symbol_limit && symbols.len() >= symbol_limit {
-            break;
-        }
-        let Some(indexed_file) = index.file(id) else {
-            continue;
-        };
-        for symbol in index.symbols(id) {
+    let masks = parse_file_mask(&request.file_mask);
+    let symbol_limit = request.max_symbol_results.unwrap_or(50).min(200);
+    let mut ranked_types: Vec<(i32, SearchMatch)> = Vec::new();
+    let mut ranked_symbols: Vec<(i32, SearchMatch)> = Vec::new();
+    if symbol_limit > 0 {
+        for id in index.all_file_ids() {
             crate::protocol::cancellation::check()?;
-            if !matcher.matches(&symbol.name) {
+            let Some(indexed_file) = index.file(id) else {
+                continue;
+            };
+            if !file_mask_allows(&masks, &indexed_file.path) {
                 continue;
             }
-            let result = search_index::make_symbol_match(symbol, indexed_file.path.clone());
-            if result.kind == "type" {
-                if types.len() < symbol_limit {
-                    types.push(result);
+            for symbol in index.symbols(id) {
+                crate::protocol::cancellation::check()?;
+                if !matcher.matches(&symbol.name) {
+                    continue;
                 }
-            } else if symbols.len() < symbol_limit {
-                symbols.push(result);
+                let score = symbol_match_score(&symbol.name, &query);
+                let result = search_index::make_symbol_match(symbol, indexed_file.path.clone());
+                if result.kind == "type" {
+                    ranked_types.push((score, result));
+                } else {
+                    ranked_symbols.push((score, result));
+                }
             }
         }
     }
+
+    let sort_symbols = |items: &mut Vec<(i32, SearchMatch)>| {
+        items.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| {
+                    left.1
+                        .symbol_name
+                        .as_deref()
+                        .unwrap_or_default()
+                        .len()
+                        .cmp(&right.1.symbol_name.as_deref().unwrap_or_default().len())
+                })
+                .then_with(|| left.1.path.cmp(&right.1.path))
+                .then_with(|| left.1.line.cmp(&right.1.line))
+        });
+    };
+    sort_symbols(&mut ranked_types);
+    sort_symbols(&mut ranked_symbols);
+
+    let types = ranked_types
+        .into_iter()
+        .take(symbol_limit)
+        .map(|(_, item)| item);
+    let symbols = ranked_symbols
+        .into_iter()
+        .take(symbol_limit)
+        .map(|(_, item)| item);
 
     let (file_matches, other_matches): (Vec<_>, Vec<_>) = response
         .matches
@@ -339,6 +382,48 @@ pub fn search_everywhere(request: SearchRequest) -> Result<SearchResponse, CoreE
     let total_limit = request.max_results.max(1).min(10_000);
     matches.truncate(total_limit);
     Ok(SearchResponse { matches })
+}
+
+fn file_match_score(path: &str, query: &str) -> i32 {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    let file_lower = file_name.to_lowercase();
+    let path_lower = path.to_lowercase();
+    let query_lower = query.to_lowercase();
+    let depth_penalty = path.bytes().filter(|byte| *byte == b'/').count() as i32;
+    let base = if file_name == query || path == query {
+        1_000
+    } else if file_lower == query_lower || path_lower == query_lower {
+        950
+    } else if file_lower.starts_with(&query_lower) {
+        850
+    } else if path_lower.ends_with(&format!("/{query_lower}")) {
+        800
+    } else if file_lower.contains(&query_lower) {
+        700
+    } else if path_lower.contains(&query_lower) {
+        500
+    } else {
+        300
+    };
+    base - depth_penalty * 2
+}
+
+fn symbol_match_score(name: &str, query: &str) -> i32 {
+    let name_lower = name.to_lowercase();
+    let query_lower = query.to_lowercase();
+    if name == query {
+        1_000
+    } else if name_lower == query_lower {
+        950
+    } else if name.starts_with(query) {
+        850
+    } else if name_lower.starts_with(&query_lower) {
+        800
+    } else if name_lower.contains(&query_lower) {
+        600
+    } else {
+        300
+    }
 }
 
 /// Computes per-file replacements without writing any workspace content.
@@ -1012,86 +1097,6 @@ impl Matcher {
     }
 }
 
-pub(crate) struct JavaSymbol {
-    pub(crate) name: String,
-    pub(crate) kind: String,
-    pub(crate) line: usize,
-    pub(crate) signature: String,
-}
-
-pub(crate) fn java_symbols(path: &str, source: &str) -> Vec<JavaSymbol> {
-    if !path.to_lowercase().ends_with(".java") {
-        return Vec::new();
-    }
-    let type_pattern = Regex::new(
-        r"(?m)^[ \t]*(?:(?:public|protected|private|abstract|final|static|sealed|non-sealed)\s+)*(class|interface|enum|record)\s+([A-Za-z_$][A-Za-z0-9_$]*)",
-    );
-    let method_pattern = Regex::new(
-        r"(?m)^[ \t]*(?:(?:public|protected|private|static|final|abstract|synchronized|native|default|strictfp)\s+)*(?:<[^>\n]+>\s+)?(?:[A-Za-z_$][A-Za-z0-9_$<>,.?\[\]]*\s+)+([A-Za-z_$][A-Za-z0-9_$]*)\s*\([^;\n{}]*\)",
-    );
-    let mut symbols = Vec::new();
-    if let Ok(expression) = type_pattern {
-        for captures in expression.captures_iter(source) {
-            let Some(name) = captures.get(2) else {
-                continue;
-            };
-            let start = captures
-                .get(0)
-                .map(|value| value.start())
-                .unwrap_or(name.start());
-            symbols.push(JavaSymbol {
-                name: name.as_str().to_string(),
-                kind: "type".to_string(),
-                line: line_number(source, start),
-                signature: line_signature(source, start),
-            });
-        }
-    }
-    if let Ok(expression) = method_pattern {
-        for captures in expression.captures_iter(source) {
-            let Some(name) = captures.get(1) else {
-                continue;
-            };
-            let start = captures
-                .get(0)
-                .map(|value| value.start())
-                .unwrap_or(name.start());
-            symbols.push(JavaSymbol {
-                name: name.as_str().to_string(),
-                kind: "symbol".to_string(),
-                line: line_number(source, start),
-                signature: line_signature(source, start),
-            });
-        }
-    }
-    symbols.sort_by(|left, right| {
-        left.line
-            .cmp(&right.line)
-            .then_with(|| left.name.cmp(&right.name))
-    });
-    symbols
-}
-
-fn line_number(source: &str, byte_offset: usize) -> usize {
-    source[..byte_offset.min(source.len())]
-        .bytes()
-        .filter(|byte| *byte == b'\n')
-        .count()
-        + 1
-}
-
-fn line_signature(source: &str, byte_offset: usize) -> String {
-    let start = source[..byte_offset.min(source.len())]
-        .rfind('\n')
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    let end = source[byte_offset.min(source.len())..]
-        .find('\n')
-        .map(|index| byte_offset.min(source.len()) + index)
-        .unwrap_or(source.len());
-    source[start..end].trim().to_string()
-}
-
 pub(super) fn safe_relative_path_string(value: &str) -> Result<String, CoreError> {
     let path = Path::new(value);
     if path.is_absolute() || invalid_relative_path(value) {
@@ -1103,15 +1108,43 @@ pub(super) fn safe_relative_path_string(value: &str) -> Result<String, CoreError
     Ok(value.replace('\\', "/").trim_matches('/').to_string())
 }
 
-pub(crate) fn read_searchable_text(path: &Path) -> Option<String> {
+/// Classification of a workspace file read during search indexing.
+pub(crate) enum FileContentOutcome {
+    /// Valid plain UTF-8 text within the index size limit.
+    Text(String),
+    /// Regular file within the size limit containing invalid UTF-8 or binary bytes.
+    Binary,
+    /// Unreadable, oversize, symlink, or special file.
+    UnreadableOrOversize,
+}
+
+pub(crate) fn read_indexed_file_content(path: &Path) -> FileContentOutcome {
     // Search must never follow a link or open a special file. In particular,
     // a FIFO can block the search worker indefinitely when treated like text.
-    let metadata = fs::symlink_metadata(path).ok()?;
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return FileContentOutcome::UnreadableOrOversize;
+    };
     if !metadata.is_file() || metadata.len() > MAX_FILE_SIZE {
-        return None;
+        return FileContentOutcome::UnreadableOrOversize;
     }
-    let text = String::from_utf8(read_regular_file(path, MAX_FILE_SIZE as usize).ok()?).ok()?;
-    is_plain_text(&text).then_some(text)
+    let Ok(bytes) = read_regular_file(path, MAX_FILE_SIZE as usize) else {
+        return FileContentOutcome::UnreadableOrOversize;
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
+        return FileContentOutcome::Binary;
+    };
+    if is_plain_text(&text) {
+        FileContentOutcome::Text(text)
+    } else {
+        FileContentOutcome::Binary
+    }
+}
+
+pub(crate) fn read_searchable_text(path: &Path) -> Option<String> {
+    match read_indexed_file_content(path) {
+        FileContentOutcome::Text(text) => Some(text),
+        FileContentOutcome::Binary | FileContentOutcome::UnreadableOrOversize => None,
+    }
 }
 
 /// Reads at most the given byte budget from a verified regular file. The native

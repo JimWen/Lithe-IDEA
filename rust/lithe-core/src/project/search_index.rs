@@ -1,12 +1,15 @@
 //! Incremental workspace search indexing with exact final-content matching.
 
-use crate::project::files::{java_symbols, read_searchable_text, relative_path, VisibilityRules};
+use crate::project::files::{
+    read_indexed_file_content, relative_path, FileContentOutcome, VisibilityRules,
+};
+use crate::project::symbols::extract_symbols;
 use crate::protocol::{CoreError, ErrorCode, SearchMatch};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// A workspace-local search index shared by file search, Search Everywhere and
 /// Replace in Files. The postings are file-level on purpose: the final matcher
@@ -19,17 +22,32 @@ pub(crate) struct WorkspaceSearchIndex {
     postings: HashMap<u32, Vec<u32>>,
 }
 
+/// Content indexing outcome distinguishing binary assets from short or unreadable files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContentIndexState {
+    /// Plain UTF-8 text with at least one indexed trigram.
+    Indexed,
+    /// Plain UTF-8 text shorter than three lowercase UTF-8 bytes; must still be inspected directly.
+    ShortText,
+    /// Regular file within the size budget that is non-UTF-8 or contains binary bytes.
+    Binary,
+    /// Unreadable, oversize, or non-regular file that scoped previews must report explicitly.
+    UnreadableOrOversize,
+}
+
 /// Searchable file contents and symbols stored under a stable numeric ID.
 pub(crate) struct IndexedFile {
     pub(crate) path: String,
     trigrams: Vec<u32>,
-    /// Lowercase postings cannot represent all Unicode simple case-fold matches.
-    has_non_ascii_text: bool,
+    content_state: ContentIndexState,
+    /// True only when the text contains a non-ASCII scalar that Unicode simple-case-folds
+    /// to ASCII (`U+017F` long s -> `s`, `U+212A` Kelvin -> `k`).
+    has_ascii_casefold_non_ascii: bool,
     pub(crate) symbols: Vec<IndexedSymbol>,
 }
 
 #[derive(Clone)]
-/// Normalized Java symbol retained for Search Everywhere results.
+/// Normalized workspace symbol retained for Search Everywhere results.
 pub(crate) struct IndexedSymbol {
     pub(crate) name: String,
     pub(crate) kind: String,
@@ -64,11 +82,12 @@ struct IndexKey {
 }
 
 type SharedIndex = Arc<RwLock<WorkspaceSearchIndex>>;
+type IndexSlot = Arc<Mutex<Option<SharedIndex>>>;
 
-static INDEX_CACHE: OnceLock<std::sync::Mutex<HashMap<IndexKey, SharedIndex>>> = OnceLock::new();
+static INDEX_CACHE: OnceLock<Mutex<HashMap<IndexKey, IndexSlot>>> = OnceLock::new();
 
-fn cache() -> &'static std::sync::Mutex<HashMap<IndexKey, SharedIndex>> {
-    INDEX_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+fn cache() -> &'static Mutex<HashMap<IndexKey, IndexSlot>> {
+    INDEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn key(root: &Path, rules: &VisibilityRules) -> IndexKey {
@@ -80,17 +99,27 @@ fn key(root: &Path, rules: &VisibilityRules) -> IndexKey {
 }
 
 pub(crate) fn get_or_build(root: &Path, rules: &VisibilityRules) -> Result<SharedIndex, CoreError> {
-    // Hold the cache lock during the first build. This prevents a rapid sequence
-    // of keystrokes from constructing several copies of a large index at once.
-    let mut indexes = cache()
-        .lock()
-        .map_err(|_| CoreError::new(ErrorCode::Unknown, "Search index lock was poisoned"))?;
+    // Deduplicate concurrent builds per workspace key without holding the global
+    // cache lock across directory traversal and file reads of unrelated workspaces.
     let cache_key = key(root, rules);
-    if let Some(index) = indexes.get(&cache_key) {
+    let slot = {
+        let mut indexes = cache()
+            .lock()
+            .map_err(|_| CoreError::new(ErrorCode::Unknown, "Search index lock was poisoned"))?;
+        Arc::clone(
+            indexes
+                .entry(cache_key)
+                .or_insert_with(|| Arc::new(Mutex::new(None))),
+        )
+    };
+    let mut entry = slot
+        .lock()
+        .map_err(|_| CoreError::new(ErrorCode::Unknown, "Search index slot lock was poisoned"))?;
+    if let Some(index) = entry.as_ref() {
         return Ok(Arc::clone(index));
     }
     let index = Arc::new(RwLock::new(WorkspaceSearchIndex::build(root, rules)?));
-    indexes.insert(cache_key, Arc::clone(&index));
+    *entry = Some(Arc::clone(&index));
     Ok(index)
 }
 
@@ -102,17 +131,17 @@ pub(crate) fn invalidate_root(root: &Path) {
 }
 
 pub(crate) fn update_cached_file(root: &Path, path: &Path) {
-    let entries = {
+    let slots = {
         let Ok(indexes) = cache().lock() else {
             return;
         };
         indexes
             .iter()
             .filter(|(key, _)| key.root == root)
-            .map(|(key, index)| (key.clone(), Arc::clone(index)))
+            .map(|(key, slot)| (key.clone(), Arc::clone(slot)))
             .collect::<Vec<_>>()
     };
-    if entries.is_empty() {
+    if slots.is_empty() {
         return;
     }
     let Some(absolute) = normalized_update_path(root, &path.to_string_lossy()) else {
@@ -120,14 +149,18 @@ pub(crate) fn update_cached_file(root: &Path, path: &Path) {
     };
     let relative = relative_path(&absolute, root);
     let metadata = fs::symlink_metadata(&absolute).ok();
-    for (cache_key, index) in entries {
+    for (cache_key, slot) in slots {
+        let index = slot.lock().ok().and_then(|guard| guard.clone());
+        let Some(index) = index else {
+            continue;
+        };
         let rules = VisibilityRules {
             hidden_directories: cache_key.hidden_directories,
             hidden_file_patterns: cache_key.hidden_file_patterns,
         };
-        if let Ok(mut index) = index.write() {
-            index.update_file(&absolute, &relative, metadata.as_ref(), &rules);
-        }
+        if let Ok(mut guard) = index.write() {
+            guard.update_file(&absolute, &relative, metadata.as_ref(), &rules);
+        };
     }
 }
 
@@ -140,13 +173,16 @@ pub(crate) fn update_paths(
     paths: &[String],
 ) -> UpdateOutcome {
     let cache_key = key(root, rules);
-    let index = {
+    let slot = {
         let Ok(indexes) = cache().lock() else {
             return UpdateOutcome::NotIndexed;
         };
         indexes.get(&cache_key).cloned()
     };
-    let Some(index) = index else {
+    let Some(slot) = slot else {
+        return UpdateOutcome::NotIndexed;
+    };
+    let Some(index) = slot.lock().ok().and_then(|guard| guard.clone()) else {
         return UpdateOutcome::NotIndexed;
     };
     let Ok(mut index) = index.write() else {
@@ -192,7 +228,8 @@ impl WorkspaceSearchIndex {
         if let Some(existing) = self.path_to_id.get(&relative).copied() {
             self.remove_id(existing);
         }
-        let (trigrams, symbols, has_non_ascii_text) = read_search_data(path, &relative);
+        let (trigrams, content_state, symbols, has_ascii_casefold_non_ascii) =
+            read_search_data(path, &relative);
         let id = self
             .free_ids
             .pop()
@@ -206,7 +243,8 @@ impl WorkspaceSearchIndex {
         let file = Some(IndexedFile {
             path: relative.clone(),
             trigrams,
-            has_non_ascii_text,
+            content_state,
+            has_ascii_casefold_non_ascii,
             symbols,
         });
         let id_index = id as usize;
@@ -281,13 +319,19 @@ impl WorkspaceSearchIndex {
         self.path_to_id.get(path).copied()
     }
 
-    /// Candidate pruning cannot prove a negative when indexing could not read
-    /// searchable bytes. Scoped previews must inspect these paths themselves
-    /// so decoding, size and permission failures remain explicit.
+    /// Candidate pruning cannot prove a negative for short plain-text files
+    /// (`< 3` bytes) or files that could not be read during indexing. Binary
+    /// files are excluded here so project/directory replacement previews are
+    /// not permanently blocked by non-text assets such as images or fonts.
     pub(crate) fn unindexed_content_ids(&self) -> impl Iterator<Item = u32> + '_ {
         self.files.iter().enumerate().filter_map(|(id, file)| {
             file.as_ref()
-                .filter(|file| file.trigrams.is_empty())
+                .filter(|file| {
+                    matches!(
+                        file.content_state,
+                        ContentIndexState::ShortText | ContentIndexState::UnreadableOrOversize
+                    )
+                })
                 .map(|_| id as u32)
         })
     }
@@ -307,12 +351,12 @@ impl WorkspaceSearchIndex {
         }
         let mut candidates = self.posting_candidates(&trigrams);
         if !case_sensitive {
-            // ASCII queries can match non-ASCII source under simple folding
-            // (for example, sxs matches ſxſ). Include those files even when an
-            // ASCII posting is absent; the final matcher rejects false hits.
+            // Only `U+017F` (`ſ` -> `s`) and `U+212A` (`K` -> `k`) simple-case-fold
+            // from non-ASCII to ASCII in Unicode. Restricting the extra candidate set
+            // to those files keeps trigram pruning active for all other UTF-8 sources.
             candidates.extend(self.files.iter().enumerate().filter_map(|(id, file)| {
                 file.as_ref()
-                    .filter(|file| file.has_non_ascii_text)
+                    .filter(|file| file.has_ascii_casefold_non_ascii)
                     .map(|_| id as u32)
             }));
         }
@@ -444,12 +488,31 @@ fn collect_files(
     Ok(())
 }
 
-fn read_search_data(path: &Path, relative: &str) -> (Vec<u32>, Vec<IndexedSymbol>, bool) {
-    let Some(text) = read_searchable_text(path) else {
-        return (Vec::new(), Vec::new(), false);
+fn read_search_data(
+    path: &Path,
+    relative: &str,
+) -> (Vec<u32>, ContentIndexState, Vec<IndexedSymbol>, bool) {
+    let text = match read_indexed_file_content(path) {
+        FileContentOutcome::Text(text) => text,
+        FileContentOutcome::Binary => {
+            return (Vec::new(), ContentIndexState::Binary, Vec::new(), false);
+        }
+        FileContentOutcome::UnreadableOrOversize => {
+            return (
+                Vec::new(),
+                ContentIndexState::UnreadableOrOversize,
+                Vec::new(),
+                false,
+            );
+        }
     };
     let trigrams = unique_trigrams(&text);
-    let symbols = java_symbols(relative, &text)
+    let content_state = if trigrams.is_empty() {
+        ContentIndexState::ShortText
+    } else {
+        ContentIndexState::Indexed
+    };
+    let symbols = extract_symbols(relative, &text)
         .into_iter()
         .map(|symbol| IndexedSymbol {
             name: symbol.name,
@@ -458,7 +521,15 @@ fn read_search_data(path: &Path, relative: &str) -> (Vec<u32>, Vec<IndexedSymbol
             signature: symbol.signature,
         })
         .collect();
-    (trigrams, symbols, !text.is_ascii())
+    let has_ascii_casefold_non_ascii = text
+        .chars()
+        .any(|character| matches!(character, '\u{017F}' | '\u{212A}'));
+    (
+        trigrams,
+        content_state,
+        symbols,
+        has_ascii_casefold_non_ascii,
+    )
 }
 
 fn unique_trigrams(value: &str) -> Vec<u32> {

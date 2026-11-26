@@ -16,7 +16,7 @@ enum SearchRelevance {
         case exact = 400
     }
 
-    static func score(_ result: FileSearchResult, query: String) -> Int {
+    static func score(_ result: FileSearchResult, query: String, workspaceRoot: URL? = nil) -> Int {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return 0 }
 
@@ -27,7 +27,7 @@ enum SearchRelevance {
 
         guard nameScore > 0 || pathScore > 0 else { return 0 }
 
-        return max(nameScore, pathScore) + kindBonus(result.kind) - depthPenalty(result.url)
+        return max(nameScore, pathScore) + kindBonus(result.kind) - depthPenalty(result.url, workspaceRoot: workspaceRoot)
     }
 
     private static func form(matching text: String, query: String) -> MatchForm {
@@ -57,20 +57,32 @@ enum SearchRelevance {
         return .none
     }
 
-    /// 驼峰缩写：`DH` / `dh` 命中 `DeviceHandler`。
+    /// 驼峰缩写：`DH` / `dh` 命中 `DeviceHandler`，`UL` 命中 `URLLoader`。单遍线性扫描避免 O(L²) 索引。
     private static func matchesInitials(of text: String, query: String) -> Bool {
-        guard query.count >= 2 else { return false }
-        let initials = text.enumerated()
-            .filter { index, character in
-                guard character.isUppercase || character.isNumber else { return false }
-                guard index > 0 else { return true }
-                // 连续大写（如 `URLLoader` 的 `RL`）不算新单词起点。
-                let previous = text[text.index(text.startIndex, offsetBy: index - 1)]
-                return !previous.isUppercase
+        let target = Array(query.lowercased())
+        guard target.count >= 2 else { return false }
+        var matched = 0
+        var previous: Character?
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            let nextIndex = text.index(after: index)
+            let next: Character? = nextIndex < text.endIndex ? text[nextIndex] : nil
+            defer {
+                previous = character
+                index = nextIndex
             }
-            .map { Character(String($0.element).lowercased()) }
-        guard initials.count >= query.count else { return false }
-        return initials.starts(with: query.lowercased().map { $0 })
+            guard character.isUppercase || character.isNumber else { continue }
+            // 连续大写（如 `URLLoader`）仅在首字母或后接小写字母时作为新单词起点。
+            if let previous, previous.isUppercase, !(next?.isLowercase ?? false) {
+                continue
+            }
+            let lowered = character.lowercased()
+            guard lowered.count == 1, lowered.first == target[matched] else { return false }
+            matched += 1
+            if matched == target.count { return true }
+        }
+        return false
     }
 
     /// 同形态下让"定义"优先于"引用"：类比裸符号更可能是用户要找的目标，
@@ -84,8 +96,17 @@ enum SearchRelevance {
         }
     }
 
-    /// 浅层文件通常更相关。惩罚设上限，避免深层的精确匹配被浅层的子串匹配压过去。
-    private static func depthPenalty(_ url: URL) -> Int {
-        min(url.pathComponents.count, 20)
+    /// 浅层文件通常更相关。相对于工作区根计算深度，避免绝对路径前缀把深度惩罚顶满。
+    private static func depthPenalty(_ url: URL, workspaceRoot: URL?) -> Int {
+        if let workspaceRoot {
+            let rootPath = workspaceRoot.standardizedFileURL.path
+            let filePath = url.standardizedFileURL.path
+            let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+            if filePath.hasPrefix(prefix) {
+                let relative = filePath.dropFirst(prefix.count)
+                return min(relative.split(separator: "/").count, 20)
+            }
+        }
+        return min(url.pathComponents.count, 20)
     }
 }

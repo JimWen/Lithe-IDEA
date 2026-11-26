@@ -46,7 +46,8 @@ struct RustWorkspaceOperations: WorkspaceOperations, Sendable {
         at rootURL: URL,
         query: String,
         options: ProjectSearchOptions,
-        visibilityRules: FileVisibilityRules
+        visibilityRules: FileVisibilityRules,
+        includeContent: Bool = true
     ) -> SearchEverywhereResults? {
         core.searchEverywhere(
             at: rootURL,
@@ -56,12 +57,27 @@ struct RustWorkspaceOperations: WorkspaceOperations, Sendable {
             regularExpression: options.regularExpression,
             maxResults: SearchEverywhereResults.matchLimit,
             maxFileResults: 50,
-            maxContentResults: 50,
+            maxContentResults: includeContent ? 50 : 0,
             maxSymbolResults: 50,
             fileMask: options.fileMask,
             hiddenDirectoryNames: visibilityRules.hiddenDirectoryNames,
             hiddenFilePatterns: visibilityRules.hiddenFilePatterns
         )?.makeEverywhereResults(at: rootURL)
+    }
+
+    func searchEverywhere(
+        at rootURL: URL,
+        query: String,
+        options: ProjectSearchOptions,
+        visibilityRules: FileVisibilityRules
+    ) -> SearchEverywhereResults? {
+        searchEverywhere(
+            at: rootURL,
+            query: query,
+            options: options,
+            visibilityRules: visibilityRules,
+            includeContent: true
+        )
     }
 
     func previewReplacement(
@@ -168,7 +184,17 @@ extension RustWorkspaceOperations: SearchOperations {
         options: ProjectSearchOptions,
         visibilityRules: SearchVisibilityRules
     ) -> SearchEverywhereResults? {
-        searchEverywhere(at: rootURL, query: query, options: options, visibilityRules: FileVisibilityRules(searchRules: visibilityRules))
+        searchEverywhere(at: rootURL, query: query, options: options, visibilityRules: FileVisibilityRules(searchRules: visibilityRules), includeContent: true)
+    }
+
+    func searchEverywhere(
+        at rootURL: URL,
+        query: String,
+        options: ProjectSearchOptions,
+        visibilityRules: SearchVisibilityRules,
+        includeContent: Bool
+    ) -> SearchEverywhereResults? {
+        searchEverywhere(at: rootURL, query: query, options: options, visibilityRules: FileVisibilityRules(searchRules: visibilityRules), includeContent: includeContent)
     }
 
     func previewReplacement(

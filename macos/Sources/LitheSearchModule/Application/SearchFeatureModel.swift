@@ -226,6 +226,7 @@ public final class SearchFeatureModel: ObservableObject {
         query: String,
         options: ProjectSearchOptions,
         visibilityRules: SearchVisibilityRules,
+        includeContent: Bool = true,
         isCurrent: @escaping @MainActor () -> Bool
     ) async {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -242,7 +243,8 @@ public final class SearchFeatureModel: ObservableObject {
                 at: workspaceURL,
                 query: query,
                 options: options,
-                visibilityRules: visibilityRules
+                visibilityRules: visibilityRules,
+                includeContent: includeContent
             ) ?? SearchEverywhereResults()
         }
 

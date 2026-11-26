@@ -617,3 +617,201 @@ fn scoped_preview_follows_shared_contract_fixture() {
         }
     }
 }
+
+#[test]
+fn search_everywhere_indexes_go_rust_and_python_symbols_and_skips_comments() {
+    let files = SearchFixture::new("polyglot-symbols");
+    fs::create_dir_all(files.root.join("pkg")).unwrap();
+    fs::write(
+        files.root.join("pkg/server.go"),
+        "package pkg\n\n// type CommentedOut struct{}\ntype (\n    EngineConfig struct{}\n    Router interface{}\n)\n\ntype SessionStore struct{}\n\nfunc (s *SessionStore) StartServer() {}\nfunc BootHelper() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        files.root.join("pkg/engine.rs"),
+        "/* pub struct IgnoredStruct; */\npub(crate) struct QueryPlanner;\npub trait PlanNode {}\npub(crate) async fn execute_query() {}\nmacro_rules! register_op { () => {}; }\n",
+    )
+    .unwrap();
+    fs::write(
+        files.root.join("pkg/compiler.py"),
+        "\"\"\"\nclass DocstringOnly:\n    def fake(): pass\n\"\"\"\n# class CommentClass:\nclass SQLCompiler:\n    async def compile_query(self):\n        return 1\n",
+    )
+    .unwrap();
+
+    let query_matches = |q: &str| -> Vec<(String, String, String)> {
+        let result = files.command(
+            "workspace.searchEverywhere",
+            json!({
+                "query": q,
+                "maxContentResults": 0,
+                "maxFileResults": 20,
+                "maxSymbolResults": 20
+            }),
+        );
+        result["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["kind"] == "type" || m["kind"] == "symbol")
+            .map(|m| {
+                (
+                    m["kind"].as_str().unwrap().to_string(),
+                    m["symbolName"].as_str().unwrap().to_string(),
+                    m["path"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+
+    assert!(query_matches("SQLCompiler").contains(&(
+        "type".into(),
+        "SQLCompiler".into(),
+        "pkg/compiler.py".into()
+    )));
+    assert!(query_matches("compile_query").contains(&(
+        "symbol".into(),
+        "compile_query".into(),
+        "pkg/compiler.py".into()
+    )));
+    assert!(query_matches("DocstringOnly").is_empty());
+    assert!(query_matches("CommentClass").is_empty());
+
+    assert!(query_matches("SessionStore").contains(&(
+        "type".into(),
+        "SessionStore".into(),
+        "pkg/server.go".into()
+    )));
+    assert!(query_matches("EngineConfig").contains(&(
+        "type".into(),
+        "EngineConfig".into(),
+        "pkg/server.go".into()
+    )));
+    assert!(query_matches("StartServer").contains(&(
+        "symbol".into(),
+        "StartServer".into(),
+        "pkg/server.go".into()
+    )));
+    assert!(query_matches("CommentedOut").is_empty());
+
+    assert!(query_matches("QueryPlanner").contains(&(
+        "type".into(),
+        "QueryPlanner".into(),
+        "pkg/engine.rs".into()
+    )));
+    assert!(query_matches("execute_query").contains(&(
+        "symbol".into(),
+        "execute_query".into(),
+        "pkg/engine.rs".into()
+    )));
+    assert!(query_matches("register_op").contains(&(
+        "symbol".into(),
+        "register_op".into(),
+        "pkg/engine.rs".into()
+    )));
+    assert!(query_matches("IgnoredStruct").is_empty());
+}
+
+#[test]
+fn scoped_project_replacement_skips_binary_assets_and_respects_content_limit() {
+    let files = SearchFixture::new("binary-asset-replace");
+    fs::write(
+        files.root.join("app.go"),
+        "needle\nneedle\nneedle\nneedle\n",
+    )
+    .unwrap();
+    // Binary PNG header + invalid UTF-8 bytes must not mark a Project replace preview incomplete.
+    fs::write(
+        files.root.join("logo.png"),
+        [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0xFF, 0xFE,
+        ],
+    )
+    .unwrap();
+    // Non-ASCII UTF-8 comment without long-s/Kelvin should stay indexed without blocking.
+    fs::write(files.root.join("notes.md"), "© 2026 中文注释 — unrelated\n").unwrap();
+
+    let preview = files.command(
+        "workspace.replacePreview",
+        json!({
+            "query": "needle",
+            "replacement": "fixed",
+            "scope": {"kind": "project"}
+        }),
+    );
+    assert_eq!(preview["status"], "complete", "{preview}");
+    assert!(preview["issues"].is_null(), "{preview}");
+    assert_eq!(preview["files"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["files"][0]["path"], "app.go");
+
+    let limited = files.command(
+        "workspace.search",
+        json!({
+            "query": "needle",
+            "maxResults": 100,
+            "maxFileResults": 0,
+            "maxContentResults": 2
+        }),
+    );
+    let content_count = limited["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["kind"] == "content")
+        .count();
+    assert_eq!(content_count, 2, "{limited}");
+}
+
+#[test]
+fn search_ranks_exact_file_and_symbol_matches_before_truncating() {
+    let files = SearchFixture::new("ranked-truncation");
+    fs::create_dir_all(files.root.join("a")).unwrap();
+    fs::create_dir_all(files.root.join("z")).unwrap();
+    for index in 0..60 {
+        let name = format!("a/aa_{index:02}_compiler_helper.py");
+        fs::write(
+            files.root.join(name),
+            format!("class AA_{index:02}_SQLCompilerExtra:\n    pass\n"),
+        )
+        .unwrap();
+    }
+    fs::write(
+        files.root.join("z/compiler.py"),
+        "class SQLCompiler:\n    pass\n",
+    )
+    .unwrap();
+
+    let file_result = files.command(
+        "workspace.searchEverywhere",
+        json!({
+            "query": "compiler.py",
+            "maxFileResults": 5,
+            "maxContentResults": 0,
+            "maxSymbolResults": 5
+        }),
+    );
+    let first_file = file_result["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["kind"] == "file")
+        .expect("exact file match should be ranked ahead of truncation");
+    assert_eq!(first_file["path"], "z/compiler.py");
+
+    let symbol_result = files.command(
+        "workspace.searchEverywhere",
+        json!({
+            "query": "SQLCompiler",
+            "maxFileResults": 5,
+            "maxContentResults": 0,
+            "maxSymbolResults": 5
+        }),
+    );
+    let first_type = symbol_result["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["kind"] == "type")
+        .expect("exact symbol match should be ranked ahead of truncation");
+    assert_eq!(first_type["symbolName"], "SQLCompiler");
+    assert_eq!(first_type["path"], "z/compiler.py");
+}

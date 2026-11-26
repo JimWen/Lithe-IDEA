@@ -32,6 +32,14 @@ public protocol SearchOperations: Sendable {
         visibilityRules: SearchVisibilityRules
     ) -> SearchEverywhereResults?
 
+    func searchEverywhere(
+        at rootURL: URL,
+        query: String,
+        options: ProjectSearchOptions,
+        visibilityRules: SearchVisibilityRules,
+        includeContent: Bool
+    ) -> SearchEverywhereResults?
+
     func previewReplacement(
         at rootURL: URL,
         query: String,
@@ -50,4 +58,18 @@ public extension SearchOperations {
     func warmSearchIndex(at rootURL: URL, visibilityRules: SearchVisibilityRules) {}
     func updateSearchIndex(at rootURL: URL, changedPaths: [String], visibilityRules: SearchVisibilityRules) {}
     func invalidateSearchIndex(at rootURL: URL, visibilityRules: SearchVisibilityRules) {}
+    func searchEverywhere(
+        at rootURL: URL,
+        query: String,
+        options: ProjectSearchOptions,
+        visibilityRules: SearchVisibilityRules,
+        includeContent: Bool
+    ) -> SearchEverywhereResults? {
+        searchEverywhere(
+            at: rootURL,
+            query: query,
+            options: options,
+            visibilityRules: visibilityRules
+        )
+    }
 }
