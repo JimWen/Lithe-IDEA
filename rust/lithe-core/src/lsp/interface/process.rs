@@ -87,6 +87,7 @@ impl LspProcessLauncher for SystemProcessLauncher {
             .with_details(error.to_string())
         })?;
         let stdin = child.stdin.take().ok_or_else(|| missing_stream("stdin"))?;
+        disable_sigpipe_on_stdin(&stdin);
         let stdout = child
             .stdout
             .take()
@@ -105,6 +106,24 @@ impl LspProcessLauncher for SystemProcessLauncher {
         })
     }
 }
+
+#[cfg(target_os = "macos")]
+fn disable_sigpipe_on_stdin(stdin: &ChildStdin) {
+    use std::os::fd::AsRawFd;
+    // macOS `<sys/fcntl.h>` defines `F_SETNOSIGPIPE = 73` for pipes (`libc` 0.2
+    // omits this constant on Apple targets). `lithe-core` is linked into a
+    // macOS GUI app without a Rust main() SIGPIPE handler, so disabling SIGPIPE
+    // on the child pipe turns writes to a crashed language server into EPIPE
+    // instead of terminating the host process.
+    const F_SETNOSIGPIPE: libc::c_int = 73;
+    // SAFETY: `stdin.as_raw_fd()` is a live owned pipe descriptor for the duration of this call.
+    unsafe {
+        let _ = libc::fcntl(stdin.as_raw_fd(), F_SETNOSIGPIPE, 1);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn disable_sigpipe_on_stdin(_stdin: &ChildStdin) {}
 
 fn language_server_command(spec: &LspProcessSpec) -> Command {
     #[cfg(target_os = "windows")]

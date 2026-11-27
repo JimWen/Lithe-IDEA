@@ -929,36 +929,39 @@ package final class WorkspaceFeatureModel: ObservableObject {
             scheduleExternalRefresh(paths: paths)
             return
         }
+        var seenURLs: Set<URL> = []
         let changedURLs = paths
             .map { URL(fileURLWithPath: $0).standardizedFileURL }
-            .filter(isWorkspaceURL)
-            .reduce(into: [URL]()) { values, url in
-                if !values.contains(url) { values.append(url) }
-            }
+            .filter { isWorkspaceURL($0) && seenURLs.insert($0).inserted }
             .sorted { $0.path < $1.path }
         let conflictDetected = processExternalChanges?(changedURLs) ?? false
         if conflictDetected { notify?("External edits conflict with unsaved changes") }
 
         let knownPaths = Set(projectFiles.map { $0.standardizedFileURL.path })
-        let fileChanges = changedURLs.compactMap { url -> WorkspaceFileChange? in
+        var fileChanges: [WorkspaceFileChange] = []
+        fileChanges.reserveCapacity(changedURLs.count)
+        var requiresWorkspaceSnapshot = false
+        for url in changedURLs {
             let wasKnown = knownPaths.contains(url.path)
             if fileOperations.fileExists(at: url) {
-                return WorkspaceFileChange(
+                fileChanges.append(WorkspaceFileChange(
                     fileURL: url,
                     kind: wasKnown ? .changed : .created
-                )
+                ))
+                if !requiresWorkspaceSnapshot {
+                    if !wasKnown || fileOperations.isDirectory(at: url) {
+                        requiresWorkspaceSnapshot = true
+                    }
+                }
+            } else if wasKnown {
+                fileChanges.append(WorkspaceFileChange(fileURL: url, kind: .deleted))
+                requiresWorkspaceSnapshot = true
             }
-            return wasKnown ? WorkspaceFileChange(fileURL: url, kind: .deleted) : nil
         }
         if !fileChanges.isEmpty {
             notifyWorkspaceFileChanges?(fileChanges)
         }
 
-        let requiresWorkspaceSnapshot = changedURLs.contains { url in
-            let wasKnownFile = projectFiles.contains { $0.standardizedFileURL.path == url.path }
-            guard fileOperations.fileExists(at: url) else { return wasKnownFile }
-            return fileOperations.isDirectory(at: url) || !wasKnownFile
-        }
         if requiresWorkspaceSnapshot {
             await refreshCurrentSnapshot()
             return

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import LitheApplicationKernel
 @testable import LitheExecutionModule
@@ -464,8 +465,190 @@ struct ExecutionModuleTests {
         #expect(service.errorMessage == "go testing extension is not active.")
     }
 
+    @Test
+    func stopPreservesFlushedOutputWhileRestartDropsStaleCallbacks() async {
+        let process = FlushingTestStreamingProcess()
+        let configuration = RunConfiguration(
+            id: "service-api",
+            name: "API Service",
+            kind: .process(provider: "go.main"),
+            execution: .service,
+            modulePath: nil,
+            mainClass: nil
+        )
+        let service = RunService(
+            runtime: TestRuntime(),
+            process: process,
+            processFactory: { FlushingTestStreamingProcess() },
+            fileAccess: TestRunFileAccess(),
+            preferences: TestRunPreferences(),
+            runConfigurationOperations: SelectionRunConfigurationOperations(configurations: [configuration]),
+            executableResolver: TestExecutableResolver(),
+            languageProviderCatalog: .compatibilityFallback,
+            languageRunProviders: .standard(catalog: .compatibilityFallback)
+        )
+        let workspace = URL(fileURLWithPath: "/workspace", isDirectory: true)
+        await service.loadProject(at: workspace, files: [])
 
+        // Stop flushes pending output synchronously inside process.stop(); the
+        // queued MainActor append must survive activeOperationID clearing.
+        process.flushOnStop = "final buffered line\n"
+        service.run(configuration: configuration, currentFileURL: nil)
+        #expect(service.isRunning)
+        let firstOutputCallback = process.onOutput
+        let firstTerminationCallback = process.onTermination
 
+        service.stop()
+        #expect(await Self.waitForPublished(service.$output) {
+            $0.contains("final buffered line")
+        })
+        #expect(!service.isRunning)
+
+        // Starting a new run invalidates the previous output generation and
+        // ignores both stale output and stale termination from the old run.
+        process.flushOnStop = nil
+        service.run(configuration: configuration, currentFileURL: nil)
+        #expect(service.isRunning)
+        firstOutputCallback?("stale output from run 1\n")
+        firstTerminationCallback?(9)
+        process.onOutput?("run 2 live marker\n")
+        #expect(await Self.waitForPublished(service.$output) {
+            $0.contains("run 2 live marker")
+        })
+        await Task { @MainActor in }.value
+        #expect(service.isRunning)
+        #expect(service.lastExitCode == nil)
+        #expect(!service.output.contains("stale output from run 1"))
+    }
+
+    @Test
+    func stopModulePreservesFlushedOutputWhileRestartDropsStaleCallbacks() async {
+        var createdProcesses: [FlushingTestStreamingProcess] = []
+        let configuration = RunConfiguration(
+            id: "service-worker",
+            name: "Worker Service",
+            kind: .process(provider: "go.main"),
+            execution: .service,
+            modulePath: nil,
+            mainClass: nil
+        )
+        let service = RunService(
+            runtime: TestRuntime(),
+            process: TestStreamingProcess(),
+            processFactory: {
+                let proc = FlushingTestStreamingProcess()
+                createdProcesses.append(proc)
+                return proc
+            },
+            fileAccess: TestRunFileAccess(),
+            preferences: TestRunPreferences(),
+            runConfigurationOperations: SelectionRunConfigurationOperations(configurations: [configuration]),
+            executableResolver: TestExecutableResolver(),
+            languageProviderCatalog: .compatibilityFallback,
+            languageRunProviders: .standard(catalog: .compatibilityFallback)
+        )
+        let workspace = URL(fileURLWithPath: "/workspace", isDirectory: true)
+        await service.loadProject(at: workspace, files: [])
+
+        service.startConfiguration(configuration)
+        #expect(createdProcesses.count == 1)
+        let firstProcess = createdProcesses[0]
+        firstProcess.flushOnStop = "worker flushed tail\n"
+        let firstSession = service.moduleSessions[0]
+
+        service.stopModule(firstSession)
+        #expect(await Self.waitForPublished(service.$moduleSessions) {
+            $0.first?.output.contains("worker flushed tail") == true
+        })
+        #expect(service.moduleSessions.first?.isRunning == false)
+
+        // Restarting the module invalidates stale callbacks from the first process.
+        service.restartModule(firstSession)
+        #expect(createdProcesses.count == 2)
+        let secondProcess = createdProcesses[1]
+        firstProcess.onOutput?("stale worker chunk\n")
+        firstProcess.onTermination?(137)
+        secondProcess.onOutput?("worker run 2 marker\n")
+        #expect(await Self.waitForPublished(service.$moduleSessions) {
+            $0.first?.output.contains("worker run 2 marker") == true
+        })
+        await Task { @MainActor in }.value
+        #expect(service.moduleSessions.first?.isRunning == true)
+        #expect(service.moduleSessions.first?.exitCode == nil)
+        #expect(service.moduleSessions.first?.output.contains("stale worker chunk") == false)
+    }
+
+    @Test
+    func failedConfigurationRescanPreservesLiveRunCallbacks() async {
+        let process = FlushingTestStreamingProcess()
+        let configuration = RunConfiguration(
+            id: "service-api",
+            name: "API Service",
+            kind: .process(provider: "go.main"),
+            execution: .service,
+            modulePath: nil,
+            mainClass: nil
+        )
+        let operations = FailingGenerationRunConfigurationOperations(configuration: configuration)
+        let service = RunService(
+            runtime: TestRuntime(),
+            process: process,
+            processFactory: { FlushingTestStreamingProcess() },
+            fileAccess: TestRunFileAccess(),
+            preferences: TestRunPreferences(),
+            runConfigurationOperations: operations,
+            executableResolver: TestExecutableResolver(),
+            languageProviderCatalog: .compatibilityFallback,
+            languageRunProviders: .standard(catalog: .compatibilityFallback)
+        )
+        let workspace = URL(fileURLWithPath: "/workspace", isDirectory: true)
+        await service.loadProject(at: workspace, files: [])
+        service.run(configuration: configuration, currentFileURL: nil)
+        #expect(service.isRunning)
+
+        // Rescanning configurations fails while the primary process is still running.
+        await service.generateRunConfigurations()
+
+        // The live process must continue delivering output and its real exit code.
+        process.onOutput?("still alive after rescan failure\n")
+        #expect(await Self.waitForPublished(service.$output) {
+            $0.contains("still alive after rescan failure")
+        })
+        process.onTermination?(42)
+        #expect(await Self.waitForPublished(service.$lastExitCode) {
+            $0 == 42
+        })
+    }
+
+    private static func waitForPublished<P: Publisher>(
+        _ publisher: P,
+        matching predicate: @escaping @MainActor (P.Output) -> Bool
+    ) async -> Bool where P.Failure == Never {
+        await withCheckedContinuation { continuation in
+            var resumed = false
+            var cancellable: AnyCancellable?
+            let timeout = DispatchWorkItem {
+                MainActor.assumeIsolated {
+                    guard !resumed else { return }
+                    resumed = true
+                    cancellable?.cancel()
+                    continuation.resume(returning: false)
+                }
+            }
+            cancellable = publisher.sink { value in
+                MainActor.assumeIsolated {
+                    guard !resumed, predicate(value) else { return }
+                    resumed = true
+                    timeout.cancel()
+                    cancellable?.cancel()
+                    continuation.resume(returning: true)
+                }
+            }
+            if !resumed {
+                DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(2), execute: timeout)
+            }
+        }
+    }
 
     private func factory(recorder: Recorder) -> ModuleFactory {
         ModuleFactory(manifest: ExecutionModule.moduleManifest, contributions: ExecutionModule.moduleContributions) {
@@ -639,6 +822,45 @@ private final class TestStreamingProcess: StreamingProcess, @unchecked Sendable 
     }
     func send(_ input: Data) throws {}
     func stop() { isRunning = false }
+}
+
+private final class FlushingTestStreamingProcess: StreamingProcess, @unchecked Sendable {
+    var isRunning = false
+    var flushOnStop: String?
+    var onOutput: (@Sendable (String) -> Void)?
+    var onTermination: (@Sendable (Int32) -> Void)?
+    var onStateChange: (@Sendable (ProcessLifecycleEvent) -> Void)?
+    func start(_ request: ProcessRequest) throws {
+        isRunning = true
+    }
+    func send(_ input: Data) throws {}
+    func stop() {
+        isRunning = false
+        if let flushOnStop {
+            onOutput?(flushOnStop)
+        }
+    }
+}
+
+private struct FailingGenerationRunConfigurationOperations: RunConfigurationOperations {
+    let configuration: RunConfiguration
+    func inspect(at _: URL) -> ProjectRunConfigurationInspection {
+        ProjectRunConfigurationInspection(status: .ready, diagnostics: [])
+    }
+    func generate(at _: URL, files _: [URL], modulePaths _: [String]) throws -> RunConfigurationGenerationResult {
+        throw RunConfigurationOperationFailure(message: "Permission denied during rescan")
+    }
+    func resolve(at _: URL, toolchainCandidates _: [ProjectToolchainCandidate]) throws -> RunConfigurationResolution {
+        RunConfigurationResolution(
+            configurations: [.init(configuration: configuration, options: RunOptions())],
+            diagnostics: [],
+            defaultConfigurationID: configuration.id
+        )
+    }
+    func launchPlan(at _: URL, configurationID: String, currentFile _: String?, classPath _: String?, debugPort _: Int?) throws -> SharedLaunchPlan {
+        SharedLaunchPlan(executable: .command("fixture-service"), arguments: [configurationID], workingDirectory: ".")
+    }
+    func migrateLegacySettings(at _: URL, configurationIDs _: [String]) throws {}
 }
 
 
@@ -914,6 +1136,7 @@ private final class TestLanguageExecutionSession: LanguageExecutionSession {
 
     func stop() { isRunning = false }
 }
+
 @MainActor private final class EmptyWorkspaceModule: LitheModule {
     let manifest = ModuleManifest(id: .workspace, displayName: "Workspace", scope: .workspace)
     func activate(context: ModuleContext) async throws {}

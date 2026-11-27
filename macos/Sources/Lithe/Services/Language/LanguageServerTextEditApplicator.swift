@@ -32,10 +32,56 @@ enum LanguageServerTextEditApplicator {
         return applyFallback(replacements, to: text)
     }
 
+    private struct UTF16LineIndex {
+        let units: [UInt16]
+        let lineStarts: [Int]
+
+        init(_ text: String) {
+            let units = Array(text.utf16)
+            var starts = [0]
+            starts.reserveCapacity(max(16, units.count / 32))
+            for index in units.indices where units[index] == 10 {
+                starts.append(index + 1)
+            }
+            self.units = units
+            self.lineStarts = starts
+        }
+
+        func offset(for position: LanguageServerPosition) -> Int? {
+            guard position.line >= 0,
+                  position.utf16Column >= 0,
+                  position.line < lineStarts.count else { return nil }
+            let start = lineStarts[position.line]
+            let nextLineStart = position.line + 1 < lineStarts.count
+                ? lineStarts[position.line + 1]
+                : units.count
+            var end = nextLineStart
+            if position.line + 1 < lineStarts.count, end > start, units[end - 1] == 10 {
+                end -= 1
+                if end > start, units[end - 1] == 13 {
+                    end -= 1
+                }
+            }
+            guard position.utf16Column <= end - start else { return nil }
+            let offset = start + position.utf16Column
+            if offset < units.count, (0xDC00...0xDFFF).contains(units[offset]) { return nil }
+            return offset
+        }
+
+        func range(for lspRange: LanguageServerRange) throws -> NSRange {
+            guard let start = offset(for: lspRange.start),
+                  let end = offset(for: lspRange.end),
+                  end >= start else { throw Error.invalidRange }
+            return NSRange(location: start, length: end - start)
+        }
+    }
+
     private static func validatedReplacements(_ edits: [LanguageServerTextEdit], in text: String) throws -> [(NSRange, String)] {
+        let lineIndex = UTF16LineIndex(text)
         var indexed: [(NSRange, String, Int)] = []
+        indexed.reserveCapacity(edits.count)
         for (index, edit) in edits.enumerated() {
-            indexed.append((try range(edit.range, in: text), edit.newText, index))
+            indexed.append((try lineIndex.range(for: edit.range), edit.newText, index))
         }
         let replacements = indexed.sorted { lhs, rhs in
             lhs.0.location == rhs.0.location ? lhs.2 < rhs.2 : lhs.0.location < rhs.0.location
@@ -54,26 +100,7 @@ enum LanguageServerTextEditApplicator {
     }
 
     static func range(_ range: LanguageServerRange, in text: String) throws -> NSRange {
-        let units = Array(text.utf16)
-        func offset(_ position: LanguageServerPosition) -> Int? {
-            guard position.line >= 0, position.utf16Column >= 0 else { return nil }
-            var line = 0
-            var start = 0
-            for (index, unit) in units.enumerated() where unit == 10 && line < position.line {
-                start = index + 1
-                line += 1
-            }
-            guard line == position.line else { return nil }
-            let newline = units[start...].firstIndex(of: 10)
-            var end = newline ?? units.count
-            if newline != nil, end > start, units[end - 1] == 13 { end -= 1 }
-            guard position.utf16Column <= end - start else { return nil }
-            let offset = start + position.utf16Column
-            if offset < units.count, (0xDC00...0xDFFF).contains(units[offset]) { return nil }
-            return offset
-        }
-        guard let start = offset(range.start), let end = offset(range.end), end >= start else { throw Error.invalidRange }
-        return NSRange(location: start, length: end - start)
+        try UTF16LineIndex(text).range(for: range)
     }
 
 }

@@ -51,7 +51,9 @@ package final class RunService: ObservableObject {
     private var moduleProcesses: [String: any StreamingProcess] = [:]
     private var moduleLanguageExecutionSessions: [String: any LanguageExecutionSession] = [:]
     private var activeOperationID: String?
+    private var outputOperationID: String?
     private var moduleOperationIDs: [String: String] = [:]
+    private var moduleOutputOperationIDs: [String: String] = [:]
     private let maximumOutputCharacters = 500_000
     private let runtime: any RunRuntimePort
     private let executableResolver: any RunExecutableResolving
@@ -411,6 +413,7 @@ package final class RunService: ObservableObject {
     package func run(configuration: RunConfiguration, currentFileURL: URL?) {
         stop()
         output = ""
+        outputOperationID = nil
         lastExitCode = nil
         lastRunConfiguration = configuration
         lastCurrentFileURL = currentFileURL
@@ -507,10 +510,11 @@ package final class RunService: ObservableObject {
 
         let operationID = UUID().uuidString
         activeOperationID = operationID
+        outputOperationID = operationID
         do {
             if let extensionSession {
                 activeLanguageExecutionSession = extensionSession
-                configureLanguageExecutionSession(extensionSession)
+                configureLanguageExecutionSession(extensionSession, operationID: operationID)
                 try extensionSession.start(LanguageExecutionProcessRequest(
                     operationID: operationID,
                     executablePath: resolved.executableURL.path,
@@ -519,6 +523,7 @@ package final class RunService: ObservableObject {
                     environment: resolved.environment
                 ))
             } else {
+                configurePrimaryProcess(operationID: operationID)
                 try process.start(ProcessRequest(
                     operationID: operationID,
                     executablePath: resolved.executableURL.path,
@@ -529,6 +534,8 @@ package final class RunService: ObservableObject {
             }
         } catch {
             activeLanguageExecutionSession = nil
+            activeOperationID = nil
+            outputOperationID = nil
             fail("Unable to start " + configuration.name + ": " + error.localizedDescription)
         }
     }
@@ -541,6 +548,7 @@ package final class RunService: ObservableObject {
         }
         stopAllServices()
         moduleSessions = []
+        moduleOutputOperationIDs = [:]
         for configuration in serviceConfigurations {
             startModuleSession(configuration)
         }
@@ -560,6 +568,7 @@ package final class RunService: ObservableObject {
         guard let configuration = configurations.first(where: { $0.id == session.configurationID }) else { return }
         stopModule(sessionID: session.id)
         moduleSessions.removeAll { $0.id == session.id }
+        moduleOutputOperationIDs[session.id] = nil
         startModuleSession(configuration)
     }
 
@@ -571,12 +580,16 @@ package final class RunService: ObservableObject {
     }
 
     package func clearModuleOutput() {
+        moduleOutputOperationIDs = moduleOutputOperationIDs.filter { moduleOperationIDs[$0.key] != nil }
         for index in moduleSessions.indices {
             moduleSessions[index].output = ""
         }
     }
 
     package func clearModuleOutput(_ session: RunSession) {
+        if moduleOperationIDs[session.id] == nil {
+            moduleOutputOperationIDs[session.id] = nil
+        }
         guard let index = moduleSessions.firstIndex(where: { $0.id == session.id }) else { return }
         moduleSessions[index].output = ""
     }
@@ -593,6 +606,8 @@ package final class RunService: ObservableObject {
     package func reset() {
         stop()
         stopAllServices()
+        outputOperationID = nil
+        moduleOutputOperationIDs = [:]
         projectLoadID = UUID()
         projectURL = nil
         projectLoadState = .idle
@@ -621,6 +636,9 @@ package final class RunService: ObservableObject {
 
     package func clearOutput() {
         output = ""
+        if activeOperationID == nil {
+            outputOperationID = nil
+        }
         lastExitCode = nil
     }
 
@@ -758,7 +776,8 @@ package final class RunService: ObservableObject {
         return String(file.dropFirst(prefix.count))
     }
 
-    private func finishProcess(exitCode: Int32) {
+    private func finishProcess(exitCode: Int32, operationID: String? = nil) {
+        if let operationID, activeOperationID != operationID { return }
         activeLanguageExecutionSession = nil
         isRunning = false
         runningTitle = nil
@@ -799,12 +818,39 @@ package final class RunService: ObservableObject {
         languageRunExtensions[providerID]?.provider
     }
 
-    private func configureLanguageExecutionSession(_ session: any LanguageExecutionSession) {
+    private func configurePrimaryProcess(operationID: String) {
+        process.onOutput = { [weak self] chunk in
+            Task { @MainActor [weak self] in
+                guard let self, self.outputOperationID == operationID else { return }
+                self.append(chunk)
+            }
+        }
+        process.onTermination = { [weak self] exitCode in
+            Task { @MainActor [weak self] in
+                self?.finishProcess(exitCode: exitCode, operationID: operationID)
+            }
+        }
+        process.onStateChange = { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.consumeLifecycle(event)
+            }
+        }
+    }
+
+    private func configureLanguageExecutionSession(
+        _ session: any LanguageExecutionSession,
+        operationID: String
+    ) {
         session.onOutput = { [weak self] chunk in
-            Task { @MainActor [weak self] in self?.append(chunk) }
+            Task { @MainActor [weak self] in
+                guard let self, self.outputOperationID == operationID else { return }
+                self.append(chunk)
+            }
         }
         session.onTermination = { [weak self] exitCode in
-            Task { @MainActor [weak self] in self?.finishProcess(exitCode: exitCode) }
+            Task { @MainActor [weak self] in
+                self?.finishProcess(exitCode: exitCode, operationID: operationID)
+            }
         }
         session.onStateChange = { [weak self] event in
             Task { @MainActor [weak self] in
@@ -879,6 +925,7 @@ package final class RunService: ObservableObject {
         guard configurationStatus == .ready,
               let projectURL else { return }
         moduleSessions.removeAll { $0.id == configuration.id }
+        moduleOutputOperationIDs[configuration.id] = nil
         if let diagnostic = blockingToolchainDiagnostic(for: configuration) {
             moduleSessions.append(RunSession(
                 id: configuration.id,
@@ -969,12 +1016,14 @@ package final class RunService: ObservableObject {
 
         let operationID = UUID().uuidString
         moduleOperationIDs[configuration.id] = operationID
+        moduleOutputOperationIDs[configuration.id] = operationID
         do {
             if let provider = languageRunExtension(providerID: configuration.kind.providerID) {
                 let extensionSession = provider.makeExecutionSession()
                 configureModuleLanguageExecutionSession(
                     extensionSession,
-                    sessionID: configuration.id
+                    sessionID: configuration.id,
+                    operationID: operationID
                 )
                 moduleLanguageExecutionSessions[configuration.id] = extensionSession
                 try extensionSession.start(LanguageExecutionProcessRequest(
@@ -986,7 +1035,7 @@ package final class RunService: ObservableObject {
                 ))
             } else {
                 let process = processFactory()
-                configureModuleProcess(process, sessionID: configuration.id)
+                configureModuleProcess(process, sessionID: configuration.id, operationID: operationID)
                 moduleProcesses[configuration.id] = process
                 try process.start(ProcessRequest(
                     operationID: operationID,
@@ -1000,6 +1049,7 @@ package final class RunService: ObservableObject {
             moduleProcesses[configuration.id] = nil
             moduleLanguageExecutionSessions[configuration.id] = nil
             moduleOperationIDs[configuration.id] = nil
+            moduleOutputOperationIDs[configuration.id] = nil
             if let index = moduleSessions.firstIndex(where: { $0.id == configuration.id }) {
                 moduleSessions[index].isRunning = false
                 moduleSessions[index].exitCode = 1
@@ -1022,7 +1072,8 @@ package final class RunService: ObservableObject {
         }
     }
 
-    private func finishModule(sessionID: String, exitCode: Int32) {
+    private func finishModule(sessionID: String, exitCode: Int32, operationID: String? = nil) {
+        if let operationID, moduleOperationIDs[sessionID] != operationID { return }
         guard moduleProcesses[sessionID] != nil
                 || moduleLanguageExecutionSessions[sessionID] != nil else { return }
         if let index = moduleSessions.firstIndex(where: { $0.id == sessionID }) {
@@ -1061,22 +1112,26 @@ package final class RunService: ObservableObject {
         let staleSessionIDs = activeSessionIDs.filter { !validConfigurationIDs.contains($0) }
         for sessionID in staleSessionIDs {
             stopModule(sessionID: sessionID)
+            moduleOutputOperationIDs[sessionID] = nil
         }
+        moduleOutputOperationIDs = moduleOutputOperationIDs.filter { validConfigurationIDs.contains($0.key) }
         moduleSessions.removeAll { !validConfigurationIDs.contains($0.configurationID) }
     }
 
     private func configureModuleProcess(
         _ process: any StreamingProcess,
-        sessionID: String
+        sessionID: String,
+        operationID: String
     ) {
         process.onOutput = { [weak self] chunk in
             Task { @MainActor [weak self] in
-                self?.appendModuleOutput(chunk, sessionID: sessionID)
+                guard let self, self.moduleOutputOperationIDs[sessionID] == operationID else { return }
+                self.appendModuleOutput(chunk, sessionID: sessionID)
             }
         }
         process.onTermination = { [weak self] exitCode in
             Task { @MainActor [weak self] in
-                self?.finishModule(sessionID: sessionID, exitCode: exitCode)
+                self?.finishModule(sessionID: sessionID, exitCode: exitCode, operationID: operationID)
             }
         }
         process.onStateChange = { [weak self] event in
@@ -1088,16 +1143,18 @@ package final class RunService: ObservableObject {
 
     private func configureModuleLanguageExecutionSession(
         _ session: any LanguageExecutionSession,
-        sessionID: String
+        sessionID: String,
+        operationID: String
     ) {
         session.onOutput = { [weak self] chunk in
             Task { @MainActor [weak self] in
-                self?.appendModuleOutput(chunk, sessionID: sessionID)
+                guard let self, self.moduleOutputOperationIDs[sessionID] == operationID else { return }
+                self.appendModuleOutput(chunk, sessionID: sessionID)
             }
         }
         session.onTermination = { [weak self] exitCode in
             Task { @MainActor [weak self] in
-                self?.finishModule(sessionID: sessionID, exitCode: exitCode)
+                self?.finishModule(sessionID: sessionID, exitCode: exitCode, operationID: operationID)
             }
         }
         session.onStateChange = { [weak self] event in

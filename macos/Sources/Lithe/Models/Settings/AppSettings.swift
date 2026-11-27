@@ -460,7 +460,7 @@ final class AppSettings: ObservableObject {
     func importAIConfiguration(
         _ snapshot: AIConfigurationSnapshot
     ) -> AIProviderProfile {
-        let importedKeyIdentifier = "lithe.(snapshot.source.rawValue).imported.apiKey"
+        let importedKeyIdentifier = "lithe.\(snapshot.source.rawValue).imported.apiKey"
         let credentialSource = snapshot.source.credentialSource
         let existing = commitMessageAI.providers.first {
             $0.apiKeyIdentifier == importedKeyIdentifier || $0.credentialSource == credentialSource

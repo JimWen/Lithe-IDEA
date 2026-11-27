@@ -62,6 +62,9 @@ private struct MacReturnKeyMonitor: NSViewRepresentable {
                 guard let window = self.view?.window, window === NSApp.keyWindow,
                       event.window == nil || event.window === window,
                       MainActor.assumeIsolated({
+                          guard !MacShortcutInputPolicy.shouldDeferToMarkedText(window.firstResponder) else {
+                              return false
+                          }
                           guard let environment = self.commandEnvironment else { return true }
                           return environment.permitsApplicationCommand && !environment.isTrackingMenu
                       }) else { return event }

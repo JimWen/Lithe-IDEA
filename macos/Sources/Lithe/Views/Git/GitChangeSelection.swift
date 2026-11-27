@@ -25,7 +25,7 @@ struct GitChangeSelection {
 
     func actionTargets(in changes: [GitChange], clicked: GitChange? = nil) -> [GitChange] {
         if let clicked, !ids.contains(clicked.id) {
-            return changes.filter { $0.id == clicked.id }
+            return changes.filter { $0 == clicked }
         }
         return changes.filter { ids.contains($0.id) }
     }

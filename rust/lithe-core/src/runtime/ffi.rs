@@ -2,6 +2,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 /// Returns a pointer to the static, NUL-terminated Core ABI version.
@@ -30,8 +31,17 @@ pub unsafe extern "C" fn lithe_core_execute_json(request: *const c_char) -> *mut
             r#"{"id":null,"ok":false,"error":{"code":"invalid_request","message":"Request pointer is null"}}"#,
         );
     }
-    let request = CStr::from_ptr(request).to_string_lossy();
-    response_pointer(&crate::execute_json(&request))
+    let response = match catch_unwind(AssertUnwindSafe(|| {
+        let request = CStr::from_ptr(request).to_string_lossy();
+        crate::execute_json(&request)
+    })) {
+        Ok(value) => value,
+        Err(_) => {
+            r#"{"id":null,"ok":false,"error":{"code":"unknown","message":"Internal Rust Core panic across FFI boundary"}}"#
+                .to_string()
+        }
+    };
+    response_pointer(&response)
 }
 
 /// Loads the merged language-provider catalog for an optional workspace root.
@@ -47,17 +57,23 @@ pub unsafe extern "C" fn lithe_core_execute_json(request: *const c_char) -> *mut
 pub unsafe extern "C" fn lithe_core_lsp_provider_catalog_json(
     workspace_root: *const c_char,
 ) -> *mut c_char {
-    let root = if workspace_root.is_null() {
-        None
-    } else {
-        let value = CStr::from_ptr(workspace_root).to_string_lossy();
-        if value.trim().is_empty() {
+    let response = match catch_unwind(AssertUnwindSafe(|| {
+        let root = if workspace_root.is_null() {
             None
         } else {
-            Some(PathBuf::from(value.as_ref()))
-        }
+            let value = CStr::from_ptr(workspace_root).to_string_lossy();
+            if value.trim().is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(value.as_ref()))
+            }
+        };
+        crate::lsp::provider_catalog_json(root.as_deref())
+    })) {
+        Ok(value) => value,
+        Err(_) => r#"{"version":2,"origin":"builtin","providers":[],"diagnostics":[]}"#.to_string(),
     };
-    response_pointer(&crate::lsp::provider_catalog_json(root.as_deref()))
+    response_pointer(&response)
 }
 
 /// Requests cooperative cancellation of an in-flight operation. The call is
@@ -72,8 +88,11 @@ pub unsafe extern "C" fn lithe_core_cancel(operation_id: *const c_char) -> i32 {
     if operation_id.is_null() {
         return 0;
     }
-    let operation_id = CStr::from_ptr(operation_id).to_string_lossy();
-    crate::cancel_operation(&operation_id) as i32
+    catch_unwind(AssertUnwindSafe(|| {
+        let operation_id = CStr::from_ptr(operation_id).to_string_lossy();
+        crate::cancel_operation(&operation_id) as i32
+    }))
+    .unwrap_or(0)
 }
 
 /// Releases a string returned by a Core C ABI function.
@@ -116,15 +135,24 @@ pub unsafe extern "C" fn lithe_core_execute_json_with_events(
     if request.is_null() {
         return lithe_core_execute_json(request);
     }
-    let request = CStr::from_ptr(request).to_string_lossy();
-    // The callback is scoped to this synchronous call, never a worker thread.
-    let context_address = context as usize;
-    let sink = std::sync::Arc::new(move |event: &str| {
-        if let Ok(event) = CString::new(event) {
-            callback(event.as_ptr(), context_address as *mut std::ffi::c_void);
+    let response = match catch_unwind(AssertUnwindSafe(|| {
+        let request = CStr::from_ptr(request).to_string_lossy();
+        // The callback is scoped to this synchronous call, never a worker thread.
+        let context_address = context as usize;
+        let sink = std::sync::Arc::new(move |event: &str| {
+            if let Ok(event) = CString::new(event) {
+                callback(event.as_ptr(), context_address as *mut std::ffi::c_void);
+            }
+        });
+        crate::execute_json_with_events(&request, sink)
+    })) {
+        Ok(value) => value,
+        Err(_) => {
+            r#"{"id":null,"ok":false,"error":{"code":"unknown","message":"Internal Rust Core panic across FFI boundary"}}"#
+                .to_string()
         }
-    });
-    response_pointer(&crate::execute_json_with_events(&request, sink))
+    };
+    response_pointer(&response)
 }
 
 /// Runs the native authentication helper without initializing the application.

@@ -471,9 +471,17 @@ struct LitheApp: App {
                 .preferredColorScheme(settings.themePreference.preferredColorScheme)
                 .task {
                     memoryUsageMonitor.start()
+                    if !LithePerformanceBaseline.isEnabled, NSApp.isActive {
+                        frameRateMonitor.start()
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     if !LithePerformanceBaseline.isEnabled {
                         frameRateMonitor.start()
                     }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                    frameRateMonitor.stop()
                 }
         } defaultValue: {
             projectWindows.defaultWindowID()

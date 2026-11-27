@@ -84,6 +84,15 @@ final class FrameRateMonitor: ObservableObject {
         CVDisplayLinkStart(link)
     }
 
+    func stop() {
+        guard let link = displayLink else { return }
+        CVDisplayLinkStop(link)
+        displayLink = nil
+        framesInWindow = 0
+        windowStartedAt = nil
+        lastAcceptedFrameAt = nil
+    }
+
     #if DEBUG
     func recordFrameForTesting(at mediaTime: TimeInterval) {
         recordFrame(at: mediaTime)

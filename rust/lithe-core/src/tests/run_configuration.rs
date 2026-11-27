@@ -1999,3 +1999,220 @@ fn retired_providers_do_not_block_surviving_run_configurations() {
     assert_eq!(plan["data"]["executable"]["command"], "go");
     fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn run_config_generate_skips_self_referencing_directory_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let root = temporary_root("run-config-symlink-loop");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("go.mod"), "module example.com/loop\ngo 1.23\n").unwrap();
+    fs::write(root.join("main.go"), "package main\nfunc main() {}\n").unwrap();
+    symlink(&root, root.join("bazel-loop")).unwrap();
+
+    let response: Value = serde_json::from_str(&execute_json(
+        &serde_json::json!({
+            "id": "generate-symlink-loop",
+            "command": "runConfig.generate",
+            "payload": {"root": root, "paths": ["go.mod", "main.go"], "modulePaths": []}
+        })
+        .to_string(),
+    ))
+    .unwrap();
+    assert_eq!(response["ok"], true, "{response}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn run_config_reports_incomplete_input_scan_instead_of_partial_fingerprint() {
+    use crate::execution::{
+        generate_with_input_limit, inspect_with_input_limit, GenerateRequest, InspectRequest,
+    };
+
+    let root = temporary_root("run-config-truncated-inputs");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("go.mod"),
+        "module example.com/truncated\ngo 1.23\n",
+    )
+    .unwrap();
+    fs::write(root.join("main.go"), "package main\nfunc main() {}\n").unwrap();
+    fs::write(root.join("extra-a.txt"), "a").unwrap();
+    fs::write(root.join("extra-b.txt"), "b").unwrap();
+
+    // When the entry budget is exceeded, generate persists an explicit
+    // incomplete-scan sentinel rather than an authoritative partial fingerprint.
+    let truncated_generated = generate_with_input_limit(
+        GenerateRequest {
+            root: root.to_string_lossy().to_string(),
+            paths: vec!["go.mod".to_string(), "main.go".to_string()],
+            module_paths: Vec::new(),
+        },
+        2,
+    )
+    .unwrap();
+    assert_eq!(
+        truncated_generated["generated"]["generator"]["fingerprint"],
+        "incomplete:entry-budget-exceeded",
+        "truncated scan must record incomplete sentinel: {truncated_generated}"
+    );
+    assert!(
+        truncated_generated["generated"]["generator"]["inputs"].is_null(),
+        "truncated scan must not persist a partial inputs map: {truncated_generated}"
+    );
+
+    fs::create_dir_all(root.join(".lithe/run")).unwrap();
+    fs::write(
+        root.join(".lithe/run/generated.json"),
+        serde_json::to_string(&truncated_generated["generated"]).unwrap(),
+    )
+    .unwrap();
+
+    // Even if extra files are removed so the workspace later falls below the
+    // entry budget and manifests change, inspect must keep reporting staleness
+    // until configurations are cleanly regenerated.
+    fs::remove_file(root.join("extra-a.txt")).unwrap();
+    fs::remove_file(root.join("extra-b.txt")).unwrap();
+    fs::write(root.join("go.mod"), "module example.com/changed\ngo 1.24\n").unwrap();
+
+    let after_shrink_inspected = inspect_with_input_limit(
+        InspectRequest {
+            root: root.to_string_lossy().to_string(),
+            local_document: None,
+        },
+        100,
+    )
+    .unwrap();
+    assert_eq!(
+        after_shrink_inspected["diagnostics"][0]["code"],
+        "staleFingerprint"
+    );
+    assert!(after_shrink_inspected["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("incomplete project scan"));
+
+    // Clean regeneration under the limit restores a normal sha256 fingerprint
+    // and clears the diagnostic.
+    let full_generated = generate_with_input_limit(
+        GenerateRequest {
+            root: root.to_string_lossy().to_string(),
+            paths: vec!["go.mod".to_string(), "main.go".to_string()],
+            module_paths: Vec::new(),
+        },
+        100,
+    )
+    .unwrap();
+    assert!(full_generated["generated"]["generator"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+    fs::write(
+        root.join(".lithe/run/generated.json"),
+        serde_json::to_string(&full_generated["generated"]).unwrap(),
+    )
+    .unwrap();
+
+    let clean_inspected = inspect_with_input_limit(
+        InspectRequest {
+            root: root.to_string_lossy().to_string(),
+            local_document: None,
+        },
+        100,
+    )
+    .unwrap();
+    assert!(clean_inspected["diagnostics"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    // Conversely, if a cleanly generated project later grows above the scan
+    // budget, inspect must surface budget exhaustion as staleness.
+    fs::write(root.join("extra-c.txt"), "c").unwrap();
+    fs::write(root.join("extra-d.txt"), "d").unwrap();
+    let budget_exceeded_inspected = inspect_with_input_limit(
+        InspectRequest {
+            root: root.to_string_lossy().to_string(),
+            local_document: None,
+        },
+        2,
+    )
+    .unwrap();
+    assert_eq!(
+        budget_exceeded_inspected["diagnostics"][0]["code"],
+        "staleFingerprint"
+    );
+    assert!(budget_exceeded_inspected["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("2-entry limit"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn run_config_tracks_symlinked_manifest_files_without_following_dir_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let root = temporary_root("run-config-symlink-manifest");
+    let shared = temporary_root("run-config-symlink-manifest-shared");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&shared).unwrap();
+    let target_pkg = shared.join("shared-pkg.json");
+    fs::write(
+        &target_pkg,
+        r#"{"name":"demo","scripts":{"dev":"node server.js"}}"#,
+    )
+    .unwrap();
+    symlink(&target_pkg, root.join("package.json")).unwrap();
+    symlink(&root, root.join("self-loop")).unwrap();
+
+    let generated: Value = serde_json::from_str(&execute_json(
+        &serde_json::json!({
+            "id": "gen-symlink-manifest",
+            "command": "runConfig.generate",
+            "payload": {"root": root, "paths": ["package.json"], "modulePaths": []}
+        })
+        .to_string(),
+    ))
+    .unwrap();
+    assert_eq!(generated["ok"], true, "{generated}");
+    assert!(
+        generated["data"]["generated"]["generator"]["inputs"]["package.json"].is_string(),
+        "symlinked manifest file must be hashed in inputs: {generated}"
+    );
+
+    fs::create_dir_all(root.join(".lithe/run")).unwrap();
+    fs::write(
+        root.join(".lithe/run/generated.json"),
+        serde_json::to_string(&generated["data"]["generated"]).unwrap(),
+    )
+    .unwrap();
+
+    // Mutate the symlink target and verify inspect reports staleFingerprint.
+    fs::write(
+        &target_pkg,
+        r#"{"name":"demo","scripts":{"dev":"node server-v2.js"}}"#,
+    )
+    .unwrap();
+    let inspected: Value = serde_json::from_str(&execute_json(
+        &serde_json::json!({
+            "id": "inspect-symlink-manifest",
+            "command": "runConfig.inspect",
+            "payload": {"root": root}
+        })
+        .to_string(),
+    ))
+    .unwrap();
+    assert_eq!(inspected["ok"], true, "{inspected}");
+    assert_eq!(
+        inspected["data"]["diagnostics"][0]["code"],
+        "staleFingerprint"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(shared).unwrap();
+}

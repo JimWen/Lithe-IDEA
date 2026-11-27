@@ -6,7 +6,7 @@ use crate::protocol::{invalid_relative_path, CoreError, ErrorCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,7 @@ const VERSION: u32 = 2;
 const LEGACY_VERSION: u32 = 1;
 // Regenerate persisted detections when category or display-name semantics change.
 const GENERATOR_REVISION: &str = "5";
+const INCOMPLETE_SCAN_FINGERPRINT: &str = "incomplete:entry-budget-exceeded";
 const CURRENT_FILE_ID: &str = "current-file";
 const EDITOR_CURRENT_FILE_PROVIDER: &str = "editor.current-file";
 /// Toolchain requirements and `project.json` are separate documents that happen
@@ -316,6 +317,14 @@ pub struct ToolchainRequirement {
 
 /// Validates configuration and sidecar documents without mutating the workspace.
 pub fn inspect(request: InspectRequest) -> Result<Value, CoreError> {
+    inspect_with_input_limit(request, MAX_PROJECT_INPUT_SCAN_ENTRIES)
+}
+
+/// Validates configuration documents using an explicit project-input scan entry ceiling.
+pub(crate) fn inspect_with_input_limit(
+    request: InspectRequest,
+    max_input_entries: usize,
+) -> Result<Value, CoreError> {
     let root = existing_root(&request.root)?;
     let generated = read_document(&root, "run/generated.json")?;
     let requirements = read_requirements(&root)?;
@@ -366,19 +375,33 @@ pub fn inspect(request: InspectRequest) -> Result<Value, CoreError> {
         .as_ref()
         .and_then(|document| document.generator.as_ref())
     {
-        let current_inputs = project_inputs(&root)?;
-        if metadata.fingerprint != fingerprint_from_inputs(&current_inputs) {
-            let message = if metadata.inputs.is_empty() {
-                "Project inputs changed after run configuration generation".to_string()
-            } else if metadata.inputs == current_inputs {
-                "Run configuration generator changed; regenerate configurations".to_string()
-            } else {
-                input_change_summary(&metadata.inputs, &current_inputs)
-            };
+        if metadata.fingerprint == INCOMPLETE_SCAN_FINGERPRINT {
             diagnostics.push(json!({
                 "code": "staleFingerprint",
-                "message": message
+                "message": "Run configurations were generated from an incomplete project scan; regenerate run configurations"
             }));
+        } else {
+            let current_scan = project_inputs_with_limit(&root, max_input_entries)?;
+            if current_scan.truncated {
+                diagnostics.push(json!({
+                    "code": "staleFingerprint",
+                    "message": format!(
+                        "Project input scan exceeded the {max_input_entries}-entry limit; run configuration freshness could not be verified"
+                    )
+                }));
+            } else if metadata.fingerprint != fingerprint_from_inputs(&current_scan.inputs) {
+                let message = if metadata.inputs.is_empty() {
+                    "Project inputs changed after run configuration generation".to_string()
+                } else if metadata.inputs == current_scan.inputs {
+                    "Run configuration generator changed; regenerate configurations".to_string()
+                } else {
+                    input_change_summary(&metadata.inputs, &current_scan.inputs)
+                };
+                diagnostics.push(json!({
+                    "code": "staleFingerprint",
+                    "message": message
+                }));
+            }
         }
     }
     Ok(json!({
@@ -393,6 +416,14 @@ pub fn inspect(request: InspectRequest) -> Result<Value, CoreError> {
 
 /// Detects runnable project entries and writes a deterministic generated layer.
 pub fn generate(request: GenerateRequest) -> Result<Value, CoreError> {
+    generate_with_input_limit(request, MAX_PROJECT_INPUT_SCAN_ENTRIES)
+}
+
+/// Detects runnable project entries using an explicit project-input scan entry ceiling.
+pub(crate) fn generate_with_input_limit(
+    request: GenerateRequest,
+    max_input_entries: usize,
+) -> Result<Value, CoreError> {
     let root = existing_root(&request.root)?;
     let mut paths = request
         .paths
@@ -473,7 +504,7 @@ pub fn generate(request: GenerateRequest) -> Result<Value, CoreError> {
             source: None,
         });
     }
-    let inputs = project_inputs(&root)?;
+    let input_scan = project_inputs_with_limit(&root, max_input_entries)?;
     let claimed = configurations.iter().map(|item| item.id.clone()).collect();
     let detected = detected_configurations(&root, &claimed)?;
     let entry_count = java_entry_count + detected.len();
@@ -484,12 +515,23 @@ pub fn generate(request: GenerateRequest) -> Result<Value, CoreError> {
         has_java_sources || has_gradle_project,
         &configurations,
     )?;
+    // Persist an explicit incomplete-scan sentinel when the entry budget was
+    // exhausted so `inspect` continues flagging unverifiable freshness even if
+    // the workspace later shrinks below the budget before regeneration.
+    let generator = Some(if input_scan.truncated {
+        GeneratorMetadata {
+            fingerprint: INCOMPLETE_SCAN_FINGERPRINT.to_string(),
+            inputs: BTreeMap::new(),
+        }
+    } else {
+        GeneratorMetadata {
+            fingerprint: fingerprint_from_inputs(&input_scan.inputs),
+            inputs: input_scan.inputs,
+        }
+    });
     let generated = RunConfigurationDocument {
         version: VERSION,
-        generator: Some(GeneratorMetadata {
-            fingerprint: fingerprint_from_inputs(&inputs),
-            inputs,
-        }),
+        generator,
         configurations,
     };
     Ok(
@@ -1842,22 +1884,60 @@ fn version_parts(value: &str) -> Vec<u32> {
         .collect()
 }
 
-fn project_inputs(root: &Path) -> Result<BTreeMap<String, String>, CoreError> {
+const MAX_PROJECT_INPUT_SCAN_ENTRIES: usize = 20_000;
+
+struct ProjectInputsScan {
+    inputs: BTreeMap<String, String>,
+    truncated: bool,
+}
+
+fn is_readable_regular_file(file_type: &fs::FileType, path: &Path) -> bool {
+    file_type.is_file()
+        || (file_type.is_symlink() && fs::metadata(path).is_ok_and(|meta| meta.is_file()))
+}
+
+fn project_inputs_with_limit(
+    root: &Path,
+    max_entries: usize,
+) -> Result<ProjectInputsScan, CoreError> {
     let mut files = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
+    let mut queue = VecDeque::from([root.to_path_buf()]);
+    let mut visited = 0usize;
+    while let Some(dir) = queue.pop_front() {
+        let Ok(read_dir) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut child_dirs = Vec::new();
+        for entry in read_dir.flatten() {
+            // Enforce the entry budget before retaining any directory entries
+            // so a large flat directory stays bounded in both time and memory.
+            visited += 1;
+            if visited > max_entries {
+                return Ok(ProjectInputsScan {
+                    inputs: BTreeMap::new(),
+                    truncated: true,
+                });
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
             let path = entry.path();
-            if path.is_dir() {
+            // `entry.file_type()` does not follow symlinks, so `is_dir()` is
+            // true only for real directories (preventing symlink loops), while
+            // symlinked manifest regular files are still fingerprinted below.
+            if file_type.is_dir() {
                 if !ignored_directory(&path) {
-                    stack.push(path);
+                    child_dirs.push((entry.file_name(), path));
                 }
-            } else if fingerprint_input(&path) {
+            } else if fingerprint_input(&path) && is_readable_regular_file(&file_type, &path) {
                 if let Ok(relative) = path.strip_prefix(root) {
                     files.push(relative.to_string_lossy().replace('\\', "/"));
                 }
             }
+        }
+        child_dirs.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (_, child_path) in child_dirs {
+            queue.push_back(child_path);
         }
     }
     files.sort();
@@ -1867,7 +1947,10 @@ fn project_inputs(root: &Path) -> Result<BTreeMap<String, String>, CoreError> {
             result.insert(relative, format!("sha256:{:x}", Sha256::digest(bytes)));
         }
     }
-    Ok(result)
+    Ok(ProjectInputsScan {
+        inputs: result,
+        truncated: false,
+    })
 }
 
 fn fingerprint_from_inputs(inputs: &BTreeMap<String, String>) -> String {
@@ -2004,15 +2087,19 @@ fn project_manifest_paths(root: &Path, names: &[&str]) -> Vec<PathBuf> {
             continue;
         };
         for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
             let path = entry.path();
-            if path.is_dir() {
+            if file_type.is_dir() {
                 if !ignored_directory(&path) {
                     stack.push(path);
                 }
-            } else if path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| names.contains(&name))
+            } else if is_readable_regular_file(&file_type, &path)
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| names.contains(&name))
             {
                 result.push(path);
             }
@@ -2080,14 +2167,24 @@ fn main_class_exists(root: &Path, main_class: &str) -> Result<bool, CoreError> {
             .map_err(|error| CoreError::new(ErrorCode::Unknown, error.to_string()))?;
     let mut stack = vec![root.to_path_buf()];
     while let Some(directory) = stack.pop() {
-        for entry in fs::read_dir(directory)? {
-            let path = entry?.path();
-            if path.is_dir() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if file_type.is_dir() {
                 if !ignored_directory(&path) {
                     stack.push(path);
                 }
-            } else if path.file_name().and_then(|name| name.to_str()) == Some(file_name.as_str()) {
-                let source = fs::read_to_string(&path)?;
+            } else if is_readable_regular_file(&file_type, &path)
+                && path.file_name().and_then(|name| name.to_str()) == Some(file_name.as_str())
+            {
+                let Ok(source) = fs::read_to_string(&path) else {
+                    continue;
+                };
                 let declared_package = package_expression
                     .captures(&source)
                     .and_then(|capture| capture.get(1))

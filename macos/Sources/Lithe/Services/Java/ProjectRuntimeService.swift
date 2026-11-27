@@ -149,6 +149,9 @@ final class ProjectRuntimeService: ObservableObject {
         for path in paths.compactMap({ $0 }).map(normalizedPath).filter({ !$0.isEmpty }) {
             if let home = runtimeLocator.validJavaHome(path: path) { return home }
         }
+        if let cachedHome = javaRuntimes.first.flatMap({ runtimeLocator.validJavaHome(path: $0.homePath) }) {
+            return cachedHome
+        }
         return runtimeLocator.discover()
             .javaRuntimes
             .first
@@ -456,7 +459,25 @@ final class ProjectRuntimeService: ObservableObject {
         javaHomeOverride: String? = nil
     ) -> [ProjectToolchainCandidate] {
         var result: [ProjectToolchainCandidate] = []
-        let java = javaHomeURL(overridePath: javaHomeOverride).flatMap(runtimeLocator.javaRuntime(at:))
+        let java: JavaRuntimeCandidate?
+        if let overridePath = javaHomeOverride,
+           !normalizedOverridePath(overridePath).isEmpty,
+           let overrideHome = runtimeLocator.validJavaHome(path: normalizedOverridePath(overridePath)) {
+            java = javaRuntimes.first {
+                URL(fileURLWithPath: $0.homePath).standardizedFileURL == overrideHome.standardizedFileURL
+            } ?? runtimeLocator.javaRuntime(at: overrideHome)
+        } else if let envHomePath = runtimeLocator.environment()["JAVA_HOME"]
+            .map(normalizedPath),
+            !envHomePath.isEmpty,
+            let envHome = runtimeLocator.validJavaHome(path: envHomePath) {
+            java = javaRuntimes.first {
+                URL(fileURLWithPath: $0.homePath).standardizedFileURL == envHome.standardizedFileURL
+            } ?? runtimeLocator.javaRuntime(at: envHome)
+        } else {
+            // Avoid blocking @MainActor with synchronous `java_home -V` / `java -version`
+            // discovery on every Go/Rust/Python run-configuration inspection.
+            java = javaRuntimes.first
+        }
         if let java {
             result.append(ProjectToolchainCandidate(
                 id: "project-jdk",

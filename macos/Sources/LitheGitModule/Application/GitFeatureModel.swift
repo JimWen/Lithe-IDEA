@@ -1427,6 +1427,7 @@ package final class GitFeatureModel: ObservableObject {
             return false
         }
 
+        await refreshGitReferencesForSettings()
         guard let currentReference = currentGitReference else {
             isCommitting = false
             notify?("Committed changes, but detached HEAD cannot be pushed")
