@@ -44,6 +44,8 @@ final class MacAIAgentCLIResolver: AIAgentCLIResolving, @unchecked Sendable {
 
     func resolveExecutable(for backend: AIAgentBackendKind, settings: AIAgentSettings) async -> String? {
         switch backend {
+        case .antigravityCLI:
+            return await resolveBinary(named: "agy", overridePath: settings.antigravityCLIPath)
         case .codexCLI:
             return await resolveBinary(named: "codex", overridePath: settings.codexCLIPath)
         case .claudeCLI:
@@ -55,6 +57,12 @@ final class MacAIAgentCLIResolver: AIAgentCLIResolving, @unchecked Sendable {
 
     func detectCLIs(settings: AIAgentSettings) async -> [AIAgentCLIDetection] {
         let env = await processEnvironment()
+        async let antigravity = detectCLI(
+            backend: .antigravityCLI,
+            binary: "agy",
+            overridePath: settings.antigravityCLIPath,
+            env: env
+        )
         async let codex = detectCLI(backend: .codexCLI, binary: "codex", overridePath: settings.codexCLIPath, env: env)
         async let claude = detectCLI(backend: .claudeCLI, binary: "claude", overridePath: settings.claudeCLIPath, env: env)
         let direct = AIAgentCLIDetection(
@@ -64,7 +72,7 @@ final class MacAIAgentCLIResolver: AIAgentCLIResolving, @unchecked Sendable {
             version: nil,
             statusDetail: "Uses the active AI Provider profile in Settings."
         )
-        return await [codex, claude, direct]
+        return await [antigravity, codex, claude, direct]
     }
 
     private func detectCLI(
@@ -142,6 +150,15 @@ final class MacAIAgentCLIResolver: AIAgentCLIResolving, @unchecked Sendable {
     private func authHint(for backend: AIAgentBackendKind, env: [String: String]) -> String {
         let home = fileManager.homeDirectoryForCurrentUser
         switch backend {
+        case .antigravityCLI:
+            let agyDir = home.appendingPathComponent(".gemini/antigravity-cli").path
+            let agySettings = home.appendingPathComponent(".gemini/antigravity-cli/settings.json").path
+            if fileManager.fileExists(atPath: agySettings)
+                || fileManager.fileExists(atPath: agyDir)
+                || !(env["GEMINI_API_KEY"] ?? "").isEmpty {
+                return "ACP ready"
+            }
+            return "Run `agy acp --login`"
         case .codexCLI:
             let authFile = home.appendingPathComponent(".codex/auth.json").path
             if fileManager.fileExists(atPath: authFile) || !(env["OPENAI_API_KEY"] ?? "").isEmpty {

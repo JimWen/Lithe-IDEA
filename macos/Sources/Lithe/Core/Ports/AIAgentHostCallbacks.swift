@@ -8,11 +8,39 @@ struct AIAgentHostCallbacks {
     let agentSettings: () -> AIAgentSettings
     let commitMessageAISettings: () -> CommitMessageAISettings
     let readOpenDocumentText: (URL) -> String?
-    let applyWorkspaceTextEdit: (String, String, String, URL) async throws -> Bool
+    let dirtyOpenDocumentSnapshots: (URL) -> [(relativePath: String, text: String)]
+    let applyWorkspaceTextEdit: (String, String, String, URL, Bool) async throws -> Bool
+    let generateAICommitMessage: (AIAgentWorkingTreeDiff) async throws -> String?
     let openFile: (URL) -> Void
     let openDiffForRelativePath: (String, String) -> Void
     let refreshWorkspaceAndGit: () async -> Void
     let notify: (String) -> Void
+
+    init(
+        workspacePath: @escaping () -> String?,
+        agentSettings: @escaping () -> AIAgentSettings,
+        commitMessageAISettings: @escaping () -> CommitMessageAISettings,
+        readOpenDocumentText: @escaping (URL) -> String?,
+        dirtyOpenDocumentSnapshots: @escaping (URL) -> [(relativePath: String, text: String)] = { _ in [] },
+        applyWorkspaceTextEdit: @escaping (String, String, String, URL, Bool) async throws -> Bool,
+        generateAICommitMessage: @escaping (AIAgentWorkingTreeDiff) async throws -> String?,
+        openFile: @escaping (URL) -> Void,
+        openDiffForRelativePath: @escaping (String, String) -> Void,
+        refreshWorkspaceAndGit: @escaping () async -> Void,
+        notify: @escaping (String) -> Void
+    ) {
+        self.workspacePath = workspacePath
+        self.agentSettings = agentSettings
+        self.commitMessageAISettings = commitMessageAISettings
+        self.readOpenDocumentText = readOpenDocumentText
+        self.dirtyOpenDocumentSnapshots = dirtyOpenDocumentSnapshots
+        self.applyWorkspaceTextEdit = applyWorkspaceTextEdit
+        self.generateAICommitMessage = generateAICommitMessage
+        self.openFile = openFile
+        self.openDiffForRelativePath = openDiffForRelativePath
+        self.refreshWorkspaceAndGit = refreshWorkspaceAndGit
+        self.notify = notify
+    }
 }
 
 protocol AIAgentWorkspaceHostBuilding: Sendable {

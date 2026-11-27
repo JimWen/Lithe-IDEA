@@ -7,7 +7,9 @@ struct AIAgentComposerView: View {
     @ObservedObject var feature: AIAgentFeatureModel
     @State private var isCustomModelPopoverPresented = false
     @State private var customModelDraft = ""
+    @State private var selectedAutocompleteIndex = 0
 
+    private static let supportedImageExtensions: Set<String> = ["png", "jpg", "jpeg", "webp", "gif"]
     private var activeThread: AIAgentThread? { feature.selectedThread }
 
     var body: some View {
@@ -47,6 +49,9 @@ struct AIAgentComposerView: View {
         }
         .padding(10)
         .background(LitheTheme.sidebar)
+        .onChange(of: feature.composerDraft) { _ in
+            selectedAutocompleteIndex = 0
+        }
     }
 
     private var contextChipsRow: some View {
@@ -75,9 +80,29 @@ struct AIAgentComposerView: View {
                     .help("Attach active editor file or selection as context")
                 }
 
+                Button {
+                    attachImageFromPanel()
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "photo.badge.plus")
+                            .font(.system(size: 9.5, weight: .medium))
+                        Text("Image")
+                            .font(.system(size: 10.5, weight: .medium))
+                    }
+                    .foregroundStyle(LitheTheme.secondaryText)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(LitheTheme.raised.opacity(0.65))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(LitheTheme.divider, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .lithePointer()
+                .help("Attach a screenshot or image for Antigravity / Codex / Direct API")
+
                 ForEach(feature.attachedContexts) { attachment in
                     HStack(spacing: 4) {
-                        Image(systemName: "doc.text")
+                        Image(systemName: attachment.imageFilePath != nil ? "photo" : "doc.text")
                             .font(.system(size: 9.5))
                             .foregroundStyle(LitheTheme.accent)
                         Text(attachment.displayLabel)
@@ -100,6 +125,20 @@ struct AIAgentComposerView: View {
                 }
             }
         }
+    }
+
+    private func attachImageFromPanel() {
+        guard let url = model.platformUI.chooseFile(title: "Attach Image to AI Agent", prompt: "Attach") else {
+            return
+        }
+        let ext = url.pathExtension.lowercased()
+        guard Self.supportedImageExtensions.contains(ext) else {
+            model.showNotification("Supported image formats: PNG, JPEG, WebP, GIF")
+            return
+        }
+        feature.addAttachment(AIAgentContextAttachment(
+            kind: .image(path: url.standardizedFileURL.path, displayName: url.lastPathComponent)
+        ))
     }
 
     private var bottomControlsRow: some View {
@@ -172,7 +211,7 @@ struct AIAgentComposerView: View {
     }
 
     private var modelPill: some View {
-        let backend = activeThread?.backend ?? .codexCLI
+        let backend = activeThread?.backend ?? model.settings.aiAgent.defaultBackend
         let activeModel = activeThread?.model ?? ""
         let labelText = activeModel.isEmpty ? "Default" : activeModel
         return Menu {
@@ -208,7 +247,7 @@ struct AIAgentComposerView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Custom Model")
                     .font(.system(size: 12, weight: .semibold))
-                TextField("e.g. gpt-5.4, claude-sonnet-4-5", text: $customModelDraft)
+                TextField("e.g. gemini-4-neon-high, gpt-5.4, sonnet", text: $customModelDraft)
                     .litheSettingsTextField()
                 HStack {
                     Spacer()
@@ -330,13 +369,12 @@ struct AIAgentComposerView: View {
     }
 
     private func slashAutocompleteCard(_ commands: [AIAgentSlashCommand]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(commands.prefix(6)) { cmd in
+        let visible = Array(commands.prefix(6))
+        let clampedIndex = min(max(0, selectedAutocompleteIndex), max(0, visible.count - 1))
+        return VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(visible.enumerated()), id: \.element.id) { index, cmd in
                 Button {
-                    feature.composerDraft = cmd.command == "/model" ? "/model " : ""
-                    if cmd.command != "/model" {
-                        feature.sendPrompt(cmd.command, attachments: feature.attachedContexts)
-                    }
+                    applySlashSuggestion(cmd)
                 } label: {
                     HStack(spacing: 7) {
                         Image(systemName: cmd.iconName)
@@ -354,6 +392,8 @@ struct AIAgentComposerView: View {
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
+                    .background(index == clampedIndex ? LitheTheme.subtleSelection : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -364,16 +404,24 @@ struct AIAgentComposerView: View {
         .background(LitheTheme.raised)
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(LitheTheme.panelBorder, lineWidth: 1))
+        .background(
+            autocompleteKeyboardShortcuts(
+                count: visible.count,
+                onAccept: {
+                    if clampedIndex < visible.count {
+                        applySlashSuggestion(visible[clampedIndex])
+                    }
+                }
+            )
+        )
     }
 
     private func fileMentionAutocompleteCard(_ paths: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(paths, id: \.self) { path in
+        let clampedIndex = min(max(0, selectedAutocompleteIndex), max(0, paths.count - 1))
+        return VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(paths.enumerated()), id: \.element) { index, path in
                 Button {
-                    feature.addAttachment(AIAgentContextAttachment(kind: .file(relativePath: path)))
-                    if let range = trailingAtQueryRange(in: feature.composerDraft) {
-                        feature.composerDraft.removeSubrange(range)
-                    }
+                    applyFileSuggestion(path)
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "doc.text")
@@ -388,6 +436,8 @@ struct AIAgentComposerView: View {
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
+                    .background(index == clampedIndex ? LitheTheme.subtleSelection : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -398,6 +448,52 @@ struct AIAgentComposerView: View {
         .background(LitheTheme.raised)
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(LitheTheme.panelBorder, lineWidth: 1))
+        .background(
+            autocompleteKeyboardShortcuts(
+                count: paths.count,
+                onAccept: {
+                    if clampedIndex < paths.count {
+                        applyFileSuggestion(paths[clampedIndex])
+                    }
+                }
+            )
+        )
+    }
+
+    private func applySlashSuggestion(_ cmd: AIAgentSlashCommand) {
+        feature.composerDraft = cmd.command == "/model" ? "/model " : ""
+        if cmd.command != "/model" {
+            feature.sendPrompt(cmd.command, attachments: feature.attachedContexts)
+        }
+    }
+
+    private func applyFileSuggestion(_ path: String) {
+        feature.addAttachment(AIAgentContextAttachment(kind: .file(relativePath: path)))
+        if let range = trailingAtQueryRange(in: feature.composerDraft) {
+            feature.composerDraft.removeSubrange(range)
+        }
+    }
+
+    private func autocompleteKeyboardShortcuts(count: Int, onAccept: @escaping () -> Void) -> some View {
+        Group {
+            Button("") {
+                guard count > 0 else { return }
+                selectedAutocompleteIndex = (selectedAutocompleteIndex + 1) % count
+            }
+            .keyboardShortcut(.downArrow, modifiers: [])
+            Button("") {
+                guard count > 0 else { return }
+                selectedAutocompleteIndex = (selectedAutocompleteIndex - 1 + count) % count
+            }
+            .keyboardShortcut(.upArrow, modifiers: [])
+            Button("") {
+                onAccept()
+            }
+            .keyboardShortcut(.tab, modifiers: [])
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .allowsHitTesting(false)
     }
 
     private func trailingAtQueryRange(in text: String) -> Range<String.Index>? {

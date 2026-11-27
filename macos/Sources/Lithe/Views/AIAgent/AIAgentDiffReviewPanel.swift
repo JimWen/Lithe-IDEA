@@ -7,8 +7,20 @@ struct AIAgentDiffReviewPanel: View {
     @ObservedObject var feature: AIAgentFeatureModel
     @State private var expandedFilePaths: Set<String> = []
     @State private var commitMessageDraft = ""
+    @State private var fileFilterQuery = ""
+    @State private var pendingDiscardPath: String?
 
     private var diff: AIAgentWorkingTreeDiff { feature.workingTreeDiff }
+
+    private var filteredFiles: [AIAgentFileChangeSummary] {
+        let query = fileFilterQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return diff.files }
+        return diff.files.filter { $0.path.lowercased().contains(query) }
+    }
+
+    private var areAllExpanded: Bool {
+        !filteredFiles.isEmpty && filteredFiles.allSatisfy { expandedFilePaths.contains($0.path) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -35,6 +47,19 @@ struct AIAgentDiffReviewPanel: View {
                     Text("-\(diff.totalDeletions)")
                         .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                         .foregroundStyle(LitheTheme.error)
+
+                    Button {
+                        if areAllExpanded {
+                            expandedFilePaths.removeAll()
+                        } else {
+                            expandedFilePaths = Set(filteredFiles.map(\.path))
+                        }
+                    } label: {
+                        Image(systemName: areAllExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
+                            .font(.system(size: 10.5))
+                    }
+                    .litheIconButton()
+                    .help(areAllExpanded ? "Collapse all diffs" : "Expand all diffs")
                 }
 
                 Button {
@@ -52,6 +77,31 @@ struct AIAgentDiffReviewPanel: View {
             .background(LitheTheme.raised.opacity(0.5))
 
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
+
+            if diff.files.count > 3 || !fileFilterQuery.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(LitheTheme.tertiaryText)
+                    TextField("Filter changed files…", text: $fileFilterQuery)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11.5))
+                    if !fileFilterQuery.isEmpty {
+                        Button {
+                            fileFilterQuery = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(LitheTheme.tertiaryText)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .background(LitheTheme.inputBackground.opacity(0.6))
+                Rectangle().fill(LitheTheme.divider).frame(height: 1)
+            }
 
             if feature.isLoadingDiff && diff.files.isEmpty {
                 VStack(spacing: 8) {
@@ -84,7 +134,7 @@ struct AIAgentDiffReviewPanel: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(diff.files) { file in
+                        ForEach(filteredFiles) { file in
                             diffFileCard(file)
                         }
                     }
@@ -101,6 +151,25 @@ struct AIAgentDiffReviewPanel: View {
             if expandedFilePaths.isEmpty, let first = diff.files.first?.path {
                 expandedFilePaths.insert(first)
             }
+        }
+        .confirmationDialog(
+            "Discard changes in this file?",
+            isPresented: Binding(
+                get: { pendingDiscardPath != nil },
+                set: { if !$0 { pendingDiscardPath = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Discard Changes", role: .destructive) {
+                guard let path = pendingDiscardPath else { return }
+                pendingDiscardPath = nil
+                Task { await feature.discardWorkingTreeFile(path) }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDiscardPath = nil
+            }
+        } message: {
+            Text(pendingDiscardPath ?? "")
         }
     }
 
@@ -152,6 +221,16 @@ struct AIAgentDiffReviewPanel: View {
                 }
                 .litheIconButton()
                 .help("Open full diff in editor")
+
+                Button {
+                    pendingDiscardPath = file.path
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 10))
+                }
+                .litheIconButton()
+                .disabled(feature.isPerformingGitAction)
+                .help("Discard changes in this file")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -194,6 +273,11 @@ struct AIAgentDiffReviewPanel: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(LitheTheme.secondaryText)
                 .lineLimit(1)
+            if diff.aheadCount > 0 || diff.behindCount > 0 {
+                Text("↑\(diff.aheadCount) ↓\(diff.behindCount)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(diff.aheadCount > 0 ? LitheTheme.accent : LitheTheme.tertiaryText)
+            }
             Spacer()
             Button {
                 Task { await feature.pushWorkingTreeBranch() }
@@ -210,9 +294,32 @@ struct AIAgentDiffReviewPanel: View {
 
     private var commitAndPushBar: some View {
         VStack(alignment: .leading, spacing: 6) {
-            TextField("Commit message for \(diff.branchName.isEmpty ? "changes" : diff.branchName)…", text: $commitMessageDraft)
-                .litheSettingsTextField()
+            HStack(spacing: 6) {
+                TextField("Commit message for \(diff.branchName.isEmpty ? "changes" : diff.branchName)…", text: $commitMessageDraft)
+                    .litheSettingsTextField()
 
+                Button {
+                    Task {
+                        if let generated = await feature.generateCommitMessageForWorkingTree() {
+                            commitMessageDraft = generated
+                        }
+                    }
+                } label: {
+                    if feature.isGeneratingCommitMessage {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 11.5))
+                    }
+                }
+                .litheIconButton()
+                .disabled(feature.isGeneratingCommitMessage || feature.isPerformingGitAction)
+                .help("Generate commit message")
+            }
+
+            let isMessageEmpty = commitMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             HStack(spacing: 6) {
                 Button {
                     let message = commitMessageDraft
@@ -222,26 +329,38 @@ struct AIAgentDiffReviewPanel: View {
                         }
                     }
                 } label: {
-                    Label("Commit All", systemImage: "checkmark.circle")
+                    Label("Commit", systemImage: "checkmark.circle")
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .buttonStyle(LithePrimaryButtonStyle(
                     backgroundColor: LitheTheme.settingsPrimaryAction,
                     restingOpacity: 1
                 ))
-                .disabled(
-                    feature.isPerformingGitAction
-                        || commitMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
+                .disabled(feature.isPerformingGitAction || isMessageEmpty)
+
+                Button {
+                    let message = commitMessageDraft
+                    Task {
+                        if await feature.commitAndPushWorkingTreeChanges(message: message) {
+                            commitMessageDraft = ""
+                        }
+                    }
+                } label: {
+                    Label("Commit & Push", systemImage: "arrow.up.circle.fill")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .buttonStyle(LitheSecondaryButtonStyle())
+                .disabled(feature.isPerformingGitAction || isMessageEmpty)
 
                 Button {
                     Task { await feature.pushWorkingTreeBranch() }
                 } label: {
-                    Label("Push", systemImage: "arrow.up.circle")
-                        .font(.system(size: 11.5, weight: .medium))
+                    Image(systemName: "arrow.up.circle")
+                        .font(.system(size: 12))
                 }
-                .buttonStyle(LitheSecondaryButtonStyle())
+                .litheIconButton()
                 .disabled(feature.isPerformingGitAction)
+                .help("Push current branch")
 
                 Spacer()
             }

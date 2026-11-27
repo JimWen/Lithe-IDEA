@@ -9,7 +9,7 @@ struct AIAgentSettingsSectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionGroup("AI Agent Harness") {
-                Text("Run Codex CLI, Claude Code CLI, or a Direct HTTP API provider directly in Lithe's right sidebar with multi-thread history, diff review, checkpoints, and isolated Git worktrees.")
+                Text("Run Antigravity CLI (ACP), Codex CLI, Claude Code CLI, or a Direct HTTP API provider directly in Lithe's right sidebar with multi-thread history, diff review, checkpoints, and isolated Git worktrees.")
                     .font(LitheTheme.smallFont)
                     .foregroundStyle(LitheTheme.secondaryText)
 
@@ -52,6 +52,24 @@ struct AIAgentSettingsSectionView: View {
                     )
                 }
 
+                settingsRow("Antigravity CLI path") {
+                    HStack(spacing: 6) {
+                        TextField("Auto-detect (`agy` on PATH / ~/.local/bin)", text: $settings.aiAgent.antigravityCLIPath)
+                            .litheSettingsTextField()
+                        Button("Choose…") {
+                            if let url = model.platformUI.chooseFile(title: "Choose Antigravity CLI (agy)", prompt: "Choose") {
+                                settings.aiAgent.antigravityCLIPath = url.path
+                            }
+                        }
+                        .buttonStyle(LitheSecondaryButtonStyle())
+                    }
+                }
+
+                settingsRow("Default Antigravity model") {
+                    TextField("e.g. gemini-4-neon-high (blank uses agy default)", text: $settings.aiAgent.defaultAntigravityModel)
+                        .litheSettingsTextField()
+                }
+
                 settingsRow("Codex CLI path") {
                     HStack(spacing: 6) {
                         TextField("Auto-detect (`codex` on PATH)", text: $settings.aiAgent.codexCLIPath)
@@ -86,6 +104,29 @@ struct AIAgentSettingsSectionView: View {
                 settingsRow("Default Claude model") {
                     TextField("e.g. sonnet, opus (blank uses Claude default)", text: $settings.aiAgent.defaultClaudeModel)
                         .litheSettingsTextField()
+                }
+
+                if let activeProvider = settings.commitMessageAI.activeProvider {
+                    HStack(spacing: 8) {
+                        Image(systemName: "network")
+                            .foregroundStyle(LitheTheme.accent)
+                        Text("Direct API profile:")
+                            .font(LitheTheme.smallFont)
+                            .foregroundStyle(LitheTheme.secondaryText)
+                        Text("\(activeProvider.name) · \(activeProvider.model)")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(LitheTheme.primaryText)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(LitheTheme.inputBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                } else {
+                    Text("Configure an AI provider profile below to enable Direct API streaming mode and AI commit message generation.")
+                        .font(LitheTheme.smallFont)
+                        .foregroundStyle(LitheTheme.secondaryText)
                 }
 
                 if let feature = model.aiAgentFeatureIfActive, !feature.detectedCLIs.isEmpty {
@@ -167,6 +208,9 @@ struct AIAgentSettingsSectionView: View {
                     }
             }
         }
+        .task {
+            await autoProbeCLIsIfNeeded()
+        }
     }
 
     private func sectionGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -182,6 +226,17 @@ struct AIAgentSettingsSectionView: View {
         .foregroundStyle(LitheTheme.primaryText)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func autoProbeCLIsIfNeeded() async {
+        guard model.isAIAgentAvailable else { return }
+        if let feature = model.aiAgentFeatureIfActive {
+            if feature.detectedCLIs.isEmpty && !feature.isDetectingCLIs {
+                await feature.refreshCLIDetection()
+            }
+        } else if let feature = await model.activateAIAgentModule() {
+            await feature.refreshCLIDetection()
+        }
     }
 
     private func settingsRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

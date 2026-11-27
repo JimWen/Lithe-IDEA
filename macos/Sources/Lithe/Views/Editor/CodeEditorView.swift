@@ -913,6 +913,9 @@ struct CodeEditorView: NSViewRepresentable {
                 model?.showNotification(message)
             }
             textView.onFormatRequested = { [weak model] in model?.requestLanguageFormatting() }
+            textView.onAskAIAgent = { [weak model] presetPrompt in
+                model?.askAIAgentFromEditor(presetPrompt: presetPrompt)
+            }
             textView.onCodeActionsRequested = { [weak model, weak textView] range in
                 model?.requestLanguageCodeActions(range: range) { [weak textView, weak model] actions in
                     textView?.presentLanguageCodeActions(actions) { action in model?.applyLanguageCodeAction(action) }
@@ -3191,6 +3194,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     var onRenameRequested: ((Int, Int, String) -> Void)?
     var onLanguageActionMessage: ((String) -> Void)?
     var onFormatRequested: (() -> Void)?
+    var onAskAIAgent: ((String?) -> Void)?
     var onCodeActionsRequested: ((LanguageServerRange) -> Void)?
     var onSignatureHelpRequested: ((Int, Int, @escaping (LanguageServerSignatureHelp?) -> Void) -> Void)?
     var onRefactorCodeActionsRequested: ((LanguageServerRange, @escaping ([LanguageServerCodeAction]) -> Void) -> Void)?
@@ -5218,6 +5222,18 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         if onGoToLineRequested != nil {
             items.append(.action("Go to Line…", systemImage: "text.line.first.and.arrowtriangle.forward", action: {
                 self.onGoToLineRequested?()
+            }))
+        }
+        if let onAskAIAgent {
+            if !items.isEmpty { items.append(.separator) }
+            items.append(.action("Ask AI Agent…", systemImage: "sparkles", action: {
+                onAskAIAgent(nil)
+            }))
+            items.append(.action("Explain with AI Agent", systemImage: "text.bubble", action: {
+                onAskAIAgent("Explain the attached code, its control flow, and any subtle edge cases.")
+            }))
+            items.append(.action("Review & Fix with AI Agent", systemImage: "wrench.and.screwdriver", action: {
+                onAskAIAgent("Review the attached code for bugs, concurrency issues, or improvements, and propose or apply a clean fix.")
             }))
         }
         if !items.isEmpty { items.append(.separator) }

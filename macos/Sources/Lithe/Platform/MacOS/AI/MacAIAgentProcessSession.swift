@@ -12,6 +12,7 @@ final class MacAIAgentProcessSession: AIAgentProcessSession, @unchecked Sendable
     private let processRegistry: ManagedProcessRegistry
     private let ownerModuleID: ModuleID
     private let lock = NSLock()
+    private let stdinWriteQueue = DispatchQueue(label: "dev.lithe.ai-agent.stdin", qos: .userInitiated)
     private var process: MacManagedProcess?
     private var registryToken: UUID?
     private var inputPipe: Pipe?
@@ -119,43 +120,48 @@ final class MacAIAgentProcessSession: AIAgentProcessSession, @unchecked Sendable
 
         if let stdinData = request.standardInput {
             let writeHandle = inputPipe.fileHandleForWriting
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            stdinWriteQueue.async { [weak self] in
                 guard let self else {
                     try? writeHandle.close()
                     return
                 }
-                let stopped = self.lock.withLock { self.isStopped }
-                guard !stopped else {
-                    try? writeHandle.close()
-                    return
-                }
-                var offset = 0
-                let chunkSize = 16_384
-                while offset < stdinData.count {
-                    if self.lock.withLock({ self.isStopped }) { break }
-                    let end = min(offset + chunkSize, stdinData.count)
-                    let slice = stdinData[offset..<end]
-                    do {
-                        try writeHandle.write(contentsOf: slice)
-                    } catch {
-                        break
-                    }
-                    offset = end
-                }
+                self.writeChunked(stdinData, to: writeHandle)
                 try? writeHandle.close()
             }
         }
     }
 
     func writeStandardInput(_ data: Data) throws {
-        let handle = lock.withLock { inputPipe?.fileHandleForWriting }
+        let handle = lock.withLock { isStopped ? nil : inputPipe?.fileHandleForWriting }
         guard let handle else { return }
-        try handle.write(contentsOf: data)
+        stdinWriteQueue.async { [weak self] in
+            guard let self else { return }
+            self.writeChunked(data, to: handle)
+        }
     }
 
     func closeStandardInput() {
         let handle = lock.withLock { inputPipe?.fileHandleForWriting }
-        try? handle?.close()
+        guard let handle else { return }
+        stdinWriteQueue.async {
+            try? handle.close()
+        }
+    }
+
+    private func writeChunked(_ data: Data, to handle: FileHandle) {
+        var offset = 0
+        let chunkSize = 16_384
+        while offset < data.count {
+            if lock.withLock({ isStopped }) { break }
+            let end = min(offset + chunkSize, data.count)
+            let slice = data[offset..<end]
+            do {
+                try handle.write(contentsOf: slice)
+            } catch {
+                break
+            }
+            offset = end
+        }
     }
 
     func stopAndWait() async -> Bool {

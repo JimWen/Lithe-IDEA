@@ -89,6 +89,10 @@ enum LitheActionRegistry {
             action("toggle-cargo", model: model) { model.toggleCargoProject() },
             action("toggle-ai-agent", model: model) { model.toggleAIAgent() },
             action("new-ai-agent-thread", model: model) { model.openNewAIAgentThread() },
+            action("ask-ai-agent", model: model) { model.askAIAgentFromEditor(presetPrompt: nil) },
+            action("explain-with-ai-agent", model: model) {
+                model.askAIAgentFromEditor(presetPrompt: "Explain the attached code, its control flow, and any subtle edge cases.")
+            },
             action("refresh-cargo", model: model) { model.refreshCargoProject() },
             action("cancel-cargo-refresh", model: model) { model.cancelCargoRefresh() },
             action("toggle-go", model: model) { model.toggleGoProject() },

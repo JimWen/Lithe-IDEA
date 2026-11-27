@@ -69,25 +69,28 @@ struct ExternalLibrariesSidebarSection: View {
         ) {
             isRootExpanded.toggle()
         }
-        .contextMenu {
-            Button(usesChinese ? "刷新外部库" : "Refresh External Libraries") {
-                refreshLibrariesAndReloadExpanded()
-            }
-            if snapshot.go != nil {
-                Button(usesChinese ? "配置 Go 环境…" : "Configure Go…") {
-                    model.showSettings(category: .go)
+        .litheContextMenu {
+            var items: [LitheContextMenuItem] = [
+                .action(usesChinese ? "刷新外部库" : "Refresh External Libraries", systemImage: "arrow.clockwise") {
+                    refreshLibrariesAndReloadExpanded()
                 }
+            ]
+            if snapshot.go != nil {
+                items.append(.action(usesChinese ? "配置 Go 环境…" : "Configure Go…", systemImage: "gearshape") {
+                    model.showSettings(category: .go)
+                })
             }
             if snapshot.rust != nil {
-                Button(usesChinese ? "配置 Rust 环境…" : "Configure Rust…") {
+                items.append(.action(usesChinese ? "配置 Rust 环境…" : "Configure Rust…", systemImage: "gearshape") {
                     model.showSettings(category: .rust)
-                }
+                })
             }
             if snapshot.python != nil {
-                Button(usesChinese ? "配置 Python 环境…" : "Configure Python…") {
+                items.append(.action(usesChinese ? "配置 Python 环境…" : "Configure Python…", systemImage: "gearshape") {
                     model.showSettings(category: .python)
-                }
+                })
             }
+            return items
         }
     }
 
@@ -137,27 +140,29 @@ struct ExternalLibrariesSidebarSection: View {
         ) {
             toggleGroup(modulesGroupID)
         }
-        .contextMenu {
+        .litheContextMenu {
+            var items: [LitheContextMenuItem] = []
             if let manifestURL = go.manifestURL {
-                Button(usesChinese ? "打开 go.mod" : "Open go.mod") {
+                items.append(.action(usesChinese ? "打开 go.mod" : "Open go.mod", systemImage: "doc.text") {
                     model.openFile(manifestURL)
-                }
+                })
             }
             if let modCache = go.goModCache {
-                Button(usesChinese ? "在 Finder 中显示 GOMODCACHE" : "Reveal GOMODCACHE in Finder") {
+                items.append(.action(usesChinese ? "在 Finder 中显示 GOMODCACHE" : "Reveal GOMODCACHE in Finder", systemImage: "folder") {
                     model.revealProjectItemInFinder(URL(fileURLWithPath: modCache))
-                }
-                Button(usesChinese ? "复制 GOMODCACHE 路径" : "Copy GOMODCACHE Path") {
+                })
+                items.append(.action(usesChinese ? "复制 GOMODCACHE 路径" : "Copy GOMODCACHE Path", systemImage: "doc.on.doc") {
                     copyToPasteboard(modCache)
-                }
+                })
             }
-            Divider()
-            Button(usesChinese ? "配置 Go 环境…" : "Configure Go…") {
+            if !items.isEmpty { items.append(.separator) }
+            items.append(.action(usesChinese ? "配置 Go 环境…" : "Configure Go…", systemImage: "gearshape") {
                 model.showSettings(category: .go)
-            }
-            Button(usesChinese ? "刷新外部库" : "Refresh External Libraries") {
+            })
+            items.append(.action(usesChinese ? "刷新外部库" : "Refresh External Libraries", systemImage: "arrow.clockwise") {
                 refreshLibrariesAndReloadExpanded()
-            }
+            })
+            return items
         }
 
         if isModulesExpanded {
@@ -221,21 +226,23 @@ struct ExternalLibrariesSidebarSection: View {
         ) {
             toggleGroup(cargoGroupID)
         }
-        .contextMenu {
+        .litheContextMenu {
+            var items: [LitheContextMenuItem] = []
             if let manifestURL = rust.manifestURL {
-                Button(usesChinese ? "打开 Cargo.toml" : "Open Cargo.toml") {
+                items.append(.action(usesChinese ? "打开 Cargo.toml" : "Open Cargo.toml", systemImage: "doc.text") {
                     model.openFile(manifestURL)
-                }
+                })
             }
             if let cargoHome = rust.cargoHome {
-                Button(usesChinese ? "在 Finder 中显示 CARGO_HOME" : "Reveal CARGO_HOME in Finder") {
+                items.append(.action(usesChinese ? "在 Finder 中显示 CARGO_HOME" : "Reveal CARGO_HOME in Finder", systemImage: "folder") {
                     model.revealProjectItemInFinder(URL(fileURLWithPath: cargoHome))
-                }
+                })
             }
-            Divider()
-            Button(usesChinese ? "配置 Rust 环境…" : "Configure Rust…") {
+            if !items.isEmpty { items.append(.separator) }
+            items.append(.action(usesChinese ? "配置 Rust 环境…" : "Configure Rust…", systemImage: "gearshape") {
                 model.showSettings(category: .rust)
-            }
+            })
+            return items
         }
 
         if isCargoExpanded {
@@ -267,21 +274,23 @@ struct ExternalLibrariesSidebarSection: View {
         ) {
             toggleGroup(pyGroupID)
         }
-        .contextMenu {
+        .litheContextMenu {
+            var items: [LitheContextMenuItem] = []
             if let manifestURL = python.manifestURL {
-                Button(usesChinese ? "打开依赖清单" : "Open Manifest") {
+                items.append(.action(usesChinese ? "打开依赖清单" : "Open Manifest", systemImage: "doc.text") {
                     model.openFile(manifestURL)
-                }
+                })
             }
             if let prefix = python.prefixPath {
-                Button(usesChinese ? "在 Finder 中显示环境目录" : "Reveal Environment in Finder") {
+                items.append(.action(usesChinese ? "在 Finder 中显示环境目录" : "Reveal Environment in Finder", systemImage: "folder") {
                     model.revealProjectItemInFinder(URL(fileURLWithPath: prefix))
-                }
+                })
             }
-            Divider()
-            Button(usesChinese ? "配置 Python 环境…" : "Configure Python…") {
+            if !items.isEmpty { items.append(.separator) }
+            items.append(.action(usesChinese ? "配置 Python 环境…" : "Configure Python…", systemImage: "gearshape") {
                 model.showSettings(category: .python)
-            }
+            })
+            return items
         }
 
         if isPyExpanded {
@@ -360,15 +369,17 @@ struct ExternalLibrariesSidebarSection: View {
                     model.openFile(manifestURL)
                 }
             }
-            .contextMenu {
+            .litheContextMenu {
+                var items: [LitheContextMenuItem] = []
                 if let manifestURL = dep.manifestURL {
-                    Button(usesChinese ? "打开清单文件" : "Open Manifest") {
+                    items.append(.action(usesChinese ? "打开清单文件" : "Open Manifest", systemImage: "doc.text") {
                         model.openFile(manifestURL)
-                    }
+                    })
                 }
-                Button(usesChinese ? "复制模块名称" : "Copy Module Name") {
+                items.append(.action(usesChinese ? "复制模块名称" : "Copy Module Name", systemImage: "doc.on.doc") {
                     copyToPasteboard("\(dep.name) \(dep.version)".trimmingCharacters(in: .whitespaces))
-                }
+                })
+                return items
             }
         }
     }
@@ -401,18 +412,20 @@ struct ExternalLibrariesSidebarSection: View {
                     toggleDirectory(url)
                 }
                 .help(path)
-                .contextMenu {
+                .litheContextMenu {
+                    var items: [LitheContextMenuItem] = []
                     if let manifestURL {
-                        Button(usesChinese ? "打开清单文件" : "Open Manifest") {
+                        items.append(.action(usesChinese ? "打开清单文件" : "Open Manifest", systemImage: "doc.text") {
                             model.openFile(manifestURL)
-                        }
+                        })
                     }
-                    Button(usesChinese ? "在 Finder 中显示" : "Reveal in Finder") {
+                    items.append(.action(usesChinese ? "在 Finder 中显示" : "Reveal in Finder", systemImage: "folder") {
                         model.revealProjectItemInFinder(url)
-                    }
-                    Button(usesChinese ? "复制路径" : "Copy Path") {
+                    })
+                    items.append(.action(usesChinese ? "复制路径" : "Copy Path", systemImage: "doc.on.doc") {
                         copyToPasteboard(path)
-                    }
+                    })
+                    return items
                 }
 
                 if isExpanded {
@@ -441,16 +454,18 @@ struct ExternalLibrariesSidebarSection: View {
                                 model.openExternalLibraryFile(entry.url, displayPrefix: displayPrefix)
                             }
                             .help("\(entry.url.path) (\(usesChinese ? "只读" : "Read-only"))")
-                            .contextMenu {
-                                Button(usesChinese ? "以只读方式打开" : "Open Read-Only") {
-                                    model.openExternalLibraryFile(entry.url, displayPrefix: displayPrefix)
-                                }
-                                Button(usesChinese ? "在 Finder 中显示" : "Reveal in Finder") {
-                                    model.revealProjectItemInFinder(entry.url)
-                                }
-                                Button(usesChinese ? "复制路径" : "Copy Path") {
-                                    copyToPasteboard(entry.url.path)
-                                }
+                            .litheContextMenu {
+                                [
+                                    .action(usesChinese ? "以只读方式打开" : "Open Read-Only", systemImage: "doc.text") {
+                                        model.openExternalLibraryFile(entry.url, displayPrefix: displayPrefix)
+                                    },
+                                    .action(usesChinese ? "在 Finder 中显示" : "Reveal in Finder", systemImage: "folder") {
+                                        model.revealProjectItemInFinder(entry.url)
+                                    },
+                                    .action(usesChinese ? "复制路径" : "Copy Path", systemImage: "doc.on.doc") {
+                                        copyToPasteboard(entry.url.path)
+                                    }
+                                ]
                             }
                         }
                     }

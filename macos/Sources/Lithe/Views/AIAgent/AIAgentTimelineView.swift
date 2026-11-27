@@ -212,7 +212,7 @@ private struct AIAgentTurnCardView: View {
                         HStack(spacing: 4) {
                             ForEach(turn.attachments) { attachment in
                                 HStack(spacing: 3) {
-                                    Image(systemName: "doc.text")
+                                    Image(systemName: attachment.imageFilePath != nil ? "photo" : "doc.text")
                                         .font(.system(size: 9))
                                     Text(attachment.displayLabel)
                                         .font(.system(size: 10, design: .monospaced))
@@ -226,11 +226,22 @@ private struct AIAgentTurnCardView: View {
                         }
                     }
                 }
-                Text(turn.prompt)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(LitheTheme.primaryText)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .top, spacing: 6) {
+                    Text(turn.prompt)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(LitheTheme.primaryText)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if turn.permissionMode == .plan {
+                        Text("PLAN")
+                            .font(.system(size: 8.5, weight: .bold))
+                            .foregroundStyle(LitheTheme.accent)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(LitheTheme.accent.opacity(0.14))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                }
             }
             .padding(10)
             .background(LitheTheme.raised.opacity(0.85))
@@ -242,16 +253,27 @@ private struct AIAgentTurnCardView: View {
                 timelineItemView(item)
             }
 
-            // Live running indicator
+            // Live running indicator with elapsed timer
             if turn.status == .running {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.mini)
-                    Text("Working…")
-                        .font(.system(size: 11))
-                        .foregroundStyle(LitheTheme.secondaryText)
+                TimelineView(.periodic(from: turn.startedAt, by: 1)) { context in
+                    let elapsed = max(0, Int(context.date.timeIntervalSince(turn.startedAt)))
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text("Working…")
+                            .font(.system(size: 11))
+                            .foregroundStyle(LitheTheme.secondaryText)
+                        Text(Self.formatElapsed(elapsed))
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(LitheTheme.tertiaryText)
+                    }
+                    .padding(.leading, 4)
                 }
-                .padding(.leading, 4)
+            }
+
+            // T3-Code Plan Proposal action bar on completed Plan turns
+            if turn.isCompletedPlanProposal && !feature.isSelectedThreadRunning {
+                planProposalActionBar
             }
 
             // Changed files summary bar
@@ -554,18 +576,22 @@ private struct AIAgentTurnCardView: View {
 
             if request.decision == nil {
                 HStack(spacing: 6) {
-                    Button("Allow Once") {
-                        feature.respondToApproval(requestID: request.id, decision: .allowOnce)
+                    if request.allowsAllowOnce {
+                        Button("Allow Once") {
+                            feature.respondToApproval(requestID: request.id, decision: .allowOnce)
+                        }
+                        .buttonStyle(LithePrimaryButtonStyle(
+                            backgroundColor: LitheTheme.settingsPrimaryAction,
+                            restingOpacity: 1
+                        ))
                     }
-                    .buttonStyle(LithePrimaryButtonStyle(
-                        backgroundColor: LitheTheme.settingsPrimaryAction,
-                        restingOpacity: 1
-                    ))
 
-                    Button("Allow Always") {
-                        feature.respondToApproval(requestID: request.id, decision: .allowAlways)
+                    if request.allowsAllowAlways {
+                        Button("Allow Always") {
+                            feature.respondToApproval(requestID: request.id, decision: .allowAlways)
+                        }
+                        .buttonStyle(LitheSecondaryButtonStyle())
                     }
-                    .buttonStyle(LitheSecondaryButtonStyle())
 
                     Spacer()
 
@@ -582,11 +608,71 @@ private struct AIAgentTurnCardView: View {
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(LitheTheme.warning.opacity(0.45), lineWidth: 1))
     }
 
+    private var planProposalActionBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "map.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(LitheTheme.accent)
+                Text("Plan ready to implement")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(LitheTheme.primaryText)
+                Spacer()
+            }
+            HStack(spacing: 6) {
+                Button {
+                    feature.implementPlan(from: turn, inNewWorktree: false)
+                } label: {
+                    Label("Implement Plan", systemImage: "play.fill")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(LithePrimaryButtonStyle(
+                    backgroundColor: LitheTheme.settingsPrimaryAction,
+                    restingOpacity: 1
+                ))
+
+                if feature.selectedThread?.worktreePath == nil {
+                    Button {
+                        feature.implementPlan(from: turn, inNewWorktree: true)
+                    } label: {
+                        Label("In Worktree", systemImage: "arrow.triangle.branch")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(LitheSecondaryButtonStyle())
+                    .help("Create an isolated Git worktree and implement this plan there")
+                }
+
+                Spacer()
+
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(turn.assistantResponseText, forType: .string)
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                        .font(.system(size: 10.5))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LitheTheme.secondaryText)
+                .lithePointer()
+            }
+        }
+        .padding(9)
+        .background(LitheTheme.accent.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(LitheTheme.accent.opacity(0.35), lineWidth: 1))
+    }
+
     private var turnFooter: some View {
         HStack(spacing: 8) {
             Text(turn.startedAt.formatted(date: .omitted, time: .shortened))
                 .font(.system(size: 10))
                 .foregroundStyle(LitheTheme.tertiaryText)
+
+            if let duration = turn.durationSeconds, duration >= 0.2 {
+                Text(Self.formatDuration(duration))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(LitheTheme.tertiaryText)
+            }
 
             if turn.status == .cancelled {
                 Text("Cancelled")
@@ -600,7 +686,7 @@ private struct AIAgentTurnCardView: View {
 
             Spacer()
 
-            if let checkpoint = turn.checkpoint, !checkpoint.fileSnapshots.isEmpty {
+            if turn.canRevertCheckpoint, let checkpoint = turn.checkpoint {
                 Button {
                     onRequestRevert(checkpoint)
                 } label: {
@@ -610,10 +696,34 @@ private struct AIAgentTurnCardView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(LitheTheme.warning)
                 .lithePointer()
-                .help("Restore files modified in this turn")
+                .help("Restore workspace files to the pre-turn checkpoint")
             }
 
-            let replyText = turn.items.filter { $0.kind == .assistantText }.map(\.content).joined(separator: "\n\n")
+            if turn.status == .failed || turn.status == .cancelled {
+                Button {
+                    feature.retryTurn(turn)
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                        .font(.system(size: 10.5, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LitheTheme.accent)
+                .lithePointer()
+                .help("Retry this prompt")
+            }
+
+            Button {
+                feature.loadTurnIntoComposer(turn)
+            } label: {
+                Image(systemName: "arrow.uturn.left")
+                    .font(.system(size: 10))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(LitheTheme.tertiaryText)
+            .lithePointer()
+            .help("Edit prompt in composer")
+
+            let replyText = turn.assistantResponseText
             if !replyText.isEmpty {
                 Button {
                     NSPasteboard.general.clearContents()
@@ -629,6 +739,16 @@ private struct AIAgentTurnCardView: View {
             }
         }
         .padding(.horizontal, 2)
+    }
+
+    private static func formatElapsed(_ seconds: Int) -> String {
+        if seconds < 60 { return "\(seconds)s" }
+        return "\(seconds / 60)m \(seconds % 60)s"
+    }
+
+    private static func formatDuration(_ seconds: TimeInterval) -> String {
+        if seconds < 10 { return String(format: "%.1fs", seconds) }
+        return formatElapsed(Int(seconds.rounded()))
     }
 
     @ViewBuilder

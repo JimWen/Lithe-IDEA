@@ -329,6 +329,7 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
         moduleID: ModuleID
     ) {
         moduleCapabilities[id] = CachedModuleCapability(moduleID: moduleID, value: capability)
+        scheduleObjectWillChangeRelay()
     }
 
     func clearModuleBindings(for moduleID: ModuleID) {

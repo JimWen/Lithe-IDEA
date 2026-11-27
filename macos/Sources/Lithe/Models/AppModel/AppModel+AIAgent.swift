@@ -102,27 +102,49 @@ extension AppModel {
 
     func attachActiveEditorContextToAgent() {
         guard let feature = aiAgentFeatureIfActive,
-              let document = activeDocument,
-              let workspaceURL else { return }
-        let rootPath = feature.selectedThread?.effectiveRootPath ?? workspaceURL.standardizedFileURL.path
-        let rootURL = URL(fileURLWithPath: rootPath, isDirectory: true).standardizedFileURL
+              let attachment = makeActiveEditorAttachment(rootPath: feature.selectedThread?.effectiveRootPath) else { return }
+        feature.addAttachment(attachment)
+    }
+
+    func askAIAgentFromEditor(presetPrompt: String? = nil) {
+        guard isAIAgentAvailable else { return }
+        isAIAgentVisible = true
+        isGoVisible = false
+        isCargoVisible = false
+        let attachment = makeActiveEditorAttachment(rootPath: aiAgentFeatureIfActive?.selectedThread?.effectiveRootPath)
+        Task { [weak self] in
+            guard let self, let feature = await self.activateAIAgentModule() else { return }
+            if let attachment {
+                feature.addAttachment(attachment)
+            }
+            if let presetPrompt, !presetPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                feature.sendPrompt(presetPrompt, attachments: feature.attachedContexts)
+                feature.attachedContexts = []
+            }
+        }
+    }
+
+    private func makeActiveEditorAttachment(rootPath: String?) -> AIAgentContextAttachment? {
+        guard let document = activeDocument,
+              let workspaceURL else { return nil }
+        let effectiveRoot = rootPath ?? workspaceURL.standardizedFileURL.path
+        let rootURL = URL(fileURLWithPath: effectiveRoot, isDirectory: true).standardizedFileURL
         guard let relativePath = workspaceRelativePath(for: document.url, root: rootURL)
-            ?? workspaceRelativePath(for: document.url, root: workspaceURL) else { return }
+            ?? workspaceRelativePath(for: document.url, root: workspaceURL) else { return nil }
         let selectedText = editorSelectedText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !selectedText.isEmpty {
             let line = (editorCaret?.line ?? 0) + 1
             let lineCount = max(1, selectedText.split(separator: "\n", omittingEmptySubsequences: false).count)
-            feature.addAttachment(AIAgentContextAttachment(
+            return AIAgentContextAttachment(
                 kind: .selection(
                     relativePath: relativePath,
                     startLine: line,
                     endLine: line + lineCount - 1,
                     snippet: String(selectedText.prefix(8000))
                 )
-            ))
-        } else {
-            feature.addAttachment(AIAgentContextAttachment(kind: .file(relativePath: relativePath)))
+            )
         }
+        return AIAgentContextAttachment(kind: .file(relativePath: relativePath))
     }
 
     func openAIAgentDiffInEditor(relativePath: String, rootPath: String) {
@@ -148,19 +170,102 @@ extension AppModel {
                 let target = url.standardizedFileURL
                 return self?.openDocuments.first(where: { $0.url.standardizedFileURL == target })?.text
             },
-            applyWorkspaceTextEdit: { [weak self] relativePath, expectedSourceText, replacementText, workspaceURL in
+            dirtyOpenDocumentSnapshots: { [weak self] rootURL in
+                guard let self else { return [] }
+                let canonicalRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL
+                return self.openDocuments.compactMap { doc in
+                    guard doc.isDirty else { return nil }
+                    let docURL = doc.url.resolvingSymlinksInPath().standardizedFileURL
+                    guard let relPath = self.workspaceRelativePath(for: docURL, root: canonicalRoot) else {
+                        return nil
+                    }
+                    return (relativePath: relPath, text: doc.text)
+                }
+            },
+            applyWorkspaceTextEdit: { [weak self] relativePath, expectedSourceText, replacementText, workspaceURL, persistToDisk in
                 guard let self else { return false }
-                let edit = WorkspaceTextEdit(
-                    path: relativePath,
-                    sourceText: expectedSourceText,
-                    replacementText: replacementText,
-                    sourceIdentity: ""
+                let targetURL = workspaceURL.appendingPathComponent(relativePath).standardizedFileURL
+                let previousOpenText = self.openDocuments
+                    .first(where: { $0.url.standardizedFileURL == targetURL })?.text
+                var didApplyEdit = false
+                if expectedSourceText != replacementText {
+                    let edit = WorkspaceTextEdit(
+                        path: relativePath,
+                        sourceText: expectedSourceText,
+                        replacementText: replacementText,
+                        sourceIdentity: ""
+                    )
+                    let result = await self.services.workspaceTextEditUndoController.apply(
+                        [edit],
+                        at: workspaceURL
+                    )
+                    guard result.state == .applied else { return false }
+                    didApplyEdit = true
+                }
+                if persistToDisk,
+                   let openDoc = self.openDocuments.first(where: { $0.url.standardizedFileURL == targetURL }) {
+                    let diskBytes = try? Data(contentsOf: targetURL)
+                    if openDoc.isDirty || diskBytes != Data(replacementText.utf8) {
+                        do {
+                            let saved = try await self.saveDocument(openDoc)
+                            if !saved {
+                                if didApplyEdit, let previousOpenText {
+                                    _ = await self.services.workspaceTextEditUndoController.apply(
+                                        [WorkspaceTextEdit(
+                                            path: relativePath,
+                                            sourceText: replacementText,
+                                            replacementText: previousOpenText,
+                                            sourceIdentity: ""
+                                        )],
+                                        at: workspaceURL
+                                    )
+                                }
+                                return false
+                            }
+                        } catch {
+                            if didApplyEdit, let previousOpenText {
+                                _ = await self.services.workspaceTextEditUndoController.apply(
+                                    [WorkspaceTextEdit(
+                                        path: relativePath,
+                                        sourceText: replacementText,
+                                        replacementText: previousOpenText,
+                                        sourceIdentity: ""
+                                    )],
+                                    at: workspaceURL
+                                )
+                            }
+                            throw error
+                        }
+                    }
+                }
+                return true
+            },
+            generateAICommitMessage: { [weak self] workingTreeDiff in
+                guard let self else { return nil }
+                self.refreshAIConfigurations()
+                guard self.settings.commitMessageAI.activeProvider != nil else { return nil }
+                let value = try await self.services.moduleRuntime.activateCapability(.aiCommitMessage)
+                guard let capability = value as? any AICommitMessageGenerating else { return nil }
+                defer { try? self.services.moduleRuntime.markIdle(.aiAssistance) }
+                let fileInputs: [CommitMessageFileInput] = workingTreeDiff.files.prefix(40).map { file in
+                    let kind: CommitMessageChangeKind
+                    switch file.kind {
+                    case .added: kind = .added
+                    case .modified: kind = .modified
+                    case .deleted: kind = .deleted
+                    case .renamed: kind = .renamed
+                    }
+                    return CommitMessageFileInput(
+                        path: file.path,
+                        changeKind: kind,
+                        diff: String(file.diffText.prefix(4000))
+                    )
+                }
+                guard !fileInputs.isEmpty else { return nil }
+                return try await capability.generateCommitMessage(
+                    input: CommitMessageInput(files: fileInputs),
+                    settings: self.settings.commitMessageAI
                 )
-                let result = await self.services.workspaceTextEditUndoController.apply(
-                    [edit],
-                    at: workspaceURL
-                )
-                return result.state == .applied
             },
             openFile: { [weak self] url in self?.openFile(url) },
             openDiffForRelativePath: { [weak self] relPath, rootPath in

@@ -71,6 +71,8 @@ enum LitheCommandCatalog {
         command("toggle-cargo", "Cargo", "Show or hide the Cargo tool window", .window),
         command("toggle-ai-agent", "AI Agent", "Show or hide the AI Agent tool window", .window, "l", [.shift, .command]),
         command("new-ai-agent-thread", "AI Agent: New Thread", "Start a new AI Agent conversation thread", .window),
+        command("ask-ai-agent", "AI Agent: Ask About Selection", "Send the active file or selection to AI Agent", .window),
+        command("explain-with-ai-agent", "AI Agent: Explain Selection", "Ask AI Agent to explain the active file or selection", .window),
         command("refresh-cargo", "Cargo: Refresh", "Reload Cargo workspace metadata", .project),
         command("cancel-cargo-refresh", "Cargo: Cancel Refresh", "Stop reading Cargo workspace metadata", .project),
         command("toggle-go", "Go Tools", "Show or hide the Go Tools tool window", .window),

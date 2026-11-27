@@ -1,6 +1,8 @@
+import AppKit
 import LitheAIAgentModule
 import LitheCoreContracts
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AIAgentToolWindowView: View {
     @EnvironmentObject private var model: AppModel
@@ -70,8 +72,14 @@ private struct AIAgentPanelView: View {
     @State private var newWorktreeBranchDraft = ""
     @State private var renamingThreadID: UUID?
     @State private var renameDraft = ""
+    @State private var isDropTargeted = false
 
+    private static let supportedImageExtensions: Set<String> = ["png", "jpg", "jpeg", "webp", "gif"]
     private var activeThread: AIAgentThread? { feature.selectedThread }
+
+    private var runningThreadCount: Int {
+        feature.threads.filter(\.isRunning).count
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -98,6 +106,17 @@ private struct AIAgentPanelView: View {
 
             Rectangle().fill(LitheTheme.divider).frame(height: 1)
             AIAgentComposerView(feature: feature)
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(LitheTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .padding(4)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleDroppedFileProviders(providers)
         }
         .sheet(isPresented: $isNewWorktreeSheetPresented) {
             newWorktreeDialog
@@ -138,6 +157,17 @@ private struct AIAgentPanelView: View {
             }
 
             Spacer(minLength: 4)
+
+            if runningThreadCount > 0 && !(activeThread?.isRunning ?? false) {
+                Text("\(runningThreadCount) active")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(LitheTheme.accent)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(LitheTheme.accent.opacity(0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .help("Background AI Agent threads are running")
+            }
 
             Button {
                 _ = feature.createThread()
@@ -241,6 +271,21 @@ private struct AIAgentPanelView: View {
                     }
                 }
                 Divider()
+                Button("Fork Thread") {
+                    if let id = activeThread?.id {
+                        _ = feature.forkThread(id)
+                    }
+                }
+                Button("Copy Transcript as Markdown") {
+                    if let id = activeThread?.id {
+                        let md = feature.exportThreadMarkdown(id)
+                        if !md.isEmpty {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(md, forType: .string)
+                            model.showNotification("Copied AI Agent transcript as Markdown")
+                        }
+                    }
+                }
                 Button("Refresh Git Diff") {
                     Task { await feature.refreshWorkingTreeDiff() }
                 }
@@ -499,22 +544,87 @@ private struct AIAgentPanelView: View {
             feature.selectThread(thread.id)
             isThreadDrawerPresented = false
         }
-        .contextMenu {
-            Button(thread.isPinned ? "Unpin" : "Pin") {
-                feature.togglePinThread(thread.id)
-            }
-            Button("Rename…") {
-                renameDraft = thread.title
-                renamingThreadID = thread.id
-            }
-            Button(thread.isArchived ? "Unarchive" : "Archive") {
-                feature.toggleArchiveThread(thread.id)
-            }
-            Divider()
-            Button("Delete", role: .destructive) {
-                Task { await feature.deleteThread(thread.id) }
+        .litheContextMenu {
+            [
+                .action(thread.isPinned ? "Unpin" : "Pin", systemImage: thread.isPinned ? "pin.slash" : "pin") {
+                    feature.togglePinThread(thread.id)
+                },
+                .action("Fork Thread", systemImage: "arrow.triangle.branch") {
+                    _ = feature.forkThread(thread.id)
+                    isThreadDrawerPresented = false
+                },
+                .action("Copy Markdown", systemImage: "doc.on.doc") {
+                    let md = feature.exportThreadMarkdown(thread.id)
+                    if !md.isEmpty {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(md, forType: .string)
+                        model.showNotification("Copied AI Agent transcript as Markdown")
+                    }
+                },
+                .action("Rename…", systemImage: "pencil") {
+                    renameDraft = thread.title
+                    renamingThreadID = thread.id
+                },
+                .action(thread.isArchived ? "Unarchive" : "Archive", systemImage: "archivebox") {
+                    feature.toggleArchiveThread(thread.id)
+                },
+                .separator,
+                .action("Delete", systemImage: "trash", role: .destructive) {
+                    Task { await feature.deleteThread(thread.id) }
+                }
+            ]
+        }
+    }
+
+    private func handleDroppedFileProviders(_ providers: [NSItemProvider]) -> Bool {
+        var accepted = false
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            accepted = true
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                let droppedURL: URL?
+                if let data = item as? Data {
+                    droppedURL = URL(dataRepresentation: data, relativeTo: nil)
+                } else if let url = item as? URL {
+                    droppedURL = url
+                } else if let str = item as? String {
+                    droppedURL = URL(string: str)
+                } else {
+                    droppedURL = nil
+                }
+                guard let url = droppedURL?.standardizedFileURL else { return }
+                Task { @MainActor in
+                    attachDroppedURL(url)
+                }
             }
         }
+        return accepted
+    }
+
+    private func attachDroppedURL(_ url: URL) {
+        let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        guard !isDir else {
+            model.showNotification("Drop individual workspace files or images to attach.")
+            return
+        }
+        let ext = url.pathExtension.lowercased()
+        if Self.supportedImageExtensions.contains(ext) {
+            feature.addAttachment(AIAgentContextAttachment(
+                kind: .image(path: url.path, displayName: url.lastPathComponent)
+            ))
+            return
+        }
+        let rootPath = activeThread?.effectiveRootPath ?? model.workspaceURL?.standardizedFileURL.path
+        if let rootPath {
+            let rootURL = URL(fileURLWithPath: rootPath, isDirectory: true).resolvingSymlinksInPath().standardizedFileURL
+            let canonicalDropped = url.resolvingSymlinksInPath().standardizedFileURL
+            let rootPrefix = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+            if canonicalDropped.path.hasPrefix(rootPrefix) {
+                let relative = String(canonicalDropped.path.dropFirst(rootPrefix.count))
+                feature.addAttachment(AIAgentContextAttachment(kind: .file(relativePath: relative)))
+                return
+            }
+        }
+        model.showNotification("Drop files from inside the active workspace or an image file to attach.")
     }
 
     private var newWorktreeDialog: some View {
