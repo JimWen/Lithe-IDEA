@@ -31,6 +31,9 @@ SWIFT_BUILD_ARGS=(
     -Xswiftc -Xfrontend
     -Xswiftc -disable-round-trip-debug-types
 )
+if [[ -n "${LITHE_SWIFT_BUILD_SYSTEM:-}" ]]; then
+    SWIFT_BUILD_ARGS+=(--build-system "$LITHE_SWIFT_BUILD_SYSTEM")
+fi
 
 # The verifier links the public SDK and shared language resource support. Building
 # every product also recompiles the macOS application and exposes this focused

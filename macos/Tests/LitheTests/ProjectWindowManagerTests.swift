@@ -150,7 +150,7 @@ struct ProjectWindowManagerTests {
     }
 
     private func makeWindow() -> NSWindow {
-        let window = NSWindow(
+        let window = NonBlockingCloseTestWindow(
             contentRect: NSRect(x: 40, y: 40, width: 480, height: 300),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false
         )
@@ -580,6 +580,18 @@ struct ProjectWindowManagerTests {
         }
         await fixture.manager.stopAllSessions()
         try FileManager.default.removeItem(at: fixture.root)
+    }
+}
+
+/// Exercises the real `windowShouldClose` -> `close()` AppKit lifecycle without running
+/// `NSButtonCell.performClick`'s nested event-tracking loop, which can trigger a stray
+/// `CFRunLoopStop` on Swift 6.4's `CFMainExecutor` during headless `swift-testing` runs.
+@MainActor
+private final class NonBlockingCloseTestWindow: NSWindow {
+    override func performClose(_ sender: Any?) {
+        if delegate?.windowShouldClose?(self) ?? true {
+            close()
+        }
     }
 }
 

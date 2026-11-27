@@ -64,6 +64,9 @@ fi
 RUST_LIBRARY="$(scripts/build-rust-core.sh "${RUST_BUILD_ARGS[@]}")"
 
 SWIFT_ARGS=(build --disable-sandbox)
+if [[ -n "${LITHE_SWIFT_BUILD_SYSTEM:-}" ]]; then
+    SWIFT_ARGS+=(--build-system "$LITHE_SWIFT_BUILD_SYSTEM")
+fi
 if [[ -n "$TRIPLE" ]]; then
     # Newer SwiftPM layouts place triple products below a shared .build/out.
     # Give that layout one scratch root per architecture; preserve older layouts.
