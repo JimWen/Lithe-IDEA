@@ -30,6 +30,18 @@ public final class AIAgentFeatureModel: ObservableObject {
     private weak var host: (any AIAgentWorkspaceHost)?
     private var onBeginActiveRun: (@MainActor (UUID, @escaping @MainActor () async -> Void) -> (() -> Void))?
 
+    private struct DeltaBufferKey: Hashable {
+        let threadID: UUID
+        let turnID: UUID
+        let itemID: String
+        let isReasoning: Bool
+    }
+
+    private struct BufferedDelta {
+        var text: String
+        var isReplacement: Bool
+    }
+
     private var activeWorkspacePath: String?
     private var diffRefreshGeneration: UInt64 = 0
     private var runningTasksByThread: [UUID: Task<Void, Never>] = [:]
@@ -37,6 +49,11 @@ public final class AIAgentFeatureModel: ObservableObject {
     private var pendingApprovals: [UUID: CheckedContinuation<AIAgentApprovalDecision, Never>] = [:]
     private var alwaysAllowedKindsByThread: [UUID: Set<AIAgentApprovalKind>] = [:]
     private var activeCleanupHandlersByThread: [UUID: () -> Void] = [:]
+    private var pendingTextDeltas: [DeltaBufferKey: BufferedDelta] = [:]
+    private var pendingDeltaOrder: [DeltaBufferKey] = []
+    private var deltaFlushTask: Task<Void, Never>?
+    private var lastDeltaFlushUptime: TimeInterval = 0
+    private static let deltaCoalesceInterval: TimeInterval = 0.04
 
     public init(
         runner: AIAgentTurnRunner,
@@ -148,15 +165,19 @@ public final class AIAgentFeatureModel: ObservableObject {
         guard let workspacePath = activeWorkspacePath ?? host?.workspacePath else { return nil }
         let settings = host?.agentSettings ?? .default
         let resolvedBackend = backend ?? settings.defaultBackend
-        let resolvedModel = model ?? settings.defaultModel(for: resolvedBackend)
+        let normalized = AIAgentModelCatalog.normalize(
+            model: model ?? settings.defaultModel(for: resolvedBackend),
+            effort: settings.defaultReasoningEffort,
+            backend: resolvedBackend
+        )
         let thread = AIAgentThread(
             title: worktree.map { "Worktree · \($0.branchName)" } ?? "New Thread",
             workspacePath: workspacePath,
             worktreePath: worktree?.path,
             worktreeBranch: worktree?.branchName,
             backend: resolvedBackend,
-            model: resolvedModel,
-            reasoningEffort: settings.defaultReasoningEffort,
+            model: normalized.model,
+            reasoningEffort: normalized.effort,
             permissionMode: permissionMode ?? settings.defaultPermissionMode
         )
         threads.insert(thread, at: 0)
@@ -437,9 +458,14 @@ public final class AIAgentFeatureModel: ObservableObject {
         guard threads[index].backend != backend else { return }
         threads[index].backend = backend
         threads[index].providerSessionID = nil
-        if let settings = host?.agentSettings {
-            threads[index].model = settings.defaultModel(for: backend)
-        }
+        let rawModel = host?.agentSettings.defaultModel(for: backend) ?? ""
+        let normalized = AIAgentModelCatalog.normalize(
+            model: rawModel,
+            effort: threads[index].reasoningEffort,
+            backend: backend
+        )
+        threads[index].model = normalized.model
+        threads[index].reasoningEffort = normalized.effort
         threads[index].updatedAt = Date()
         persistThreads()
     }
@@ -447,7 +473,13 @@ public final class AIAgentFeatureModel: ObservableObject {
     public func updateSelectedThreadModel(_ model: String) {
         guard let threadID = selectedThreadID,
               let index = threads.firstIndex(where: { $0.id == threadID }) else { return }
-        threads[index].model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = AIAgentModelCatalog.normalize(
+            model: model,
+            effort: threads[index].reasoningEffort,
+            backend: threads[index].backend
+        )
+        threads[index].model = normalized.model
+        threads[index].reasoningEffort = normalized.effort
         threads[index].updatedAt = Date()
         persistThreads()
     }
@@ -455,7 +487,11 @@ public final class AIAgentFeatureModel: ObservableObject {
     public func updateSelectedThreadEffort(_ effort: AIAgentReasoningEffort) {
         guard let threadID = selectedThreadID,
               let index = threads.firstIndex(where: { $0.id == threadID }) else { return }
-        threads[index].reasoningEffort = effort
+        let supported = AIAgentModelCatalog.supportedEfforts(
+            for: threads[index].model,
+            backend: threads[index].backend
+        )
+        threads[index].reasoningEffort = AIAgentModelCatalog.clampEffort(effort, supported: supported)
         threads[index].updatedAt = Date()
         persistThreads()
     }
@@ -584,6 +620,7 @@ public final class AIAgentFeatureModel: ObservableObject {
             }
         }
 
+        flushPendingTextDeltas()
         runningTasksByThread[threadID]?.cancel()
         if let process = activeProcessesByThread.removeValue(forKey: threadID) {
             _ = await process.stopAndWait()
@@ -618,6 +655,10 @@ public final class AIAgentFeatureModel: ObservableObject {
     /// so a new turn started immediately after `loadWorkspace` is never killed
     /// by a deferred teardown task from the previous workspace.
     private func cancelAllActiveTurnsSnapshot() {
+        deltaFlushTask?.cancel()
+        deltaFlushTask = nil
+        pendingTextDeltas.removeAll()
+        pendingDeltaOrder.removeAll()
         let oldTasks = runningTasksByThread
         let oldProcesses = activeProcessesByThread
         let oldApprovals = pendingApprovals
@@ -1054,6 +1095,7 @@ public final class AIAgentFeatureModel: ObservableObject {
         preTurnChangedPaths: Set<String>,
         preTurnTreeHash: String?
     ) {
+        flushPendingTextDeltas()
         runningTasksByThread.removeValue(forKey: threadID)
         activeProcessesByThread.removeValue(forKey: threadID)
         if let cleanup = activeCleanupHandlersByThread.removeValue(forKey: threadID) {
@@ -1158,44 +1200,34 @@ public final class AIAgentFeatureModel: ObservableObject {
         }
 
         switch event {
-        case .sessionEstablished(let sessionID):
-            threads[tIndex].providerSessionID = sessionID
-
         case .assistantTextDelta(let itemID, let text, let isReplacement):
-            if let existing = threads[tIndex].turns[turnIndex].items.firstIndex(where: { $0.id == itemID }) {
-                if isReplacement {
-                    threads[tIndex].turns[turnIndex].items[existing].content = text
-                } else {
-                    threads[tIndex].turns[turnIndex].items[existing].content.append(text)
-                }
-            } else {
-                threads[tIndex].turns[turnIndex].items.append(AIAgentTimelineItem(
-                    id: itemID,
-                    kind: .assistantText,
-                    content: text,
-                    status: .running
-                ))
-            }
+            enqueueTextDelta(
+                threadID: threadID,
+                turnID: turnID,
+                itemID: itemID,
+                text: text,
+                isReplacement: isReplacement,
+                isReasoning: false
+            )
+            return
 
         case .reasoningDelta(let itemID, let text, let isReplacement):
-            if let existing = threads[tIndex].turns[turnIndex].items.firstIndex(where: { $0.id == itemID }) {
-                if isReplacement {
-                    threads[tIndex].turns[turnIndex].items[existing].content = text
-                } else {
-                    threads[tIndex].turns[turnIndex].items[existing].content.append(text)
-                }
-            } else {
-                threads[tIndex].turns[turnIndex].items.append(AIAgentTimelineItem(
-                    id: itemID,
-                    kind: .reasoning,
-                    title: "Thinking",
-                    content: text,
-                    status: .running,
-                    isCollapsed: true
-                ))
-            }
+            enqueueTextDelta(
+                threadID: threadID,
+                turnID: turnID,
+                itemID: itemID,
+                text: text,
+                isReplacement: isReplacement,
+                isReasoning: true
+            )
+            return
+
+        case .sessionEstablished(let sessionID):
+            flushPendingTextDeltas()
+            threads[tIndex].providerSessionID = sessionID
 
         case .commandUpdated(let itemID, let command, let output, let exitCode, let status):
+            flushPendingTextDeltas()
             let boundedOutput = Self.clampOutput(output)
             if let existing = threads[tIndex].turns[turnIndex].items.firstIndex(where: { $0.id == itemID }) {
                 if !command.isEmpty { threads[tIndex].turns[turnIndex].items[existing].title = command }
@@ -1215,6 +1247,7 @@ public final class AIAgentFeatureModel: ObservableObject {
             }
 
         case .toolCallUpdated(let itemID, let name, let inputSummary, let output, let status):
+            flushPendingTextDeltas()
             let boundedOutput = Self.clampOutput(output)
             if let existing = threads[tIndex].turns[turnIndex].items.firstIndex(where: { $0.id == itemID }) {
                 threads[tIndex].turns[turnIndex].items[existing].title = name
@@ -1234,6 +1267,7 @@ public final class AIAgentFeatureModel: ObservableObject {
             }
 
         case .fileChangesUpdated(let itemID, let changes, let status):
+            flushPendingTextDeltas()
             if let existing = threads[tIndex].turns[turnIndex].items.firstIndex(where: { $0.id == itemID }) {
                 threads[tIndex].turns[turnIndex].items[existing].fileChanges = changes
                 threads[tIndex].turns[turnIndex].items[existing].status = status
@@ -1251,6 +1285,7 @@ public final class AIAgentFeatureModel: ObservableObject {
             }
 
         case .systemNotice(let notice):
+            flushPendingTextDeltas()
             threads[tIndex].turns[turnIndex].items.append(AIAgentTimelineItem(
                 kind: .systemNotice,
                 title: "Notice",
@@ -1259,10 +1294,12 @@ public final class AIAgentFeatureModel: ObservableObject {
             ))
 
         case .usage(let usage):
+            flushPendingTextDeltas()
             threads[tIndex].turns[turnIndex].usage = usage
             threads[tIndex].totalUsage.add(usage)
 
         case .failed(let message):
+            flushPendingTextDeltas()
             threads[tIndex].turns[turnIndex].errorMessage = message
             let alreadyReported = threads[tIndex].turns[turnIndex].items.last.map {
                 $0.kind == .error && $0.content == message
@@ -1278,11 +1315,95 @@ public final class AIAgentFeatureModel: ObservableObject {
         }
     }
 
+    private func enqueueTextDelta(
+        threadID: UUID,
+        turnID: UUID,
+        itemID: String,
+        text: String,
+        isReplacement: Bool,
+        isReasoning: Bool
+    ) {
+        let key = DeltaBufferKey(
+            threadID: threadID,
+            turnID: turnID,
+            itemID: itemID,
+            isReasoning: isReasoning
+        )
+        if var existing = pendingTextDeltas[key] {
+            if isReplacement {
+                existing.text = text
+                existing.isReplacement = true
+            } else {
+                existing.text.append(text)
+            }
+            pendingTextDeltas[key] = existing
+        } else {
+            pendingTextDeltas[key] = BufferedDelta(text: text, isReplacement: isReplacement)
+            pendingDeltaOrder.append(key)
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastDeltaFlushUptime >= Self.deltaCoalesceInterval {
+            flushPendingTextDeltas()
+            return
+        }
+        guard deltaFlushTask == nil else { return }
+        let delayNanos = UInt64(Self.deltaCoalesceInterval * 1_000_000_000)
+        deltaFlushTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanos)
+            guard !Task.isCancelled else { return }
+            self?.flushPendingTextDeltas()
+        }
+    }
+
+    private func flushPendingTextDeltas() {
+        deltaFlushTask?.cancel()
+        deltaFlushTask = nil
+        guard !pendingDeltaOrder.isEmpty else { return }
+        let order = pendingDeltaOrder
+        let buffered = pendingTextDeltas
+        pendingDeltaOrder.removeAll(keepingCapacity: true)
+        pendingTextDeltas.removeAll(keepingCapacity: true)
+        lastDeltaFlushUptime = ProcessInfo.processInfo.systemUptime
+
+        for key in order {
+            guard let delta = buffered[key],
+                  let tIndex = threads.firstIndex(where: { $0.id == key.threadID }),
+                  let turnIndex = threads[tIndex].turns.firstIndex(where: { $0.id == key.turnID }) else {
+                continue
+            }
+            if let existing = threads[tIndex].turns[turnIndex].items.firstIndex(where: { $0.id == key.itemID }) {
+                if delta.isReplacement {
+                    threads[tIndex].turns[turnIndex].items[existing].content = delta.text
+                } else {
+                    threads[tIndex].turns[turnIndex].items[existing].content.append(delta.text)
+                }
+            } else if key.isReasoning {
+                threads[tIndex].turns[turnIndex].items.append(AIAgentTimelineItem(
+                    id: key.itemID,
+                    kind: .reasoning,
+                    title: "Thinking",
+                    content: delta.text,
+                    status: .running,
+                    isCollapsed: true
+                ))
+            } else {
+                threads[tIndex].turns[turnIndex].items.append(AIAgentTimelineItem(
+                    id: key.itemID,
+                    kind: .assistantText,
+                    content: delta.text,
+                    status: .running
+                ))
+            }
+        }
+    }
+
     private func awaitApproval(
         _ request: AIAgentApprovalRequest,
         threadID: UUID,
         turnID: UUID
     ) async -> AIAgentApprovalDecision {
+        flushPendingTextDeltas()
         if request.cacheAlwaysAllowByKind,
            alwaysAllowedKindsByThread[threadID]?.contains(request.kind) == true {
             return .allowAlways
@@ -1434,12 +1555,17 @@ public final class AIAgentFeatureModel: ObservableObject {
 
     private func makeDefaultThread(workspacePath: String) -> AIAgentThread {
         let settings = host?.agentSettings ?? .default
+        let normalized = AIAgentModelCatalog.normalize(
+            model: settings.defaultModel(for: settings.defaultBackend),
+            effort: settings.defaultReasoningEffort,
+            backend: settings.defaultBackend
+        )
         return AIAgentThread(
             title: "New Thread",
             workspacePath: workspacePath,
             backend: settings.defaultBackend,
-            model: settings.defaultModel(for: settings.defaultBackend),
-            reasoningEffort: settings.defaultReasoningEffort,
+            model: normalized.model,
+            reasoningEffort: normalized.effort,
             permissionMode: settings.defaultPermissionMode
         )
     }
@@ -1453,6 +1579,13 @@ public final class AIAgentFeatureModel: ObservableObject {
 
     private static func sanitizingInterruptedTurns(_ thread: AIAgentThread) -> AIAgentThread {
         var copy = thread
+        let normalized = AIAgentModelCatalog.normalize(
+            model: copy.model,
+            effort: copy.reasoningEffort,
+            backend: copy.backend
+        )
+        copy.model = normalized.model
+        copy.reasoningEffort = normalized.effort
         for index in copy.turns.indices where copy.turns[index].isInFlight {
             copy.turns[index].status = .cancelled
             copy.turns[index].completedAt = copy.turns[index].completedAt ?? Date()

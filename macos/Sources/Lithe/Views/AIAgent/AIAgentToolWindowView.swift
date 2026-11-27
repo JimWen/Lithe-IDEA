@@ -129,51 +129,52 @@ private struct AIAgentPanelView: View {
     }
 
     private var headerBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             Button {
                 isThreadDrawerPresented.toggle()
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     statusDot(for: activeThread)
                     Text(activeThread?.title ?? "AI Agent")
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(LitheTheme.primaryText)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: 8.5, weight: .semibold))
                         .foregroundStyle(LitheTheme.secondaryText)
                 }
-                .padding(.horizontal, 7)
+                .padding(.horizontal, 6)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .frame(height: 24)
                 .background(LitheTheme.raised.opacity(0.65))
                 .clipShape(RoundedRectangle(cornerRadius: 5))
             }
             .buttonStyle(.plain)
+            .layoutPriority(-1)
             .lithePointer()
             .help("Switch or manage AI Agent threads")
             .popover(isPresented: $isThreadDrawerPresented, arrowEdge: .bottom) {
                 threadDrawerPopover
             }
 
-            Spacer(minLength: 4)
-
             if runningThreadCount > 0 && !(activeThread?.isRunning ?? false) {
-                Text("\(runningThreadCount) active")
-                    .font(.system(size: 9.5, weight: .semibold))
+                Text("\(runningThreadCount)")
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(LitheTheme.accent)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
                     .background(LitheTheme.accent.opacity(0.14))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .help("Background AI Agent threads are running")
+                    .fixedSize()
+                    .help("\(runningThreadCount) background AI Agent thread(s) running")
             }
 
             Button {
                 _ = feature.createThread()
             } label: {
                 Image(systemName: "square.and.pencil")
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
             }
             .litheIconButton()
             .help("New Thread")
@@ -184,7 +185,7 @@ private struct AIAgentPanelView: View {
                 model.showSettings(category: .ai)
             } label: {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
             }
             .litheIconButton()
             .help("AI Agent Settings")
@@ -198,7 +199,7 @@ private struct AIAgentPanelView: View {
             .litheIconButton()
             .help("Hide AI Agent")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .frame(height: 36)
         .background(LitheTheme.toolHeader)
     }
@@ -213,26 +214,39 @@ private struct AIAgentPanelView: View {
                 Task { await feature.refreshWorkingTreeDiff() }
             }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "doc.text.magnifyingglass")
-                    .font(.system(size: 11, weight: .medium))
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    if adds > 0 {
-                        Text("+\(adds)")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(LitheTheme.success)
-                    }
-                    if dels > 0 {
-                        Text("-\(dels)")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(LitheTheme.error)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 11, weight: .medium))
+                    if count > 0 {
+                        Text("\(count)")
+                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        if adds > 0 {
+                            Text("+\(adds)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(LitheTheme.success)
+                        }
+                        if dels > 0 {
+                            Text("-\(dels)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(LitheTheme.error)
+                        }
                     }
                 }
+                .fixedSize()
+
+                HStack(spacing: 3) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 11, weight: .medium))
+                    if count > 0 {
+                        Text("\(count)")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    }
+                }
+                .fixedSize()
             }
             .foregroundStyle(feature.isDiffPanelVisible ? LitheTheme.accent : LitheTheme.secondaryText)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 5)
             .frame(height: 22)
             .background(
                 feature.isDiffPanelVisible
@@ -243,7 +257,7 @@ private struct AIAgentPanelView: View {
         }
         .buttonStyle(.plain)
         .lithePointer()
-        .help("Toggle Diff Review & Commit")
+        .help(count > 0 ? "Toggle Diff Review (\(count) files, +\(adds)/-\(dels))" : "Toggle Diff Review & Commit")
     }
 
     private var contextStrip: some View {
@@ -301,6 +315,7 @@ private struct AIAgentPanelView: View {
                         .font(.system(size: 10.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(LitheTheme.primaryText)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                     if activeThread?.worktreeBranch != nil {
                         Text("WT")
                             .font(.system(size: 8.5, weight: .bold))
@@ -311,9 +326,11 @@ private struct AIAgentPanelView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
                 }
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             }
             .menuStyle(.borderlessButton)
-            .fixedSize()
+            .menuIndicator(.hidden)
+            .layoutPriority(-1)
             .lithePointer()
 
             Spacer(minLength: 4)
@@ -329,16 +346,18 @@ private struct AIAgentPanelView: View {
                             .foregroundStyle(LitheTheme.tertiaryText)
                     }
                 }
+                .fixedSize()
             }
 
             if let sessionID = activeThread?.providerSessionID, !sessionID.isEmpty {
                 Text("#\(sessionID.prefix(6))")
                     .font(.system(size: 9.5, design: .monospaced))
                     .foregroundStyle(LitheTheme.tertiaryText)
+                    .fixedSize()
                     .help("Provider session: \(sessionID)")
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .frame(height: 26)
         .background(LitheTheme.sidebar)
     }

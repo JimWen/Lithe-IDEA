@@ -24,29 +24,45 @@ struct AIAgentDiffReviewPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Button {
                     feature.isDiffPanelVisible = false
                 } label: {
-                    Label("Back to Chat", systemImage: "chevron.left")
-                        .font(.system(size: 11, weight: .medium))
+                    ViewThatFits(in: .horizontal) {
+                        Label("Back to Chat", systemImage: "chevron.left")
+                            .font(.system(size: 11, weight: .medium))
+                            .fixedSize()
+                        Label("Back", systemImage: "chevron.left")
+                            .font(.system(size: 11, weight: .medium))
+                            .fixedSize()
+                    }
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(LitheTheme.accent)
                 .lithePointer()
 
-                Spacer()
+                Spacer(minLength: 4)
 
                 if !diff.files.isEmpty {
-                    Text("\(diff.files.count) files")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(LitheTheme.secondaryText)
-                    Text("+\(diff.totalAdditions)")
-                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(LitheTheme.success)
-                    Text("-\(diff.totalDeletions)")
-                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(LitheTheme.error)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 6) {
+                            Text("\(diff.files.count) files")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(LitheTheme.secondaryText)
+                            Text("+\(diff.totalAdditions)")
+                                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(LitheTheme.success)
+                            Text("-\(diff.totalDeletions)")
+                                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(LitheTheme.error)
+                        }
+                        .fixedSize()
+
+                        Text("\(diff.files.count)f")
+                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(LitheTheme.secondaryText)
+                            .fixedSize()
+                    }
 
                     Button {
                         if areAllExpanded {
@@ -72,7 +88,7 @@ struct AIAgentDiffReviewPanel: View {
                 .disabled(feature.isLoadingDiff)
                 .help("Refresh Diff")
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 8)
             .frame(height: 30)
             .background(LitheTheme.raised.opacity(0.5))
 
@@ -320,53 +336,75 @@ struct AIAgentDiffReviewPanel: View {
             }
 
             let isMessageEmpty = commitMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            HStack(spacing: 6) {
-                Button {
-                    let message = commitMessageDraft
-                    Task {
-                        if await feature.commitWorkingTreeChanges(message: message) {
-                            commitMessageDraft = ""
-                        }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    commitButton(disabled: isMessageEmpty)
+                    commitAndPushButton(disabled: isMessageEmpty)
+                    pushOnlyIconButton
+                    Spacer(minLength: 0)
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        commitButton(disabled: isMessageEmpty)
+                        pushOnlyIconButton
+                        Spacer(minLength: 0)
                     }
-                } label: {
-                    Label("Commit", systemImage: "checkmark.circle")
-                        .font(.system(size: 11.5, weight: .medium))
+                    commitAndPushButton(disabled: isMessageEmpty)
                 }
-                .buttonStyle(LithePrimaryButtonStyle(
-                    backgroundColor: LitheTheme.settingsPrimaryAction,
-                    restingOpacity: 1
-                ))
-                .disabled(feature.isPerformingGitAction || isMessageEmpty)
-
-                Button {
-                    let message = commitMessageDraft
-                    Task {
-                        if await feature.commitAndPushWorkingTreeChanges(message: message) {
-                            commitMessageDraft = ""
-                        }
-                    }
-                } label: {
-                    Label("Commit & Push", systemImage: "arrow.up.circle.fill")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .buttonStyle(LitheSecondaryButtonStyle())
-                .disabled(feature.isPerformingGitAction || isMessageEmpty)
-
-                Button {
-                    Task { await feature.pushWorkingTreeBranch() }
-                } label: {
-                    Image(systemName: "arrow.up.circle")
-                        .font(.system(size: 12))
-                }
-                .litheIconButton()
-                .disabled(feature.isPerformingGitAction)
-                .help("Push current branch")
-
-                Spacer()
             }
         }
         .padding(10)
         .background(LitheTheme.raised.opacity(0.4))
+    }
+
+    private func commitButton(disabled: Bool) -> some View {
+        Button {
+            let message = commitMessageDraft
+            Task {
+                if await feature.commitWorkingTreeChanges(message: message) {
+                    commitMessageDraft = ""
+                }
+            }
+        } label: {
+            Label("Commit", systemImage: "checkmark.circle")
+        }
+        .buttonStyle(LithePrimaryButtonStyle(
+            backgroundColor: LitheTheme.settingsPrimaryAction,
+            restingOpacity: 1,
+            horizontalPadding: 10,
+            height: 25,
+            fontSize: 11
+        ))
+        .fixedSize()
+        .disabled(feature.isPerformingGitAction || disabled)
+    }
+
+    private func commitAndPushButton(disabled: Bool) -> some View {
+        Button {
+            let message = commitMessageDraft
+            Task {
+                if await feature.commitAndPushWorkingTreeChanges(message: message) {
+                    commitMessageDraft = ""
+                }
+            }
+        } label: {
+            Label("Commit & Push", systemImage: "arrow.up.circle.fill")
+        }
+        .buttonStyle(LitheSecondaryButtonStyle(horizontalPadding: 10, height: 25, fontSize: 11))
+        .fixedSize()
+        .disabled(feature.isPerformingGitAction || disabled)
+    }
+
+    private var pushOnlyIconButton: some View {
+        Button {
+            Task { await feature.pushWorkingTreeBranch() }
+        } label: {
+            Image(systemName: "arrow.up.circle")
+                .font(.system(size: 12))
+        }
+        .litheIconButton()
+        .disabled(feature.isPerformingGitAction)
+        .help("Push current branch")
     }
 
     private func badgeColor(_ kind: AIAgentFileChangeKind) -> Color {

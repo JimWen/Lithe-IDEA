@@ -36,26 +36,365 @@ public enum AIAgentBackendKind: String, CaseIterable, Codable, Identifiable, Sen
     }
 
     public var suggestedModels: [String] {
-        switch self {
-        case .antigravityCLI:
-            [
-                "",
-                "gemini-4-neon-high",
-                "gemini-4-neon-xhigh",
-                "gemini-4-neon-medium",
-                "gemini-4-carbon-high",
-                "gemini-3.8-flash-high",
-                "claude-opus-5-5-high",
-                "claude-sonnet-5-5-high",
-                "gpt-oss-120b-medium"
-            ]
-        case .codexCLI:
-            ["", "gpt-5.4", "gpt-5.3-codex", "o3", "gpt-6.1-sol"]
-        case .claudeCLI:
-            ["", "sonnet", "opus", "haiku"]
-        case .directHTTP:
-            [""]
+        [""] + AIAgentModelCatalog.families(for: self).map(\.id)
+    }
+}
+
+public enum AIAgentEffortWireStrategy: String, Codable, Equatable, Hashable, Sendable {
+    /// Fixed single-tier or non-reasoning model; reasoning effort control is hidden.
+    case none
+    /// Antigravity ACP models where effort is encoded in the wire model ID suffix (`<family>-<effort>`).
+    case modelIDSuffix
+    /// CLI backends where model ID and reasoning effort are forwarded as separate arguments.
+    case cliConfigOption
+}
+
+public struct AIAgentModelDescriptor: Identifiable, Equatable, Hashable, Sendable {
+    public let id: String
+    public let displayName: String
+    public let shortName: String
+    public let backend: AIAgentBackendKind
+    public let supportedEfforts: [AIAgentReasoningEffort]
+    public let defaultEffort: AIAgentReasoningEffort?
+    public let wireStrategy: AIAgentEffortWireStrategy
+
+    public init(
+        id: String,
+        displayName: String,
+        shortName: String? = nil,
+        backend: AIAgentBackendKind,
+        supportedEfforts: [AIAgentReasoningEffort],
+        defaultEffort: AIAgentReasoningEffort? = nil,
+        wireStrategy: AIAgentEffortWireStrategy
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.shortName = shortName ?? displayName
+        self.backend = backend
+        self.supportedEfforts = supportedEfforts
+        self.defaultEffort = defaultEffort ?? supportedEfforts.last
+        self.wireStrategy = wireStrategy
+    }
+}
+
+/// Single source of truth uniting model families, supported reasoning effort tiers,
+/// legacy suffixed model migration, and backend wire ID resolution.
+public enum AIAgentModelCatalog {
+    public static let antigravityFamilies: [AIAgentModelDescriptor] = [
+        AIAgentModelDescriptor(
+            id: "gemini-4-neon",
+            displayName: "Gemini 4 Neon",
+            shortName: "Gemini 4 Neon",
+            backend: .antigravityCLI,
+            supportedEfforts: [.low, .medium, .high, .xhigh],
+            defaultEffort: .high,
+            wireStrategy: .modelIDSuffix
+        ),
+        AIAgentModelDescriptor(
+            id: "gemini-4-hydrogen",
+            displayName: "Gemini 4 Hydrogen",
+            shortName: "Gemini 4 H",
+            backend: .antigravityCLI,
+            supportedEfforts: [.low, .medium, .high, .xhigh],
+            defaultEffort: .high,
+            wireStrategy: .modelIDSuffix
+        ),
+        AIAgentModelDescriptor(
+            id: "gemini-4-carbon",
+            displayName: "Gemini 4 Carbon",
+            shortName: "Gemini 4 Carbon",
+            backend: .antigravityCLI,
+            supportedEfforts: [.low, .medium, .high],
+            defaultEffort: .high,
+            wireStrategy: .modelIDSuffix
+        ),
+        AIAgentModelDescriptor(
+            id: "gemini-4-argon",
+            displayName: "Gemini 4 Argon",
+            shortName: "Gemini 4 Argon",
+            backend: .antigravityCLI,
+            supportedEfforts: [.low, .medium, .high],
+            defaultEffort: .high,
+            wireStrategy: .modelIDSuffix
+        ),
+        AIAgentModelDescriptor(
+            id: "gemini-3.8-flash",
+            displayName: "Gemini 3.8 Flash",
+            shortName: "3.8 Flash",
+            backend: .antigravityCLI,
+            supportedEfforts: [.low, .medium, .high],
+            defaultEffort: .high,
+            wireStrategy: .modelIDSuffix
+        ),
+        AIAgentModelDescriptor(
+            id: "claude-opus-5-5",
+            displayName: "Claude Opus 5.5",
+            shortName: "Opus 5.5",
+            backend: .antigravityCLI,
+            supportedEfforts: [.low, .medium, .high],
+            defaultEffort: .high,
+            wireStrategy: .modelIDSuffix
+        ),
+        AIAgentModelDescriptor(
+            id: "claude-sonnet-5-5",
+            displayName: "Claude Sonnet 5.5",
+            shortName: "Sonnet 5.5",
+            backend: .antigravityCLI,
+            supportedEfforts: [.low, .medium, .high],
+            defaultEffort: .high,
+            wireStrategy: .modelIDSuffix
+        ),
+        AIAgentModelDescriptor(
+            id: "gemini-pro-orchestrator-neon",
+            displayName: "Orchestrator Neon",
+            shortName: "Orch Neon",
+            backend: .antigravityCLI,
+            supportedEfforts: [],
+            defaultEffort: nil,
+            wireStrategy: .none
+        ),
+        AIAgentModelDescriptor(
+            id: "gemini-pro-orchestrator",
+            displayName: "Orchestrator",
+            shortName: "Orchestrator",
+            backend: .antigravityCLI,
+            supportedEfforts: [],
+            defaultEffort: nil,
+            wireStrategy: .none
+        ),
+        AIAgentModelDescriptor(
+            id: "gemini-pro-orchestrator-argon",
+            displayName: "Orchestrator Argon",
+            shortName: "Orch Argon",
+            backend: .antigravityCLI,
+            supportedEfforts: [],
+            defaultEffort: nil,
+            wireStrategy: .none
+        ),
+        AIAgentModelDescriptor(
+            id: "gpt-oss-120b-medium",
+            displayName: "GPT-OSS 120B",
+            shortName: "GPT-OSS 120B",
+            backend: .antigravityCLI,
+            supportedEfforts: [],
+            defaultEffort: nil,
+            wireStrategy: .none
+        )
+    ]
+
+    public static let codexFamilies: [AIAgentModelDescriptor] = [
+        AIAgentModelDescriptor(
+            id: "gpt-5.4",
+            displayName: "GPT-5.4",
+            backend: .codexCLI,
+            supportedEfforts: [.low, .medium, .high, .xhigh],
+            defaultEffort: .high,
+            wireStrategy: .cliConfigOption
+        ),
+        AIAgentModelDescriptor(
+            id: "gpt-5.3-codex",
+            displayName: "GPT-5.3 Codex",
+            backend: .codexCLI,
+            supportedEfforts: [.low, .medium, .high, .xhigh],
+            defaultEffort: .high,
+            wireStrategy: .cliConfigOption
+        ),
+        AIAgentModelDescriptor(
+            id: "o3",
+            displayName: "o3",
+            backend: .codexCLI,
+            supportedEfforts: [.low, .medium, .high],
+            defaultEffort: .medium,
+            wireStrategy: .cliConfigOption
+        ),
+        AIAgentModelDescriptor(
+            id: "gpt-6.1-sol",
+            displayName: "GPT-6.1 Sol",
+            backend: .codexCLI,
+            supportedEfforts: [.low, .medium, .high, .xhigh],
+            defaultEffort: .high,
+            wireStrategy: .cliConfigOption
+        )
+    ]
+
+    public static let claudeFamilies: [AIAgentModelDescriptor] = [
+        AIAgentModelDescriptor(
+            id: "sonnet",
+            displayName: "Claude Sonnet",
+            shortName: "Sonnet",
+            backend: .claudeCLI,
+            supportedEfforts: [.low, .medium, .high],
+            defaultEffort: .medium,
+            wireStrategy: .cliConfigOption
+        ),
+        AIAgentModelDescriptor(
+            id: "opus",
+            displayName: "Claude Opus",
+            shortName: "Opus",
+            backend: .claudeCLI,
+            supportedEfforts: [.low, .medium, .high],
+            defaultEffort: .high,
+            wireStrategy: .cliConfigOption
+        ),
+        AIAgentModelDescriptor(
+            id: "haiku",
+            displayName: "Claude Haiku",
+            shortName: "Haiku",
+            backend: .claudeCLI,
+            supportedEfforts: [],
+            defaultEffort: nil,
+            wireStrategy: .none
+        )
+    ]
+
+    public static func families(for backend: AIAgentBackendKind) -> [AIAgentModelDescriptor] {
+        switch backend {
+        case .antigravityCLI: antigravityFamilies
+        case .codexCLI: codexFamilies
+        case .claudeCLI: claudeFamilies
+        case .directHTTP: []
         }
+    }
+
+    public static func descriptor(
+        for rawModel: String,
+        backend: AIAgentBackendKind
+    ) -> AIAgentModelDescriptor? {
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let list = families(for: backend)
+        // Exact match first so fixed single-tier models like `gpt-oss-120b-medium`
+        // are never misparsed as a suffixed effort variant.
+        if let exact = list.first(where: { $0.id.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            return exact
+        }
+        if backend == .antigravityCLI {
+            for family in list where family.wireStrategy == .modelIDSuffix {
+                for effort in family.supportedEfforts {
+                    let wire = "\(family.id)-\(effort.rawValue)"
+                    if wire.caseInsensitiveCompare(trimmed) == .orderedSame {
+                        return family
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    public static func supportedEfforts(
+        for rawModel: String,
+        backend: AIAgentBackendKind
+    ) -> [AIAgentReasoningEffort] {
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch backend {
+        case .directHTTP:
+            return []
+        case .antigravityCLI:
+            if trimmed.isEmpty {
+                return [.low, .medium, .high, .xhigh]
+            }
+            if let descriptor = descriptor(for: trimmed, backend: backend) {
+                return descriptor.supportedEfforts
+            }
+            // Custom Antigravity wire IDs are sent verbatim without double-suffixing.
+            return []
+        case .codexCLI:
+            if let descriptor = descriptor(for: trimmed, backend: backend) {
+                return descriptor.supportedEfforts
+            }
+            return [.low, .medium, .high, .xhigh]
+        case .claudeCLI:
+            if let descriptor = descriptor(for: trimmed, backend: backend) {
+                return descriptor.supportedEfforts
+            }
+            return [.low, .medium, .high]
+        }
+    }
+
+    public static func clampEffort(
+        _ effort: AIAgentReasoningEffort,
+        supported: [AIAgentReasoningEffort],
+        fallback: AIAgentReasoningEffort? = nil
+    ) -> AIAgentReasoningEffort {
+        guard !supported.isEmpty else { return effort }
+        if supported.contains(effort) { return effort }
+        if effort == .xhigh, supported.contains(.high) { return .high }
+        if let fallback, supported.contains(fallback) { return fallback }
+        return supported.last ?? effort
+    }
+
+    /// Normalizes a `(model, effort)` pair into canonical family ID + supported effort,
+    /// migrating legacy suffixed Antigravity IDs such as `gemini-4-neon-xhigh` cleanly.
+    public static func normalize(
+        model rawModel: String,
+        effort: AIAgentReasoningEffort,
+        backend: AIAgentBackendKind
+    ) -> (model: String, effort: AIAgentReasoningEffort) {
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            let allowed = supportedEfforts(for: "", backend: backend)
+            return ("", clampEffort(effort, supported: allowed))
+        }
+        let list = families(for: backend)
+        if let exact = list.first(where: { $0.id.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            let clamped = clampEffort(
+                effort,
+                supported: exact.supportedEfforts,
+                fallback: exact.defaultEffort
+            )
+            return (exact.id, clamped)
+        }
+        if backend == .antigravityCLI {
+            for family in list where family.wireStrategy == .modelIDSuffix {
+                for candidateEffort in family.supportedEfforts {
+                    let wire = "\(family.id)-\(candidateEffort.rawValue)"
+                    if wire.caseInsensitiveCompare(trimmed) == .orderedSame {
+                        return (family.id, candidateEffort)
+                    }
+                }
+            }
+        }
+        let allowed = supportedEfforts(for: trimmed, backend: backend)
+        return (trimmed, clampEffort(effort, supported: allowed))
+    }
+
+    /// Resolves the wire model identifier sent to the backend (e.g., composing
+    /// `gemini-4-neon` + `.xhigh` into `"gemini-4-neon-xhigh"` for Antigravity ACP).
+    public static func wireModelID(
+        model rawModel: String,
+        effort: AIAgentReasoningEffort,
+        backend: AIAgentBackendKind
+    ) -> String {
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let normalized = normalize(model: trimmed, effort: effort, backend: backend)
+        guard let descriptor = descriptor(for: normalized.model, backend: backend) else {
+            return normalized.model
+        }
+        switch descriptor.wireStrategy {
+        case .modelIDSuffix:
+            let effectiveEffort = clampEffort(
+                normalized.effort,
+                supported: descriptor.supportedEfforts,
+                fallback: descriptor.defaultEffort
+            )
+            return "\(descriptor.id)-\(effectiveEffort.rawValue)"
+        case .none, .cliConfigOption:
+            return descriptor.id
+        }
+    }
+
+    public static func displayLabel(
+        for rawModel: String,
+        backend: AIAgentBackendKind,
+        compact: Bool = false
+    ) -> String {
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Default" }
+        if let descriptor = descriptor(for: trimmed, backend: backend) {
+            return compact ? descriptor.shortName : descriptor.displayName
+        }
+        return trimmed
     }
 }
 

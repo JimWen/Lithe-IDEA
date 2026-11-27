@@ -142,14 +142,35 @@ struct AIAgentComposerView: View {
     }
 
     private var bottomControlsRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 5) {
+                backendPill
+                modelPill(compact: false)
+                effortPill
+                modePill(compact: false)
+                Spacer(minLength: 4)
+                submitControls
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 5) {
+                    backendPill
+                    modelPill(compact: true)
+                    effortPill
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 5) {
+                    modePill(compact: true)
+                    Spacer(minLength: 4)
+                    submitControls
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var submitControls: some View {
         HStack(spacing: 5) {
-            backendPill
-            modelPill
-            effortPill
-            modePill
-
-            Spacer(minLength: 4)
-
             if feature.isSelectedThreadRunning {
                 Button {
                     feature.stopActiveTurn()
@@ -183,6 +204,7 @@ struct AIAgentComposerView: View {
             .keyboardShortcut(.return, modifiers: [.command])
             .help(feature.isSelectedThreadRunning ? "Queue follow-up (⌘↩)" : "Send prompt (⌘↩)")
         }
+        .fixedSize()
     }
 
     private var backendPill: some View {
@@ -205,28 +227,46 @@ struct AIAgentComposerView: View {
             pillLabel(icon: current.iconName, text: current.shortTitle, tint: LitheTheme.primaryText)
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
         .lithePointer()
         .help("Select AI Agent provider")
     }
 
-    private var modelPill: some View {
+    private func modelPill(compact: Bool) -> some View {
         let backend = activeThread?.backend ?? model.settings.aiAgent.defaultBackend
         let activeModel = activeThread?.model ?? ""
-        let labelText = activeModel.isEmpty ? "Default" : activeModel
+        let labelText = AIAgentModelCatalog.displayLabel(
+            for: activeModel,
+            backend: backend,
+            compact: compact
+        )
+        let families = AIAgentModelCatalog.families(for: backend)
+        let activeDescriptor = AIAgentModelCatalog.descriptor(for: activeModel, backend: backend)
         return Menu {
-            Button("Backend Default") {
+            Button {
                 feature.updateSelectedThreadModel("")
+            } label: {
+                HStack {
+                    Text("Backend Default")
+                    if activeModel.isEmpty {
+                        Image(systemName: "checkmark")
+                    }
+                }
             }
-            Divider()
-            ForEach(backend.suggestedModels.filter { !$0.isEmpty }, id: \.self) { modelName in
-                Button {
-                    feature.updateSelectedThreadModel(modelName)
-                } label: {
-                    HStack {
-                        Text(modelName)
-                        if activeModel == modelName {
-                            Image(systemName: "checkmark")
+            if !families.isEmpty {
+                Divider()
+                ForEach(families) { family in
+                    Button {
+                        feature.updateSelectedThreadModel(family.id)
+                    } label: {
+                        HStack {
+                            Text(family.supportedEfforts.isEmpty
+                                 ? "\(family.displayName) (Fixed)"
+                                 : family.displayName)
+                            if activeDescriptor?.id == family.id {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
                 }
@@ -237,17 +277,23 @@ struct AIAgentComposerView: View {
                 isCustomModelPopoverPresented = true
             }
         } label: {
-            pillLabel(icon: "cpu", text: labelText, tint: LitheTheme.secondaryText)
+            pillLabel(
+                icon: "cpu",
+                text: labelText,
+                tint: LitheTheme.secondaryText,
+                flexible: compact
+            )
         }
         .menuStyle(.borderlessButton)
-        .fixedSize()
+        .menuIndicator(.hidden)
+        .layoutPriority(compact ? -1 : 0)
         .lithePointer()
-        .help("Select model for this thread")
+        .help("Select model family for this thread (\(activeModel.isEmpty ? "Backend Default" : activeModel))")
         .popover(isPresented: $isCustomModelPopoverPresented, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Custom Model")
                     .font(.system(size: 12, weight: .semibold))
-                TextField("e.g. gemini-4-neon-high, gpt-5.4, sonnet", text: $customModelDraft)
+                TextField("e.g. gemini-4-neon, gpt-5.4, sonnet", text: $customModelDraft)
                     .litheSettingsTextField()
                 HStack {
                     Spacer()
@@ -257,7 +303,10 @@ struct AIAgentComposerView: View {
                     }
                     .buttonStyle(LithePrimaryButtonStyle(
                         backgroundColor: LitheTheme.settingsPrimaryAction,
-                        restingOpacity: 1
+                        restingOpacity: 1,
+                        horizontalPadding: 12,
+                        height: 26,
+                        fontSize: 11.5
                     ))
                 }
             }
@@ -267,31 +316,41 @@ struct AIAgentComposerView: View {
         }
     }
 
+    @ViewBuilder
     private var effortPill: some View {
-        let current = activeThread?.reasoningEffort ?? .medium
-        return Menu {
-            ForEach(AIAgentReasoningEffort.allCases) { effort in
-                Button {
-                    feature.updateSelectedThreadEffort(effort)
-                } label: {
-                    HStack {
-                        Text(effort.title)
-                        if effort == current {
-                            Image(systemName: "checkmark")
+        let backend = activeThread?.backend ?? model.settings.aiAgent.defaultBackend
+        let activeModel = activeThread?.model ?? ""
+        let supported = AIAgentModelCatalog.supportedEfforts(for: activeModel, backend: backend)
+        if !supported.isEmpty {
+            let current = AIAgentModelCatalog.clampEffort(
+                activeThread?.reasoningEffort ?? .medium,
+                supported: supported
+            )
+            Menu {
+                ForEach(supported) { effort in
+                    Button {
+                        feature.updateSelectedThreadEffort(effort)
+                    } label: {
+                        HStack {
+                            Text(effort.title)
+                            if effort == current {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
                 }
+            } label: {
+                pillLabel(icon: "dial.medium", text: current.title, tint: LitheTheme.secondaryText)
             }
-        } label: {
-            pillLabel(icon: "dial.medium", text: current.title, tint: LitheTheme.secondaryText)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .lithePointer()
+            .help("Reasoning effort")
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .lithePointer()
-        .help("Reasoning effort")
     }
 
-    private var modePill: some View {
+    private func modePill(compact: Bool) -> some View {
         let current = activeThread?.permissionMode ?? .supervised
         let tint: Color = {
             switch current {
@@ -315,25 +374,38 @@ struct AIAgentComposerView: View {
                 }
             }
         } label: {
-            pillLabel(icon: current.iconName, text: current.title, tint: tint)
+            pillLabel(
+                icon: current.iconName,
+                text: current.title,
+                tint: tint,
+                flexible: false
+            )
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
         .lithePointer()
         .help(current.summary)
     }
 
-    private func pillLabel(icon: String, text: String, tint: Color) -> some View {
+    private func pillLabel(
+        icon: String,
+        text: String,
+        tint: Color,
+        flexible: Bool = false
+    ) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon)
                 .font(.system(size: 9.5, weight: .medium))
             Text(text)
                 .font(.system(size: 10.5, weight: .medium))
                 .lineLimit(1)
+                .truncationMode(.tail)
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 6)
         .frame(height: 22)
+        .frame(minWidth: flexible ? 44 : nil, maxWidth: flexible ? 140 : nil, alignment: .leading)
         .background(LitheTheme.raised.opacity(0.7))
         .clipShape(RoundedRectangle(cornerRadius: 5))
         .overlay(RoundedRectangle(cornerRadius: 5).stroke(LitheTheme.divider, lineWidth: 1))

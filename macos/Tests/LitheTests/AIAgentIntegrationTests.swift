@@ -4,7 +4,7 @@ import LitheModuleAPI
 import Testing
 @testable import Lithe
 
-@Suite("AI Agent Host Integration")
+@Suite("AI Agent Host Integration", .serialized)
 @MainActor
 struct AIAgentIntegrationTests {
     @Test

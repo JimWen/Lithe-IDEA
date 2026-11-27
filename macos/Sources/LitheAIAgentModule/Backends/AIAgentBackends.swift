@@ -90,16 +90,20 @@ public struct AIAgentTurnRunner: Sendable {
         imagePaths: [String] = []
     ) -> [String] {
         var args: [String] = ["exec"]
+        let trimmedModel = thread.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let supportedEfforts = AIAgentModelCatalog.supportedEfforts(for: trimmedModel, backend: .codexCLI)
+        let resolvedEffort = AIAgentModelCatalog.clampEffort(thread.reasoningEffort, supported: supportedEfforts)
         if let sessionID = thread.providerSessionID, !sessionID.isEmpty {
             args.append(contentsOf: ["resume", sessionID, "--json", "--skip-git-repo-check"])
-            let trimmedModel = thread.model.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmedModel.isEmpty {
                 args.append(contentsOf: ["-m", trimmedModel])
             }
             for imagePath in imagePaths where !imagePath.isEmpty {
                 args.append(contentsOf: ["-i", imagePath])
             }
-            args.append(contentsOf: ["-c", "model_reasoning_effort=\"\(thread.reasoningEffort.rawValue)\""])
+            if !supportedEfforts.isEmpty {
+                args.append(contentsOf: ["-c", "model_reasoning_effort=\"\(resolvedEffort.rawValue)\""])
+            }
             switch thread.permissionMode {
             case .plan:
                 args.append(contentsOf: ["-c", "sandbox_mode=\"read-only\""])
@@ -113,14 +117,15 @@ public struct AIAgentTurnRunner: Sendable {
         }
 
         args.append(contentsOf: ["--json", "--skip-git-repo-check", "-C", workingDirectory])
-        let trimmedModel = thread.model.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedModel.isEmpty {
             args.append(contentsOf: ["-m", trimmedModel])
         }
         for imagePath in imagePaths where !imagePath.isEmpty {
             args.append(contentsOf: ["-i", imagePath])
         }
-        args.append(contentsOf: ["-c", "model_reasoning_effort=\"\(thread.reasoningEffort.rawValue)\""])
+        if !supportedEfforts.isEmpty {
+            args.append(contentsOf: ["-c", "model_reasoning_effort=\"\(resolvedEffort.rawValue)\""])
+        }
         switch thread.permissionMode {
         case .plan:
             args.append(contentsOf: ["--sandbox", "read-only"])
@@ -147,7 +152,11 @@ public struct AIAgentTurnRunner: Sendable {
         if !trimmedModel.isEmpty {
             args.append(contentsOf: ["--model", trimmedModel])
         }
-        args.append(contentsOf: ["--effort", thread.reasoningEffort.rawValue])
+        let supportedEfforts = AIAgentModelCatalog.supportedEfforts(for: trimmedModel, backend: .claudeCLI)
+        if !supportedEfforts.isEmpty {
+            let resolvedEffort = AIAgentModelCatalog.clampEffort(thread.reasoningEffort, supported: supportedEfforts)
+            args.append(contentsOf: ["--effort", resolvedEffort.rawValue])
+        }
         // Claude Code 2.1+ accepts: acceptEdits, auto, bypassPermissions, manual, dontAsk, plan.
         // In supervised mode, Lithe gates execution with a pre-turn approval card and omits
         // --permission-mode so Claude uses its built-in safe default without failing option validation.
@@ -389,15 +398,19 @@ public struct AIAgentTurnRunner: Sendable {
                 kind: .permissionMode(targetModeID)
             ))
 
-            let trimmedModel = thread.model.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedModel.isEmpty {
+            let wireModel = AIAgentModelCatalog.wireModelID(
+                model: thread.model,
+                effort: thread.reasoningEffort,
+                backend: .antigravityCLI
+            )
+            if !wireModel.isEmpty {
                 let modelID = allocateID()
                 configSteps.append(ACPConfigStep(
                     id: modelID,
                     payload: try ACPJSONRPCBuilder.sessionSetModelRequest(
                         id: modelID,
                         sessionID: sessionID,
-                        modelID: trimmedModel
+                        modelID: wireModel
                     ),
                     kind: .model
                 ))

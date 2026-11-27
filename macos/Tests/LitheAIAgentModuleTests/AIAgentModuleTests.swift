@@ -162,6 +162,37 @@ struct AIAgentStreamParserTests {
         #expect(!supervisedClaudeArgs.contains("--permission-mode"))
         #expect(!supervisedClaudeArgs.contains("default"))
 
+        // Claude Haiku does not support reasoning effort; --effort must be omitted.
+        var haikuThread = AIAgentThread(
+            workspacePath: "/tmp/repo",
+            backend: .claudeCLI,
+            model: "haiku",
+            reasoningEffort: .xhigh,
+            permissionMode: .autoEdit
+        )
+        let haikuArgs = AIAgentTurnRunner.buildClaudeArguments(thread: haikuThread)
+        #expect(!haikuArgs.contains("--effort"))
+
+        // Claude Sonnet clamps .xhigh down to .high.
+        haikuThread.model = "sonnet"
+        let sonnetClampedArgs = AIAgentTurnRunner.buildClaudeArguments(thread: haikuThread)
+        if let idx = sonnetClampedArgs.firstIndex(of: "--effort"), idx + 1 < sonnetClampedArgs.count {
+            #expect(sonnetClampedArgs[idx + 1] == "high")
+        } else {
+            Issue.record("Expected clamped --effort high for Claude Sonnet")
+        }
+
+        // Codex o3 clamps .xhigh down to .high.
+        let o3Thread = AIAgentThread(
+            workspacePath: "/tmp/repo",
+            backend: .codexCLI,
+            model: "o3",
+            reasoningEffort: .xhigh,
+            permissionMode: .autoEdit
+        )
+        let o3Args = AIAgentTurnRunner.buildCodexArguments(thread: o3Thread, workingDirectory: "/tmp/repo")
+        #expect(o3Args.contains("model_reasoning_effort=\"high\""))
+
         // Codex exec and resume both forward attached images via -i.
         let imageArgs = AIAgentTurnRunner.buildCodexArguments(
             thread: codexThread,
@@ -170,6 +201,67 @@ struct AIAgentStreamParserTests {
         )
         #expect(imageArgs.contains("-i"))
         #expect(imageArgs.contains("/tmp/screen.png"))
+    }
+
+    @Test
+    func modelCatalogDeduplicatesEffortsMigratesLegacySuffixesAndComposesWireIDs() {
+        // Legacy suffixed Antigravity IDs split cleanly into canonical family + effort.
+        let migratedNeon = AIAgentModelCatalog.normalize(
+            model: "gemini-4-neon-xhigh",
+            effort: .low,
+            backend: .antigravityCLI
+        )
+        #expect(migratedNeon.model == "gemini-4-neon")
+        #expect(migratedNeon.effort == .xhigh)
+
+        let migratedCarbon = AIAgentModelCatalog.normalize(
+            model: "gemini-4-carbon-high",
+            effort: .xhigh,
+            backend: .antigravityCLI
+        )
+        #expect(migratedCarbon.model == "gemini-4-carbon")
+        #expect(migratedCarbon.effort == .high)
+
+        // Unsupported effort tier clamps to highest valid tier.
+        let clampedOpus = AIAgentModelCatalog.normalize(
+            model: "claude-opus-5-5",
+            effort: .xhigh,
+            backend: .antigravityCLI
+        )
+        #expect(clampedOpus.model == "claude-opus-5-5")
+        #expect(clampedOpus.effort == .high)
+
+        // Fixed single-tier models hide the effort picker and never get misparsed as suffixed.
+        #expect(AIAgentModelCatalog.supportedEfforts(for: "gpt-oss-120b-medium", backend: .antigravityCLI).isEmpty)
+        #expect(AIAgentModelCatalog.supportedEfforts(for: "gemini-pro-orchestrator-neon", backend: .antigravityCLI).isEmpty)
+        #expect(AIAgentModelCatalog.supportedEfforts(for: "haiku", backend: .claudeCLI).isEmpty)
+        #expect(AIAgentModelCatalog.supportedEfforts(for: "gpt-4o", backend: .directHTTP).isEmpty)
+
+        let fixedNorm = AIAgentModelCatalog.normalize(
+            model: "gpt-oss-120b-medium",
+            effort: .xhigh,
+            backend: .antigravityCLI
+        )
+        #expect(fixedNorm.model == "gpt-oss-120b-medium")
+
+        // Wire ID composition adds effort suffix only for .modelIDSuffix families.
+        #expect(
+            AIAgentModelCatalog.wireModelID(model: "gemini-4-neon", effort: .xhigh, backend: .antigravityCLI)
+            == "gemini-4-neon-xhigh"
+        )
+        #expect(
+            AIAgentModelCatalog.wireModelID(model: "claude-opus-5-5", effort: .xhigh, backend: .antigravityCLI)
+            == "claude-opus-5-5-high"
+        )
+        #expect(
+            AIAgentModelCatalog.wireModelID(model: "gpt-oss-120b-medium", effort: .xhigh, backend: .antigravityCLI)
+            == "gpt-oss-120b-medium"
+        )
+        #expect(
+            AIAgentModelCatalog.wireModelID(model: "custom-model-v9", effort: .high, backend: .antigravityCLI)
+            == "custom-model-v9"
+        )
+        #expect(AIAgentModelCatalog.supportedEfforts(for: "custom-model-v9", backend: .antigravityCLI).isEmpty)
     }
 
     @Test
@@ -944,6 +1036,35 @@ struct AIAgentModuleTests {
         #expect(failedTurn.errorMessage?.contains("frame limit") == true)
     }
 
+    @Test
+    func acpComposesCanonicalModelAndEffortIntoWireModelID() async throws {
+        let host = StubWorkspaceHost(workspacePath: "/tmp/acp-wire-model", files: [:])
+        let acpFactory = MockACPProcessSessionFactory()
+        let runner = AIAgentTurnRunner(
+            processFactory: acpFactory,
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        feature.configure(host: host)
+        feature.updateSelectedThreadBackend(.antigravityCLI)
+        feature.updateSelectedThreadPermissionMode(.autoEdit)
+        feature.updateSelectedThreadModel("gemini-4-neon-xhigh")
+
+        // Stored model must migrate to canonical family ID + effort without duplicating suffix.
+        #expect(feature.selectedThread?.model == "gemini-4-neon")
+        #expect(feature.selectedThread?.reasoningEffort == .xhigh)
+
+        feature.sendPrompt("Verify wire model composition")
+        let completedTurn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let turn = feature.selectedThread?.turns.first, turn.status == .completed else { return nil }
+            return turn
+        }
+        #expect(completedTurn.assistantResponseText.contains("Antigravity ACP Done"))
+        #expect(acpFactory.recordedSetModels == ["gemini-4-neon-xhigh"])
+    }
+
     private func waitForState<T: Sendable>(
         on feature: AIAgentFeatureModel,
         timeout: DispatchTimeInterval = .seconds(5),
@@ -1065,6 +1186,7 @@ private struct StubCLIResolver: AIAgentCLIResolving {
 private final class MockACPProcessSessionFactory: AIAgentProcessSessionFactory, @unchecked Sendable {
     private let lock = NSLock()
     private var _sentMethods: [String] = []
+    private var _recordedSetModels: [String] = []
     private var _permissionReplyOptionIDs: [String] = []
     private var _sentPromptContainedImage = false
     private var _lastPromptText = ""
@@ -1077,6 +1199,7 @@ private final class MockACPProcessSessionFactory: AIAgentProcessSessionFactory, 
     private var _sessionCounter = 0
 
     var sentMethods: [String] { lock.withLock { _sentMethods } }
+    var recordedSetModels: [String] { lock.withLock { _recordedSetModels } }
     var permissionReplyOptionIDs: [String] { lock.withLock { _permissionReplyOptionIDs } }
     var sentPromptContainedImage: Bool { lock.withLock { _sentPromptContainedImage } }
     var lastPromptText: String { lock.withLock { _lastPromptText } }
@@ -1108,6 +1231,10 @@ private final class MockACPProcessSessionFactory: AIAgentProcessSessionFactory, 
 
     fileprivate func recordMethod(_ method: String) {
         lock.withLock { _sentMethods.append(method) }
+    }
+
+    fileprivate func recordSetModel(_ modelID: String) {
+        lock.withLock { _recordedSetModels.append(modelID) }
     }
 
     fileprivate func recordPermissionReply(_ optionID: String) {
@@ -1224,7 +1351,12 @@ private final class MockACPProcessSession: AIAgentProcessSession, @unchecked Sen
                 } else {
                     emitJSON(["jsonrpc": "2.0", "id": reqID, "result": [:]])
                 }
-            case "session/set_model", "session/set_config_option":
+            case "session/set_model":
+                if let modelID = (json["params"] as? [String: Any])?["modelId"] as? String {
+                    owner.recordSetModel(modelID)
+                }
+                emitJSON(["jsonrpc": "2.0", "id": reqID, "result": [:]])
+            case "session/set_config_option":
                 emitJSON(["jsonrpc": "2.0", "id": reqID, "result": [:]])
             case "session/prompt":
                 let params = json["params"] as? [String: Any]

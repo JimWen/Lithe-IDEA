@@ -555,14 +555,17 @@ private struct LitheRowHoverModifier: ViewModifier {
 struct LithePrimaryButtonStyle: ButtonStyle {
     var backgroundColor = LitheTheme.accent
     var restingOpacity = 0.92
+    var horizontalPadding: CGFloat = 18
+    var height: CGFloat = 30
+    var fontSize: CGFloat = 13
     @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: fontSize, weight: .medium))
             .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .frame(height: 30)
+            .padding(.horizontal, horizontalPadding)
+            .frame(height: height)
             .background(
                 RoundedRectangle(cornerRadius: LitheTheme.Metrics.controlCornerRadius)
                     .fill(backgroundColor.opacity(configuration.isPressed ? 0.78 : (isHovering ? 1 : restingOpacity)))

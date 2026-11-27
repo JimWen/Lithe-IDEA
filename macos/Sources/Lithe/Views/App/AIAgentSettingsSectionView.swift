@@ -66,8 +66,14 @@ struct AIAgentSettingsSectionView: View {
                 }
 
                 settingsRow("Default Antigravity model") {
-                    TextField("e.g. gemini-4-neon-high (blank uses agy default)", text: $settings.aiAgent.defaultAntigravityModel)
-                        .litheSettingsTextField()
+                    HStack(spacing: 6) {
+                        TextField("e.g. gemini-4-neon (blank uses agy default)", text: $settings.aiAgent.defaultAntigravityModel)
+                            .litheSettingsTextField()
+                        modelFamilyPickerMenu(
+                            backend: .antigravityCLI,
+                            selection: $settings.aiAgent.defaultAntigravityModel
+                        )
+                    }
                 }
 
                 settingsRow("Codex CLI path") {
@@ -84,8 +90,14 @@ struct AIAgentSettingsSectionView: View {
                 }
 
                 settingsRow("Default Codex model") {
-                    TextField("Leave blank to use ~/.codex/config.toml default", text: $settings.aiAgent.defaultCodexModel)
-                        .litheSettingsTextField()
+                    HStack(spacing: 6) {
+                        TextField("Leave blank to use ~/.codex/config.toml default", text: $settings.aiAgent.defaultCodexModel)
+                            .litheSettingsTextField()
+                        modelFamilyPickerMenu(
+                            backend: .codexCLI,
+                            selection: $settings.aiAgent.defaultCodexModel
+                        )
+                    }
                 }
 
                 settingsRow("Claude CLI path") {
@@ -102,8 +114,14 @@ struct AIAgentSettingsSectionView: View {
                 }
 
                 settingsRow("Default Claude model") {
-                    TextField("e.g. sonnet, opus (blank uses Claude default)", text: $settings.aiAgent.defaultClaudeModel)
-                        .litheSettingsTextField()
+                    HStack(spacing: 6) {
+                        TextField("e.g. sonnet, opus (blank uses Claude default)", text: $settings.aiAgent.defaultClaudeModel)
+                            .litheSettingsTextField()
+                        modelFamilyPickerMenu(
+                            backend: .claudeCLI,
+                            selection: $settings.aiAgent.defaultClaudeModel
+                        )
+                    }
                 }
 
                 if let activeProvider = settings.commitMessageAI.activeProvider {
@@ -237,6 +255,48 @@ struct AIAgentSettingsSectionView: View {
         } else if let feature = await model.activateAIAgentModule() {
             await feature.refreshCLIDetection()
         }
+    }
+
+    private func modelFamilyPickerMenu(
+        backend: AIAgentBackendKind,
+        selection: Binding<String>
+    ) -> some View {
+        let families = AIAgentModelCatalog.families(for: backend)
+        return Menu {
+            Button("Backend Default") {
+                selection.wrappedValue = ""
+            }
+            Divider()
+            ForEach(families) { family in
+                Button {
+                    selection.wrappedValue = family.id
+                } label: {
+                    HStack {
+                        Text(family.supportedEfforts.isEmpty
+                             ? "\(family.displayName) (Fixed)"
+                             : family.displayName)
+                        if AIAgentModelCatalog.descriptor(for: selection.wrappedValue, backend: backend)?.id == family.id {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            Text("Presets")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(LitheTheme.primaryText)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(LitheTheme.raised.opacity(0.75))
+                .clipShape(RoundedRectangle(cornerRadius: LitheTheme.Metrics.controlCornerRadius))
+                .overlay {
+                    RoundedRectangle(cornerRadius: LitheTheme.Metrics.controlCornerRadius)
+                        .stroke(LitheTheme.panelBorder, lineWidth: 1)
+                }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .lithePointer()
     }
 
     private func settingsRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

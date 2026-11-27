@@ -340,6 +340,7 @@ private struct AIAgentTurnCardView: View {
         switch item.kind {
         case .assistantText:
             AIAgentMarkdownBlockView(text: item.content)
+                .equatable()
 
         case .reasoning:
             VStack(alignment: .leading, spacing: 4) {
@@ -402,7 +403,7 @@ private struct AIAgentTurnCardView: View {
 
                 if !item.isCollapsed && !item.output.isEmpty {
                     Rectangle().fill(LitheTheme.divider).frame(height: 1)
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    ScrollView([.horizontal, .vertical], showsIndicators: true) {
                         Text(item.output)
                             .font(.system(size: 10.5, design: .monospaced))
                             .foregroundStyle(LitheTheme.secondaryText)
@@ -410,7 +411,7 @@ private struct AIAgentTurnCardView: View {
                             .padding(8)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: 180)
+                    .frame(maxHeight: 200)
                 }
             }
             .background(LitheTheme.inputBackground)
@@ -449,12 +450,15 @@ private struct AIAgentTurnCardView: View {
 
                 if !item.isCollapsed && !item.output.isEmpty {
                     Rectangle().fill(LitheTheme.divider).frame(height: 1)
-                    Text(String(item.output.prefix(2000)))
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(LitheTheme.secondaryText)
-                        .textSelection(.enabled)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                        Text(String(item.output.prefix(2000)))
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(LitheTheme.secondaryText)
+                            .textSelection(.enabled)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 180)
                 }
             }
             .background(LitheTheme.raised.opacity(0.55))
@@ -575,30 +579,22 @@ private struct AIAgentTurnCardView: View {
             }
 
             if request.decision == nil {
-                HStack(spacing: 6) {
-                    if request.allowsAllowOnce {
-                        Button("Allow Once") {
-                            feature.respondToApproval(requestID: request.id, decision: .allowOnce)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        approvalActionButtons(request)
+                        Spacer(minLength: 4)
+                        approvalDenyButton(request)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            approvalActionButtons(request)
+                            Spacer(minLength: 0)
                         }
-                        .buttonStyle(LithePrimaryButtonStyle(
-                            backgroundColor: LitheTheme.settingsPrimaryAction,
-                            restingOpacity: 1
-                        ))
-                    }
-
-                    if request.allowsAllowAlways {
-                        Button("Allow Always") {
-                            feature.respondToApproval(requestID: request.id, decision: .allowAlways)
+                        HStack {
+                            approvalDenyButton(request)
+                            Spacer(minLength: 0)
                         }
-                        .buttonStyle(LitheSecondaryButtonStyle())
                     }
-
-                    Spacer()
-
-                    Button("Deny") {
-                        feature.respondToApproval(requestID: request.id, decision: .deny)
-                    }
-                    .buttonStyle(LitheSecondaryButtonStyle())
                 }
             }
         }
@@ -606,6 +602,38 @@ private struct AIAgentTurnCardView: View {
         .background(LitheTheme.warning.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(LitheTheme.warning.opacity(0.45), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func approvalActionButtons(_ request: AIAgentApprovalRequest) -> some View {
+        if request.allowsAllowOnce {
+            Button("Allow Once") {
+                feature.respondToApproval(requestID: request.id, decision: .allowOnce)
+            }
+            .buttonStyle(LithePrimaryButtonStyle(
+                backgroundColor: LitheTheme.settingsPrimaryAction,
+                restingOpacity: 1,
+                horizontalPadding: 10,
+                height: 24,
+                fontSize: 11
+            ))
+            .fixedSize()
+        }
+        if request.allowsAllowAlways {
+            Button("Allow Always") {
+                feature.respondToApproval(requestID: request.id, decision: .allowAlways)
+            }
+            .buttonStyle(LitheSecondaryButtonStyle(horizontalPadding: 10, height: 24, fontSize: 11))
+            .fixedSize()
+        }
+    }
+
+    private func approvalDenyButton(_ request: AIAgentApprovalRequest) -> some View {
+        Button("Deny") {
+            feature.respondToApproval(requestID: request.id, decision: .deny)
+        }
+        .buttonStyle(LitheSecondaryButtonStyle(horizontalPadding: 10, height: 24, fontSize: 11))
+        .fixedSize()
     }
 
     private var planProposalActionBar: some View {
@@ -617,43 +645,25 @@ private struct AIAgentTurnCardView: View {
                 Text("Plan ready to implement")
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(LitheTheme.primaryText)
+                    .lineLimit(1)
                 Spacer()
             }
-            HStack(spacing: 6) {
-                Button {
-                    feature.implementPlan(from: turn, inNewWorktree: false)
-                } label: {
-                    Label("Implement Plan", systemImage: "play.fill")
-                        .font(.system(size: 11, weight: .medium))
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    planActionButtons
+                    Spacer(minLength: 4)
+                    planCopyButton
                 }
-                .buttonStyle(LithePrimaryButtonStyle(
-                    backgroundColor: LitheTheme.settingsPrimaryAction,
-                    restingOpacity: 1
-                ))
-
-                if feature.selectedThread?.worktreePath == nil {
-                    Button {
-                        feature.implementPlan(from: turn, inNewWorktree: true)
-                    } label: {
-                        Label("In Worktree", systemImage: "arrow.triangle.branch")
-                            .font(.system(size: 11, weight: .medium))
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        planActionButtons
+                        Spacer(minLength: 0)
                     }
-                    .buttonStyle(LitheSecondaryButtonStyle())
-                    .help("Create an isolated Git worktree and implement this plan there")
+                    HStack {
+                        Spacer()
+                        planCopyButton
+                    }
                 }
-
-                Spacer()
-
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(turn.assistantResponseText, forType: .string)
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                        .font(.system(size: 10.5))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(LitheTheme.secondaryText)
-                .lithePointer()
             }
         }
         .padding(9)
@@ -662,83 +672,151 @@ private struct AIAgentTurnCardView: View {
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(LitheTheme.accent.opacity(0.35), lineWidth: 1))
     }
 
-    private var turnFooter: some View {
-        HStack(spacing: 8) {
-            Text(turn.startedAt.formatted(date: .omitted, time: .shortened))
-                .font(.system(size: 10))
-                .foregroundStyle(LitheTheme.tertiaryText)
+    @ViewBuilder
+    private var planActionButtons: some View {
+        Button {
+            feature.implementPlan(from: turn, inNewWorktree: false)
+        } label: {
+            Label("Implement Plan", systemImage: "play.fill")
+        }
+        .buttonStyle(LithePrimaryButtonStyle(
+            backgroundColor: LitheTheme.settingsPrimaryAction,
+            restingOpacity: 1,
+            horizontalPadding: 10,
+            height: 24,
+            fontSize: 11
+        ))
+        .fixedSize()
 
-            if let duration = turn.durationSeconds, duration >= 0.2 {
-                Text(Self.formatDuration(duration))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(LitheTheme.tertiaryText)
-            }
-
-            if turn.status == .cancelled {
-                Text("Cancelled")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(LitheTheme.warning)
-            } else if let usage = turn.usage, usage.totalTokens > 0 {
-                Text("\(usage.inputTokens) in · \(usage.outputTokens) out")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(LitheTheme.tertiaryText)
-            }
-
-            Spacer()
-
-            if turn.canRevertCheckpoint, let checkpoint = turn.checkpoint {
-                Button {
-                    onRequestRevert(checkpoint)
-                } label: {
-                    Label("Revert", systemImage: "arrow.uturn.backward")
-                        .font(.system(size: 10.5, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(LitheTheme.warning)
-                .lithePointer()
-                .help("Restore workspace files to the pre-turn checkpoint")
-            }
-
-            if turn.status == .failed || turn.status == .cancelled {
-                Button {
-                    feature.retryTurn(turn)
-                } label: {
-                    Label("Retry", systemImage: "arrow.clockwise")
-                        .font(.system(size: 10.5, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(LitheTheme.accent)
-                .lithePointer()
-                .help("Retry this prompt")
-            }
-
+        if feature.selectedThread?.worktreePath == nil {
             Button {
-                feature.loadTurnIntoComposer(turn)
+                feature.implementPlan(from: turn, inNewWorktree: true)
             } label: {
-                Image(systemName: "arrow.uturn.left")
-                    .font(.system(size: 10))
+                Label("Worktree", systemImage: "arrow.triangle.branch")
+            }
+            .buttonStyle(LitheSecondaryButtonStyle(horizontalPadding: 9, height: 24, fontSize: 11))
+            .fixedSize()
+            .help("Create an isolated Git worktree and implement this plan there")
+        }
+    }
+
+    private var planCopyButton: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(turn.assistantResponseText, forType: .string)
+        } label: {
+            Label("Copy", systemImage: "doc.on.doc")
+                .font(.system(size: 10.5))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(LitheTheme.secondaryText)
+        .fixedSize()
+        .lithePointer()
+    }
+
+    private var turnFooter: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                turnFooterMetadata
+                Spacer(minLength: 4)
+                turnFooterActions
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    turnFooterMetadata
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    turnFooterActions
+                }
+            }
+        }
+        .padding(.horizontal, 2)
+    }
+
+    @ViewBuilder
+    private var turnFooterMetadata: some View {
+        Text(turn.startedAt.formatted(date: .omitted, time: .shortened))
+            .font(.system(size: 10))
+            .foregroundStyle(LitheTheme.tertiaryText)
+            .fixedSize()
+
+        if let duration = turn.durationSeconds, duration >= 0.2 {
+            Text(Self.formatDuration(duration))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(LitheTheme.tertiaryText)
+                .fixedSize()
+        }
+
+        if turn.status == .cancelled {
+            Text("Cancelled")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(LitheTheme.warning)
+                .fixedSize()
+        } else if let usage = turn.usage, usage.totalTokens > 0 {
+            Text("\(usage.inputTokens) in · \(usage.outputTokens) out")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(LitheTheme.tertiaryText)
+                .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private var turnFooterActions: some View {
+        if turn.canRevertCheckpoint, let checkpoint = turn.checkpoint {
+            Button {
+                onRequestRevert(checkpoint)
+            } label: {
+                Label("Revert", systemImage: "arrow.uturn.backward")
+                    .font(.system(size: 10.5, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(LitheTheme.warning)
+            .fixedSize()
+            .lithePointer()
+            .help("Restore workspace files to the pre-turn checkpoint")
+        }
+
+        if turn.status == .failed || turn.status == .cancelled {
+            Button {
+                feature.retryTurn(turn)
+            } label: {
+                Label("Retry", systemImage: "arrow.clockwise")
+                    .font(.system(size: 10.5, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(LitheTheme.accent)
+            .fixedSize()
+            .lithePointer()
+            .help("Retry this prompt")
+        }
+
+        Button {
+            feature.loadTurnIntoComposer(turn)
+        } label: {
+            Image(systemName: "arrow.uturn.left")
+                .font(.system(size: 10))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(LitheTheme.tertiaryText)
+        .lithePointer()
+        .help("Edit prompt in composer")
+
+        let replyText = turn.assistantResponseText
+        if !replyText.isEmpty {
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(replyText, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 10.5))
             }
             .buttonStyle(.plain)
             .foregroundStyle(LitheTheme.tertiaryText)
             .lithePointer()
-            .help("Edit prompt in composer")
-
-            let replyText = turn.assistantResponseText
-            if !replyText.isEmpty {
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(replyText, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 10.5))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(LitheTheme.tertiaryText)
-                .lithePointer()
-                .help("Copy response")
-            }
+            .help("Copy response")
         }
-        .padding(.horizontal, 2)
     }
 
     private static func formatElapsed(_ seconds: Int) -> String {
@@ -774,146 +852,5 @@ private struct AIAgentTurnCardView: View {
         case .deleted: LitheTheme.error
         case .renamed: LitheTheme.accent
         }
-    }
-}
-
-/// Lightweight, high-craft markdown renderer for streaming agent responses with fenced code blocks & copy action.
-struct AIAgentMarkdownBlockView: View {
-    let text: String
-
-    private enum Segment: Identifiable {
-        case prose(id: Int, text: String)
-        case code(id: Int, language: String, code: String)
-
-        var id: Int {
-            switch self {
-            case .prose(let id, _): id
-            case .code(let id, _, _): id
-            }
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Self.parseSegments(text)) { segment in
-                switch segment {
-                case .prose(_, let content):
-                    proseText(content)
-                case .code(_, let language, let code):
-                    codeBlock(language: language, code: code)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder
-    private func proseText(_ content: String) -> some View {
-        if let attributed = try? AttributedString(
-            markdown: content,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            Text(attributed)
-                .font(.system(size: 12.5))
-                .foregroundStyle(LitheTheme.primaryText)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Text(content)
-                .font(.system(size: 12.5))
-                .foregroundStyle(LitheTheme.primaryText)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func codeBlock(language: String, code: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(language.isEmpty ? "code" : language)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(LitheTheme.secondaryText)
-                Spacer()
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(code, forType: .string)
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                        .font(.system(size: 10))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(LitheTheme.secondaryText)
-                .lithePointer()
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(LitheTheme.raised.opacity(0.75))
-
-            Rectangle().fill(LitheTheme.divider).frame(height: 1)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(LitheTheme.primaryText)
-                    .textSelection(.enabled)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .background(LitheTheme.inputBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(LitheTheme.divider, lineWidth: 1))
-    }
-
-    private static func parseSegments(_ input: String) -> [Segment] {
-        var segments: [Segment] = []
-        var proseLines: [String] = []
-        var codeLines: [String] = []
-        var inCode = false
-        var codeLanguage = ""
-        var nextID = 0
-
-        func flushProse() {
-            let joined = proseLines.joined(separator: "\n").trimmingCharacters(in: .newlines)
-            if !joined.isEmpty {
-                segments.append(.prose(id: nextID, text: joined))
-                nextID += 1
-            }
-            proseLines.removeAll(keepingCapacity: true)
-        }
-
-        func flushCode() {
-            let joined = codeLines.joined(separator: "\n")
-            segments.append(.code(id: nextID, language: codeLanguage, code: joined))
-            nextID += 1
-            codeLines.removeAll(keepingCapacity: true)
-            codeLanguage = ""
-        }
-
-        for rawLine in input.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(rawLine)
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") {
-                if inCode {
-                    flushCode()
-                    inCode = false
-                } else {
-                    flushProse()
-                    inCode = true
-                    codeLanguage = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-                }
-            } else if inCode {
-                codeLines.append(line)
-            } else {
-                proseLines.append(line)
-            }
-        }
-
-        if inCode {
-            flushCode()
-        } else {
-            flushProse()
-        }
-        return segments
     }
 }
