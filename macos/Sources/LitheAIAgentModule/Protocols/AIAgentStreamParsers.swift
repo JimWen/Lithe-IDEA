@@ -36,6 +36,7 @@ public struct AIAgentLineBuffer: Sendable {
     private var buffer = Data()
     private let maxLineBytes: Int
     private var discardingOversizedLine = false
+    public private(set) var droppedOversizedLineCount = 0
 
     public init(maxLineBytes: Int = AIAgentLineBuffer.defaultMaxLineBytes) {
         self.maxLineBytes = max(1024, maxLineBytes)
@@ -58,6 +59,8 @@ public struct AIAgentLineBuffer: Sendable {
                         buffer.append(contentsOf: slice)
                         if buffer.last == 0x0D { buffer.removeLast() }
                         lines.append(String(decoding: buffer, as: UTF8.self))
+                    } else {
+                        droppedOversizedLineCount += 1
                     }
                     buffer.removeAll(keepingCapacity: true)
                 }
@@ -68,6 +71,7 @@ public struct AIAgentLineBuffer: Sendable {
                     if buffer.count + remaining.count > maxLineBytes {
                         buffer.removeAll(keepingCapacity: false)
                         discardingOversizedLine = true
+                        droppedOversizedLineCount += 1
                     } else {
                         buffer.append(contentsOf: remaining)
                     }
@@ -318,6 +322,7 @@ public struct ClaudeStreamJSONParser: Sendable {
     private var streamedMessageHasText = false
     private var toolNamesByID: [String: String] = [:]
     private var toolInputsByID: [String: String] = [:]
+    private var lastReportedFailureMessage: String?
 
     public init() {}
 
@@ -424,6 +429,7 @@ public struct ClaudeStreamJSONParser: Sendable {
                 let text = (block["text"] as? String) ?? ""
                 guard !text.isEmpty else { continue }
                 if isError {
+                    lastReportedFailureMessage = text
                     events.append(.failed(text))
                 } else if !streamedMessageHasText {
                     events.append(.assistantTextDelta(
@@ -518,7 +524,7 @@ public struct ClaudeStreamJSONParser: Sendable {
         return events
     }
 
-    private func parseResult(_ json: [String: Any]) -> [AIAgentStreamEvent] {
+    private mutating func parseResult(_ json: [String: Any]) -> [AIAgentStreamEvent] {
         var events: [AIAgentStreamEvent] = []
         if let sessionID = json["session_id"] as? String, !sessionID.isEmpty {
             events.append(.sessionEstablished(sessionID))
@@ -539,7 +545,9 @@ public struct ClaudeStreamJSONParser: Sendable {
             }
         }
         if (json["is_error"] as? Bool) == true,
-           let resultText = json["result"] as? String, !resultText.isEmpty {
+           let resultText = json["result"] as? String, !resultText.isEmpty,
+           resultText != lastReportedFailureMessage {
+            lastReportedFailureMessage = resultText
             events.append(.failed(resultText))
         }
         return events
@@ -844,6 +852,7 @@ public struct DirectHTTPStreamState: Sendable {
 
 public enum AIAgentPromptBuilder {
     private static let maxAttachedFileCharacters = 24_000
+    private static let maxPriorHistoryCharacters = 16_000
 
     @MainActor
     public static func buildPrompt(
@@ -851,6 +860,7 @@ public enum AIAgentPromptBuilder {
         attachments: [AIAgentContextAttachment],
         customInstructions: String,
         permissionMode: AIAgentPermissionMode,
+        priorTurns: [AIAgentTurn] = [],
         rootPath: String,
         host: any AIAgentWorkspaceHost
     ) async -> String {
@@ -861,6 +871,30 @@ public enum AIAgentPromptBuilder {
         }
         if permissionMode == .plan {
             sections.append("Mode: PLAN ONLY. Inspect the codebase and propose a clear step-by-step implementation plan. Do not modify files or run mutating commands.")
+        }
+
+        // Seed fresh CLI sessions (e.g. forked threads, worktree handoff, or provider switches)
+        // with bounded prior conversation history so context carries over seamlessly.
+        let completedPrior = priorTurns.filter { $0.status == .completed }.suffix(6)
+        if !completedPrior.isEmpty {
+            var historyBlocks: [String] = []
+            var remaining = maxPriorHistoryCharacters
+            for turn in completedPrior {
+                let promptPart = String(turn.prompt.prefix(min(2000, remaining)))
+                remaining -= promptPart.count
+                var block = "User:\n\(promptPart)"
+                let reply = turn.assistantResponseText
+                if !reply.isEmpty && remaining > 0 {
+                    let replyPart = String(reply.prefix(min(3000, remaining)))
+                    remaining -= replyPart.count
+                    block += "\nAssistant:\n\(replyPart)"
+                }
+                historyBlocks.append(block)
+                if remaining <= 0 { break }
+            }
+            if !historyBlocks.isEmpty {
+                sections.append("<prior_conversation>\n" + historyBlocks.joined(separator: "\n\n---\n\n") + "\n</prior_conversation>")
+            }
         }
 
         if !attachments.isEmpty {
@@ -878,6 +912,8 @@ public enum AIAgentPromptBuilder {
                     }
                 case .selection(let relativePath, let startLine, let endLine, let snippet):
                     contextParts.append("Selection from \(relativePath) (lines \(startLine)-\(endLine)):\n```\n\(snippet)\n```")
+                case .image(let path, let displayName):
+                    contextParts.append("Attached image: \(displayName) (\(path))")
                 }
             }
             if !contextParts.isEmpty {

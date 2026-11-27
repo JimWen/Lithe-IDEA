@@ -111,6 +111,13 @@ public protocol AIAgentWorkspaceHost: AnyObject {
     func searchFiles(query: String, rootPath: String, maxResults: Int) async -> [String]
     func runShellCommand(_ command: String, rootPath: String) async -> (exitCode: Int32, output: String)
     func workingTreeDiff(in rootPath: String) async -> AIAgentWorkingTreeDiff
+    func captureGitCheckpointTree(in rootPath: String) async -> String?
+    func openDirtyFileSnapshots(in rootPath: String) -> [AIAgentFileSnapshot]
+    func diffGitTrees(from preTree: String, to postTree: String, in rootPath: String) async -> [AIAgentFileChangeSummary]
+    func restoreGitCheckpointTree(_ treeHash: String, in rootPath: String) async throws -> Int
+    func discardFileChange(relativePath: String, in rootPath: String) async throws
+    func generateCommitMessage(in rootPath: String) async throws -> String
+    func readImageData(at path: String, maxBytes: Int) -> (mimeType: String, data: Data)?
     func createIsolatedWorktree(branchName: String, from workspaceRoot: String) async throws -> AIAgentWorktreeInfo
     func removeIsolatedWorktree(path: String, from workspaceRoot: String) async throws
     func commitChanges(message: String, in rootPath: String) async throws -> String
@@ -125,4 +132,26 @@ public extension AIAgentWorkspaceHost {
     func writeFile(relativePath: String, content: String, rootPath: String) async throws {
         try await writeFile(relativePath: relativePath, content: content, expectedSourceText: nil, rootPath: rootPath)
     }
+
+    func captureGitCheckpointTree(in rootPath: String) async -> String? { nil }
+
+    func openDirtyFileSnapshots(in rootPath: String) -> [AIAgentFileSnapshot] { [] }
+
+    func diffGitTrees(from preTree: String, to postTree: String, in rootPath: String) async -> [AIAgentFileChangeSummary] {
+        []
+    }
+
+    func restoreGitCheckpointTree(_ treeHash: String, in rootPath: String) async throws -> Int {
+        throw AIAgentWorkspaceHostError.gitUnavailable("Git checkpoint restore is unavailable.")
+    }
+
+    func discardFileChange(relativePath: String, in rootPath: String) async throws {
+        throw AIAgentWorkspaceHostError.gitUnavailable("Discard file change is unavailable.")
+    }
+
+    func generateCommitMessage(in rootPath: String) async throws -> String {
+        throw AIAgentWorkspaceHostError.commandFailed("AI commit message generation is unavailable.")
+    }
+
+    func readImageData(at path: String, maxBytes: Int) -> (mimeType: String, data: Data)? { nil }
 }

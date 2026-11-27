@@ -19,6 +19,7 @@ public final class AIAgentFeatureModel: ObservableObject {
     @Published public private(set) var workingTreeDiff = AIAgentWorkingTreeDiff(rootPath: "")
     @Published public private(set) var isLoadingDiff = false
     @Published public private(set) var isPerformingGitAction = false
+    @Published public private(set) var isGeneratingCommitMessage = false
     @Published public var composerDraft = ""
     @Published public var attachedContexts: [AIAgentContextAttachment] = []
     @Published public private(set) var statusBannerMessage: String?
@@ -232,16 +233,27 @@ public final class AIAgentFeatureModel: ObservableObject {
               let expectedWorkspace = activeWorkspacePath,
               let initialThread = threads.first(where: { $0.id == threadID }),
               let worktreePath = initialThread.worktreePath else { return }
+
+        let sharingThreads = threads.filter { $0.worktreePath == worktreePath }
+        if let activeRunner = sharingThreads.first(where: { $0.isRunning || runningTasksByThread[$0.id] != nil }) {
+            let message = "Cannot remove worktree while thread '\(activeRunner.title)' is still running in it."
+            host.notify(message)
+            statusBannerMessage = message
+            return
+        }
+
         isPerformingGitAction = true
         defer { isPerformingGitAction = false }
         do {
             try await host.removeIsolatedWorktree(path: worktreePath, from: initialThread.workspacePath)
-            guard activeWorkspacePath == expectedWorkspace,
-                  let resolvedIndex = threads.firstIndex(where: { $0.id == threadID }) else { return }
-            threads[resolvedIndex].worktreePath = nil
-            threads[resolvedIndex].worktreeBranch = nil
-            threads[resolvedIndex].providerSessionID = nil
-            threads[resolvedIndex].updatedAt = Date()
+            guard activeWorkspacePath == expectedWorkspace else { return }
+            let now = Date()
+            for idx in threads.indices where threads[idx].worktreePath == worktreePath {
+                threads[idx].worktreePath = nil
+                threads[idx].worktreeBranch = nil
+                threads[idx].providerSessionID = nil
+                threads[idx].updatedAt = now
+            }
             persistThreads()
             statusBannerMessage = "Removed isolated worktree"
             await refreshWorkingTreeDiff()
@@ -305,6 +317,116 @@ public final class AIAgentFeatureModel: ObservableObject {
         threads[index].title = threads[index].worktreeBranch.map { "Worktree · \($0)" } ?? "New Thread"
         threads[index].updatedAt = Date()
         persistThreads()
+    }
+
+    @discardableResult
+    public func forkThread(_ id: UUID) -> AIAgentThread? {
+        guard let source = threads.first(where: { $0.id == id }) else { return nil }
+        let completedTurns = source.turns.filter { !$0.isInFlight }
+        let baseTitle = source.title.hasSuffix(" (Fork)") ? source.title : "\(source.title) (Fork)"
+        let forked = AIAgentThread(
+            title: baseTitle,
+            workspacePath: source.workspacePath,
+            worktreePath: source.worktreePath,
+            worktreeBranch: source.worktreeBranch,
+            backend: source.backend,
+            model: source.model,
+            reasoningEffort: source.reasoningEffort,
+            permissionMode: source.permissionMode,
+            providerSessionID: nil,
+            turns: completedTurns,
+            totalUsage: source.totalUsage
+        )
+        threads.insert(forked, at: 0)
+        selectedThreadID = forked.id
+        isDiffPanelVisible = false
+        statusBannerMessage = "Forked thread '\(source.title)'."
+        persistThreads()
+        return forked
+    }
+
+    public func exportThreadMarkdown(_ id: UUID) -> String {
+        guard let thread = threads.first(where: { $0.id == id }) else { return "" }
+        var lines: [String] = [
+            "# \(thread.title)",
+            "",
+            "- Provider: \(thread.backend.title)\(thread.model.isEmpty ? "" : " (\(thread.model))")",
+            "- Mode: \(thread.permissionMode.title)",
+            "- Workspace: `\(thread.effectiveRootPath)`"
+        ]
+        if let branch = thread.worktreeBranch {
+            lines.append("- Worktree Branch: `\(branch)`")
+        }
+        lines.append("")
+        for (idx, turn) in thread.turns.enumerated() {
+            lines.append("---")
+            lines.append("")
+            lines.append("## Turn \(idx + 1) · \(turn.permissionMode.title)")
+            lines.append("")
+            lines.append("### Prompt")
+            lines.append("")
+            lines.append(turn.prompt)
+            lines.append("")
+            let reply = turn.assistantResponseText
+            if !reply.isEmpty {
+                lines.append("### Response")
+                lines.append("")
+                lines.append(reply)
+                lines.append("")
+            }
+            if !turn.changedFiles.isEmpty {
+                lines.append("### Modified Files")
+                lines.append("")
+                for file in turn.changedFiles {
+                    lines.append("- `[\(file.kind.badge)] \(file.path)` (+\(file.additions)/-\(file.deletions))")
+                }
+                lines.append("")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    public func implementPlan(from turn: AIAgentTurn, inNewWorktree: Bool = false) {
+        guard let threadID = selectedThreadID,
+              let index = threads.firstIndex(where: { $0.id == threadID }),
+              !threads[index].isRunning else { return }
+        let planExcerpt = turn.assistantResponseText
+        guard !planExcerpt.isEmpty else { return }
+
+        updateSelectedThreadPermissionMode(.autoEdit)
+        let clippedPlan = String(planExcerpt.prefix(16_000))
+        let followUpPrompt = """
+        Implement the approved plan below step by step, keeping changes minimal and verified with relevant builds or tests.
+
+        <approved_plan>
+        \(clippedPlan)
+        </approved_plan>
+        """
+        if inNewWorktree && threads[index].worktreePath == nil {
+            let expectedWorkspace = activeWorkspacePath
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let isolated = await self.attachWorktree(to: threadID)
+                guard self.activeWorkspacePath == expectedWorkspace,
+                      self.runningTasksByThread[threadID] == nil,
+                      self.threads.contains(where: { $0.id == threadID && !$0.isRunning }) else { return }
+                if !isolated {
+                    self.statusBannerMessage = "Continuing plan implementation in current workspace because worktree creation was unavailable."
+                }
+                self.startTurn(in: threadID, prompt: followUpPrompt, attachments: [])
+            }
+            return
+        }
+        startTurn(in: threadID, prompt: followUpPrompt, attachments: [])
+    }
+
+    public func retryTurn(_ turn: AIAgentTurn) {
+        sendPrompt(turn.prompt, attachments: turn.attachments)
+    }
+
+    public func loadTurnIntoComposer(_ turn: AIAgentTurn) {
+        composerDraft = turn.prompt
+        attachedContexts = turn.attachments
     }
 
     // MARK: - Per-Thread Configuration
@@ -535,7 +657,7 @@ public final class AIAgentFeatureModel: ObservableObject {
                        approval.id == requestID {
                         threads[tIndex].turns[turnIndex].items[itemIndex].approval?.decision = decision
                         threads[tIndex].turns[turnIndex].items[itemIndex].status = decision == .deny ? .denied : .completed
-                        if decision == .allowAlways {
+                        if decision == .allowAlways && approval.cacheAlwaysAllowByKind {
                             alwaysAllowedKindsByThread[threads[tIndex].id, default: []].insert(approval.kind)
                         }
                         if threads[tIndex].turns[turnIndex].status == .waitingApproval {
@@ -555,46 +677,167 @@ public final class AIAgentFeatureModel: ObservableObject {
 
     public func revertToCheckpoint(_ checkpoint: AIAgentCheckpoint) async {
         guard let host else { return }
-        guard !checkpoint.fileSnapshots.isEmpty else {
+        var restoredCount = 0
+        var gitRestoreSucceeded = false
+        var pathsTouchedByGitRestore: Set<String> = []
+
+        if let gitTreeHash = checkpoint.gitTreeHash, !gitTreeHash.isEmpty {
+            isPerformingGitAction = true
+            let preRevertTree = await host.captureGitCheckpointTree(in: checkpoint.workingDirectoryPath)
+            if let preRevertTree, preRevertTree != gitTreeHash {
+                let pendingDiff = await host.diffGitTrees(
+                    from: gitTreeHash,
+                    to: preRevertTree,
+                    in: checkpoint.workingDirectoryPath
+                )
+                pathsTouchedByGitRestore = Set(pendingDiff.map(\.path))
+            }
+            do {
+                let gitCount = try await host.restoreGitCheckpointTree(
+                    gitTreeHash,
+                    in: checkpoint.workingDirectoryPath
+                )
+                restoredCount += gitCount
+                gitRestoreSucceeded = true
+            } catch {
+                if checkpoint.fileSnapshots.isEmpty {
+                    isPerformingGitAction = false
+                    host.notify("Failed to revert checkpoint: \(error.localizedDescription)")
+                    statusBannerMessage = error.localizedDescription
+                    return
+                }
+            }
+            isPerformingGitAction = false
+        }
+
+        // Always reconcile Direct API fileSnapshots even after a Git tree restore so
+        // .gitignore'd edits and pre-existing unsaved editor buffer states are preserved.
+        if !checkpoint.fileSnapshots.isEmpty {
+            var snapshotReconciled = 0
+            for snapshot in checkpoint.fileSnapshots {
+                do {
+                    if let previousContent = snapshot.previousContent {
+                        let exists = host.fileExists(
+                            relativePath: snapshot.relativePath,
+                            rootPath: checkpoint.workingDirectoryPath
+                        )
+                        let currentContent = exists
+                            ? (try? await host.readFile(
+                                relativePath: snapshot.relativePath,
+                                rootPath: checkpoint.workingDirectoryPath
+                            ))
+                            : nil
+                        if currentContent != previousContent {
+                            try await host.writeFile(
+                                relativePath: snapshot.relativePath,
+                                content: previousContent,
+                                expectedSourceText: currentContent,
+                                rootPath: checkpoint.workingDirectoryPath
+                            )
+                            snapshotReconciled += 1
+                        }
+                    } else if host.fileExists(relativePath: snapshot.relativePath, rootPath: checkpoint.workingDirectoryPath) {
+                        try await host.deleteFile(
+                            relativePath: snapshot.relativePath,
+                            rootPath: checkpoint.workingDirectoryPath
+                        )
+                        snapshotReconciled += 1
+                    }
+                } catch {
+                    host.notify("Failed to restore \(snapshot.relativePath): \(error.localizedDescription)")
+                }
+            }
+            if !gitRestoreSucceeded {
+                restoredCount += snapshotReconciled
+            } else if restoredCount == 0 {
+                restoredCount = snapshotReconciled
+            }
+        } else if !gitRestoreSucceeded {
             statusBannerMessage = "No file edits recorded in this checkpoint."
             return
         }
-        var restoredCount = 0
-        for snapshot in checkpoint.fileSnapshots {
-            do {
-                if let previousContent = snapshot.previousContent {
-                    let currentContent = host.fileExists(
-                        relativePath: snapshot.relativePath,
-                        rootPath: checkpoint.workingDirectoryPath
-                    )
-                        ? (try? await host.readFile(
-                            relativePath: snapshot.relativePath,
-                            rootPath: checkpoint.workingDirectoryPath
-                        ))
-                        : nil
-                    try await host.writeFile(
-                        relativePath: snapshot.relativePath,
-                        content: previousContent,
-                        expectedSourceText: currentContent,
-                        rootPath: checkpoint.workingDirectoryPath
-                    )
-                } else if host.fileExists(relativePath: snapshot.relativePath, rootPath: checkpoint.workingDirectoryPath) {
-                    try await host.deleteFile(
-                        relativePath: snapshot.relativePath,
-                        rootPath: checkpoint.workingDirectoryPath
-                    )
+
+        // Reconcile pre-turn unsaved dirty buffers for any file whose disk state was
+        // restored by Git so reverting a CLI turn restores disk to the pre-turn tree
+        // while keeping the user's pre-existing unsaved editor edits intact in the buffer.
+        if gitRestoreSucceeded && !checkpoint.preTurnDirtyBufferSnapshots.isEmpty {
+            for dirtySnapshot in checkpoint.preTurnDirtyBufferSnapshots {
+                guard pathsTouchedByGitRestore.contains(dirtySnapshot.relativePath),
+                      let preTurnBufferText = dirtySnapshot.previousContent else {
+                    continue
                 }
-                restoredCount += 1
-            } catch {
-                host.notify("Failed to restore \(snapshot.relativePath): \(error.localizedDescription)")
+                do {
+                    let currentContent = try? await host.readFile(
+                        relativePath: dirtySnapshot.relativePath,
+                        rootPath: checkpoint.workingDirectoryPath
+                    )
+                    if currentContent != preTurnBufferText {
+                        try await host.writeFile(
+                            relativePath: dirtySnapshot.relativePath,
+                            content: preTurnBufferText,
+                            expectedSourceText: currentContent,
+                            rootPath: checkpoint.workingDirectoryPath
+                        )
+                    }
+                } catch {
+                    host.notify("Failed to restore unsaved buffer \(dirtySnapshot.relativePath): \(error.localizedDescription)")
+                }
             }
         }
+
         await host.refreshWorkspaceAndGit()
         await refreshWorkingTreeDiff()
-        statusBannerMessage = "Reverted \(restoredCount) file\(restoredCount == 1 ? "" : "s") to checkpoint."
+        statusBannerMessage = restoredCount == 0
+            ? "Workspace already matches this checkpoint."
+            : "Reverted \(restoredCount) file\(restoredCount == 1 ? "" : "s") to checkpoint."
     }
 
     // MARK: - Diff Review & Git Actions
+
+    public func discardWorkingTreeFile(_ relativePath: String) async {
+        guard let host,
+              let rootPath = selectedThread?.effectiveRootPath ?? activeWorkspacePath else { return }
+        isPerformingGitAction = true
+        defer { isPerformingGitAction = false }
+        do {
+            try await host.discardFileChange(relativePath: relativePath, in: rootPath)
+            statusBannerMessage = "Discarded changes in \(relativePath)."
+            await host.refreshWorkspaceAndGit()
+            await refreshWorkingTreeDiff()
+        } catch {
+            host.notify(error.localizedDescription)
+            statusBannerMessage = error.localizedDescription
+        }
+    }
+
+    public func generateCommitMessageForWorkingTree() async -> String? {
+        guard let host,
+              let rootPath = selectedThread?.effectiveRootPath ?? activeWorkspacePath,
+              !isGeneratingCommitMessage else { return nil }
+        isGeneratingCommitMessage = true
+        defer { isGeneratingCommitMessage = false }
+        do {
+            let message = try await host.generateCommitMessage(in: rootPath)
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            statusBannerMessage = "Generated commit message."
+            return trimmed
+        } catch {
+            host.notify(error.localizedDescription)
+            statusBannerMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    public func commitAndPushWorkingTreeChanges(message: String) async -> Bool {
+        // Bind both commit and push to the same root captured at invocation time so
+        // switching to another worktree thread mid-commit never pushes the wrong branch.
+        guard let targetRoot = selectedThread?.effectiveRootPath ?? activeWorkspacePath else { return false }
+        let committed = await commitWorkingTreeChanges(message: message, in: targetRoot)
+        guard committed else { return false }
+        await pushWorkingTreeBranch(in: targetRoot)
+        return true
+    }
 
     public func refreshWorkingTreeDiff() async {
         guard let host,
@@ -616,8 +859,12 @@ public final class AIAgentFeatureModel: ObservableObject {
     }
 
     public func commitWorkingTreeChanges(message: String) async -> Bool {
-        guard let host,
-              let rootPath = selectedThread?.effectiveRootPath ?? activeWorkspacePath else { return false }
+        guard let rootPath = selectedThread?.effectiveRootPath ?? activeWorkspacePath else { return false }
+        return await commitWorkingTreeChanges(message: message, in: rootPath)
+    }
+
+    private func commitWorkingTreeChanges(message: String, in rootPath: String) async -> Bool {
+        guard let host else { return false }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         isPerformingGitAction = true
@@ -636,14 +883,19 @@ public final class AIAgentFeatureModel: ObservableObject {
     }
 
     public func pushWorkingTreeBranch() async {
-        guard let host,
-              let rootPath = selectedThread?.effectiveRootPath ?? activeWorkspacePath else { return }
+        guard let rootPath = selectedThread?.effectiveRootPath ?? activeWorkspacePath else { return }
+        await pushWorkingTreeBranch(in: rootPath)
+    }
+
+    private func pushWorkingTreeBranch(in rootPath: String) async {
+        guard let host else { return }
         isPerformingGitAction = true
         defer { isPerformingGitAction = false }
         do {
             let result = try await host.pushCurrentBranch(in: rootPath)
             statusBannerMessage = result
             await host.refreshWorkspaceAndGit()
+            await refreshWorkingTreeDiff()
         } catch {
             host.notify(error.localizedDescription)
             statusBannerMessage = error.localizedDescription
@@ -688,15 +940,18 @@ public final class AIAgentFeatureModel: ObservableObject {
 
         let turnID = UUID()
         let rootPath = threads[threadIndex].effectiveRootPath
+        let preTurnDirtyBuffers = host.openDirtyFileSnapshots(in: rootPath)
         let checkpoint = AIAgentCheckpoint(
             turnID: turnID,
             label: "Before: \(Self.deriveThreadTitle(from: prompt))",
-            workingDirectoryPath: rootPath
+            workingDirectoryPath: rootPath,
+            preTurnDirtyBufferSnapshots: preTurnDirtyBuffers
         )
         let turn = AIAgentTurn(
             id: turnID,
             prompt: prompt,
             attachments: attachments,
+            permissionMode: threads[threadIndex].permissionMode,
             status: .running,
             checkpoint: checkpoint
         )
@@ -716,7 +971,13 @@ public final class AIAgentFeatureModel: ObservableObject {
             guard let self else { return }
             let preTurnDiff = await host.workingTreeDiff(in: rootPath)
             let preTurnSnapshotPaths = Set(preTurnDiff.files.map(\.path))
-            self.updateCheckpointHead(threadID: threadID, turnID: turnID, headHash: preTurnDiff.headHash)
+            let preTurnTreeHash = await host.captureGitCheckpointTree(in: rootPath)
+            self.updateCheckpointPreTurnState(
+                threadID: threadID,
+                turnID: turnID,
+                headHash: preTurnDiff.headHash,
+                treeHash: preTurnTreeHash
+            )
 
             let hooks = AIAgentTurnExecutionHooks(
                 onEvent: { [weak self] event in
@@ -758,7 +1019,8 @@ public final class AIAgentFeatureModel: ObservableObject {
                     turnID: turnID,
                     status: .completed,
                     errorMessage: nil,
-                    preTurnChangedPaths: preTurnSnapshotPaths
+                    preTurnChangedPaths: preTurnSnapshotPaths,
+                    preTurnTreeHash: preTurnTreeHash
                 )
             } catch is CancellationError {
                 self.finishTurn(
@@ -766,7 +1028,8 @@ public final class AIAgentFeatureModel: ObservableObject {
                     turnID: turnID,
                     status: .cancelled,
                     errorMessage: nil,
-                    preTurnChangedPaths: preTurnSnapshotPaths
+                    preTurnChangedPaths: preTurnSnapshotPaths,
+                    preTurnTreeHash: preTurnTreeHash
                 )
             } catch {
                 self.finishTurn(
@@ -774,7 +1037,8 @@ public final class AIAgentFeatureModel: ObservableObject {
                     turnID: turnID,
                     status: .failed,
                     errorMessage: error.localizedDescription,
-                    preTurnChangedPaths: preTurnSnapshotPaths
+                    preTurnChangedPaths: preTurnSnapshotPaths,
+                    preTurnTreeHash: preTurnTreeHash
                 )
             }
         }
@@ -787,7 +1051,8 @@ public final class AIAgentFeatureModel: ObservableObject {
         turnID: UUID,
         status: AIAgentTurnStatus,
         errorMessage: String?,
-        preTurnChangedPaths: Set<String>
+        preTurnChangedPaths: Set<String>,
+        preTurnTreeHash: String?
     ) {
         runningTasksByThread.removeValue(forKey: threadID)
         activeProcessesByThread.removeValue(forKey: threadID)
@@ -809,12 +1074,17 @@ public final class AIAgentFeatureModel: ObservableObject {
         threads[tIndex].turns[turnIndex].completedAt = Date()
         if let errorMessage, !errorMessage.isEmpty {
             threads[tIndex].turns[turnIndex].errorMessage = errorMessage
-            threads[tIndex].turns[turnIndex].items.append(AIAgentTimelineItem(
-                kind: .error,
-                title: "Error",
-                content: errorMessage,
-                status: .failed
-            ))
+            let alreadyReported = threads[tIndex].turns[turnIndex].items.last.map {
+                $0.kind == .error && $0.content == errorMessage
+            } ?? false
+            if !alreadyReported {
+                threads[tIndex].turns[turnIndex].items.append(AIAgentTimelineItem(
+                    kind: .error,
+                    title: "Error",
+                    content: errorMessage,
+                    status: .failed
+                ))
+            }
         }
         for iIdx in threads[tIndex].turns[turnIndex].items.indices {
             if threads[tIndex].turns[turnIndex].items[iIdx].status == .running {
@@ -831,25 +1101,38 @@ public final class AIAgentFeatureModel: ObservableObject {
             await host.refreshWorkspaceAndGit()
             guard self.activeWorkspacePath == expectedWorkspace else { return }
             let postDiff = await host.workingTreeDiff(in: rootPath)
+            let postTurnTreeHash = await host.captureGitCheckpointTree(in: rootPath)
             guard self.activeWorkspacePath == expectedWorkspace else { return }
             if self.selectedThreadID == threadID,
                self.selectedThread?.effectiveRootPath == rootPath {
                 self.workingTreeDiff = postDiff
             }
+
+            var exactTreeChanges: [AIAgentFileChangeSummary] = []
+            if let preTurnTreeHash, let postTurnTreeHash, preTurnTreeHash != postTurnTreeHash {
+                exactTreeChanges = await host.diffGitTrees(from: preTurnTreeHash, to: postTurnTreeHash, in: rootPath)
+            }
+
             if let ti = self.threads.firstIndex(where: { $0.id == threadID }),
                let turnIdx = self.threads[ti].turns.firstIndex(where: { $0.id == turnID }) {
-                let touchedFiles = postDiff.files.filter { file in
-                    !preTurnChangedPaths.contains(file.path)
-                        || self.threads[ti].turns[turnIdx].changedFiles.contains(where: { $0.path == file.path })
-                        || (self.threads[ti].turns[turnIdx].checkpoint?.fileSnapshots.contains(where: { $0.relativePath == file.path }) ?? false)
+                self.threads[ti].turns[turnIdx].checkpoint?.gitPostTurnTreeHash = postTurnTreeHash
+                let touchedFiles: [AIAgentFileChangeSummary]
+                if !exactTreeChanges.isEmpty {
+                    touchedFiles = exactTreeChanges
+                } else {
+                    touchedFiles = postDiff.files.filter { file in
+                        !preTurnChangedPaths.contains(file.path)
+                            || self.threads[ti].turns[turnIdx].changedFiles.contains(where: { $0.path == file.path })
+                            || (self.threads[ti].turns[turnIdx].checkpoint?.fileSnapshots.contains(where: { $0.relativePath == file.path }) ?? false)
+                    }
                 }
                 if !touchedFiles.isEmpty {
                     self.threads[ti].turns[turnIdx].changedFiles = touchedFiles
                     if host.agentSettings.autoOpenDiffOnChanges && self.selectedThreadID == threadID {
                         self.isDiffPanelVisible = true
                     }
-                    self.persistThreads()
                 }
+                self.persistThreads()
             }
             // Automatically dispatch next queued prompt ONLY if no newer turn started during refresh.
             if finalStatus == .completed,
@@ -981,12 +1264,17 @@ public final class AIAgentFeatureModel: ObservableObject {
 
         case .failed(let message):
             threads[tIndex].turns[turnIndex].errorMessage = message
-            threads[tIndex].turns[turnIndex].items.append(AIAgentTimelineItem(
-                kind: .error,
-                title: "Error",
-                content: message,
-                status: .failed
-            ))
+            let alreadyReported = threads[tIndex].turns[turnIndex].items.last.map {
+                $0.kind == .error && $0.content == message
+            } ?? false
+            if !alreadyReported {
+                threads[tIndex].turns[turnIndex].items.append(AIAgentTimelineItem(
+                    kind: .error,
+                    title: "Error",
+                    content: message,
+                    status: .failed
+                ))
+            }
         }
     }
 
@@ -995,7 +1283,8 @@ public final class AIAgentFeatureModel: ObservableObject {
         threadID: UUID,
         turnID: UUID
     ) async -> AIAgentApprovalDecision {
-        if alwaysAllowedKindsByThread[threadID]?.contains(request.kind) == true {
+        if request.cacheAlwaysAllowByKind,
+           alwaysAllowedKindsByThread[threadID]?.contains(request.kind) == true {
             return .allowAlways
         }
         guard let tIndex = threads.firstIndex(where: { $0.id == threadID }),
@@ -1013,8 +1302,17 @@ public final class AIAgentFeatureModel: ObservableObject {
             approval: request
         ))
 
-        return await withCheckedContinuation { continuation in
-            pendingApprovals[request.id] = continuation
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                pendingApprovals[request.id] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, let pending = self.pendingApprovals.removeValue(forKey: request.id) else {
+                    return
+                }
+                pending.resume(returning: .deny)
+            }
         }
     }
 
@@ -1027,7 +1325,7 @@ public final class AIAgentFeatureModel: ObservableObject {
         guard let host,
               let tIndex = threads.firstIndex(where: { $0.id == threadID }),
               let turnIndex = threads[tIndex].turns.firstIndex(where: { $0.id == turnID }),
-              var checkpoint = threads[tIndex].turns[turnIndex].checkpoint else {
+              let checkpoint = threads[tIndex].turns[turnIndex].checkpoint else {
             return
         }
         if checkpoint.fileSnapshots.contains(where: { $0.relativePath == relativePath }) {
@@ -1054,10 +1352,16 @@ public final class AIAgentFeatureModel: ObservableObject {
         }
     }
 
-    private func updateCheckpointHead(threadID: UUID, turnID: UUID, headHash: String?) {
+    private func updateCheckpointPreTurnState(
+        threadID: UUID,
+        turnID: UUID,
+        headHash: String?,
+        treeHash: String?
+    ) {
         guard let tIndex = threads.firstIndex(where: { $0.id == threadID }),
               let turnIndex = threads[tIndex].turns.firstIndex(where: { $0.id == turnID }) else { return }
         threads[tIndex].turns[turnIndex].checkpoint?.gitHeadHash = headHash
+        threads[tIndex].turns[turnIndex].checkpoint?.gitTreeHash = treeHash
     }
 
     // MARK: - Slash Commands
@@ -1085,6 +1389,11 @@ public final class AIAgentFeatureModel: ObservableObject {
             isDiffPanelVisible.toggle()
             if isDiffPanelVisible { Task { await refreshWorkingTreeDiff() } }
             return true
+        case "/fork":
+            if let threadID = selectedThreadID {
+                _ = forkThread(threadID)
+            }
+            return true
         case "/new":
             _ = createThread()
             return true
@@ -1104,7 +1413,7 @@ public final class AIAgentFeatureModel: ObservableObject {
             Task { await attachWorktreeToSelectedThread(branchName: argument.isEmpty ? nil : argument) }
             return true
         case "/revert":
-            if let latestCheckpoint = selectedThread?.turns.reversed().compactMap(\.checkpoint).first(where: { !$0.fileSnapshots.isEmpty }) {
+            if let latestCheckpoint = selectedThread?.turns.reversed().first(where: { $0.canRevertCheckpoint })?.checkpoint {
                 Task { await revertToCheckpoint(latestCheckpoint) }
             } else {
                 statusBannerMessage = "No revertible file checkpoint in this thread."

@@ -1,6 +1,7 @@
 import Foundation
 
 public enum AIAgentBackendKind: String, CaseIterable, Codable, Identifiable, Sendable {
+    case antigravityCLI
     case codexCLI
     case claudeCLI
     case directHTTP
@@ -9,6 +10,7 @@ public enum AIAgentBackendKind: String, CaseIterable, Codable, Identifiable, Sen
 
     public var title: String {
         switch self {
+        case .antigravityCLI: "Antigravity"
         case .codexCLI: "Codex"
         case .claudeCLI: "Claude Code"
         case .directHTTP: "Direct API"
@@ -17,6 +19,7 @@ public enum AIAgentBackendKind: String, CaseIterable, Codable, Identifiable, Sen
 
     public var shortTitle: String {
         switch self {
+        case .antigravityCLI: "AGY"
         case .codexCLI: "Codex"
         case .claudeCLI: "Claude"
         case .directHTTP: "API"
@@ -25,6 +28,7 @@ public enum AIAgentBackendKind: String, CaseIterable, Codable, Identifiable, Sen
 
     public var iconName: String {
         switch self {
+        case .antigravityCLI: "atom"
         case .codexCLI: "terminal.fill"
         case .claudeCLI: "sparkles"
         case .directHTTP: "network"
@@ -33,6 +37,18 @@ public enum AIAgentBackendKind: String, CaseIterable, Codable, Identifiable, Sen
 
     public var suggestedModels: [String] {
         switch self {
+        case .antigravityCLI:
+            [
+                "",
+                "gemini-4-neon-high",
+                "gemini-4-neon-xhigh",
+                "gemini-4-neon-medium",
+                "gemini-4-carbon-high",
+                "gemini-3.8-flash-high",
+                "claude-opus-5-5-high",
+                "claude-sonnet-5-5-high",
+                "gpt-oss-120b-medium"
+            ]
         case .codexCLI:
             ["", "gpt-5.4", "gpt-5.3-codex", "o3", "gpt-6.1-sol"]
         case .claudeCLI:
@@ -99,8 +115,10 @@ public enum AIAgentReasoningEffort: String, CaseIterable, Codable, Identifiable,
 
 public struct AIAgentSettings: Codable, Equatable, Sendable {
     public var defaultBackend: AIAgentBackendKind
+    public var antigravityCLIPath: String
     public var codexCLIPath: String
     public var claudeCLIPath: String
+    public var defaultAntigravityModel: String
     public var defaultCodexModel: String
     public var defaultClaudeModel: String
     public var defaultReasoningEffort: AIAgentReasoningEffort
@@ -112,9 +130,11 @@ public struct AIAgentSettings: Codable, Equatable, Sendable {
 
     public static var `default`: Self {
         Self(
-            defaultBackend: .codexCLI,
+            defaultBackend: .antigravityCLI,
+            antigravityCLIPath: "",
             codexCLIPath: "",
             claudeCLIPath: "",
+            defaultAntigravityModel: "",
             defaultCodexModel: "",
             defaultClaudeModel: "",
             defaultReasoningEffort: .medium,
@@ -127,9 +147,11 @@ public struct AIAgentSettings: Codable, Equatable, Sendable {
     }
 
     public init(
-        defaultBackend: AIAgentBackendKind = .codexCLI,
+        defaultBackend: AIAgentBackendKind = .antigravityCLI,
+        antigravityCLIPath: String = "",
         codexCLIPath: String = "",
         claudeCLIPath: String = "",
+        defaultAntigravityModel: String = "",
         defaultCodexModel: String = "",
         defaultClaudeModel: String = "",
         defaultReasoningEffort: AIAgentReasoningEffort = .medium,
@@ -140,8 +162,10 @@ public struct AIAgentSettings: Codable, Equatable, Sendable {
         customSystemInstructions: String = ""
     ) {
         self.defaultBackend = defaultBackend
+        self.antigravityCLIPath = antigravityCLIPath
         self.codexCLIPath = codexCLIPath
         self.claudeCLIPath = claudeCLIPath
+        self.defaultAntigravityModel = defaultAntigravityModel
         self.defaultCodexModel = defaultCodexModel
         self.defaultClaudeModel = defaultClaudeModel
         self.defaultReasoningEffort = defaultReasoningEffort
@@ -154,9 +178,11 @@ public struct AIAgentSettings: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        defaultBackend = try container.decodeIfPresent(AIAgentBackendKind.self, forKey: .defaultBackend) ?? .codexCLI
+        defaultBackend = try container.decodeIfPresent(AIAgentBackendKind.self, forKey: .defaultBackend) ?? .antigravityCLI
+        antigravityCLIPath = try container.decodeIfPresent(String.self, forKey: .antigravityCLIPath) ?? ""
         codexCLIPath = try container.decodeIfPresent(String.self, forKey: .codexCLIPath) ?? ""
         claudeCLIPath = try container.decodeIfPresent(String.self, forKey: .claudeCLIPath) ?? ""
+        defaultAntigravityModel = try container.decodeIfPresent(String.self, forKey: .defaultAntigravityModel) ?? ""
         defaultCodexModel = try container.decodeIfPresent(String.self, forKey: .defaultCodexModel) ?? ""
         defaultClaudeModel = try container.decodeIfPresent(String.self, forKey: .defaultClaudeModel) ?? ""
         defaultReasoningEffort = try container.decodeIfPresent(AIAgentReasoningEffort.self, forKey: .defaultReasoningEffort) ?? .medium
@@ -169,6 +195,7 @@ public struct AIAgentSettings: Codable, Equatable, Sendable {
 
     public func defaultModel(for backend: AIAgentBackendKind) -> String {
         switch backend {
+        case .antigravityCLI: defaultAntigravityModel
         case .codexCLI: defaultCodexModel
         case .claudeCLI: defaultClaudeModel
         case .directHTTP: ""
@@ -203,6 +230,7 @@ public struct AIAgentCLIDetection: Identifiable, Equatable, Sendable {
 public enum AIAgentContextAttachmentKind: Codable, Equatable, Hashable, Sendable {
     case file(relativePath: String)
     case selection(relativePath: String, startLine: Int, endLine: Int, snippet: String)
+    case image(path: String, displayName: String)
 }
 
 public struct AIAgentContextAttachment: Identifiable, Codable, Equatable, Hashable, Sendable {
@@ -218,7 +246,13 @@ public struct AIAgentContextAttachment: Identifiable, Codable, Equatable, Hashab
         switch kind {
         case .file(let path): path
         case .selection(let path, _, _, _): path
+        case .image(let path, _): path
         }
+    }
+
+    public var imageFilePath: String? {
+        if case .image(let path, _) = kind { return path }
+        return nil
     }
 
     public var displayLabel: String {
@@ -231,6 +265,8 @@ public struct AIAgentContextAttachment: Identifiable, Codable, Equatable, Hashab
                 return "\(name):\(startLine)"
             }
             return "\(name):\(startLine)-\(endLine)"
+        case .image(_, let displayName):
+            return displayName
         }
     }
 }
@@ -302,6 +338,11 @@ public struct AIAgentApprovalRequest: Identifiable, Codable, Equatable, Sendable
     public let command: String?
     public let filePath: String?
     public let diffPreview: String?
+    public var allowsAllowOnce: Bool
+    public var allowsAllowAlways: Bool
+    /// When `false` (e.g. ACP server-scoped approvals), clicking "Allow Always" forwards
+    /// `allow_always` to the server without auto-approving future requests of the same kind.
+    public var cacheAlwaysAllowByKind: Bool
     public var decision: AIAgentApprovalDecision?
 
     public init(
@@ -312,6 +353,9 @@ public struct AIAgentApprovalRequest: Identifiable, Codable, Equatable, Sendable
         command: String? = nil,
         filePath: String? = nil,
         diffPreview: String? = nil,
+        allowsAllowOnce: Bool = true,
+        allowsAllowAlways: Bool = true,
+        cacheAlwaysAllowByKind: Bool = true,
         decision: AIAgentApprovalDecision? = nil
     ) {
         self.id = id
@@ -321,7 +365,25 @@ public struct AIAgentApprovalRequest: Identifiable, Codable, Equatable, Sendable
         self.command = command
         self.filePath = filePath
         self.diffPreview = diffPreview
+        self.allowsAllowOnce = allowsAllowOnce
+        self.allowsAllowAlways = allowsAllowAlways
+        self.cacheAlwaysAllowByKind = cacheAlwaysAllowByKind
         self.decision = decision
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        kind = try container.decode(AIAgentApprovalKind.self, forKey: .kind)
+        title = try container.decode(String.self, forKey: .title)
+        detail = try container.decode(String.self, forKey: .detail)
+        command = try container.decodeIfPresent(String.self, forKey: .command)
+        filePath = try container.decodeIfPresent(String.self, forKey: .filePath)
+        diffPreview = try container.decodeIfPresent(String.self, forKey: .diffPreview)
+        allowsAllowOnce = try container.decodeIfPresent(Bool.self, forKey: .allowsAllowOnce) ?? true
+        allowsAllowAlways = try container.decodeIfPresent(Bool.self, forKey: .allowsAllowAlways) ?? true
+        cacheAlwaysAllowByKind = try container.decodeIfPresent(Bool.self, forKey: .cacheAlwaysAllowByKind) ?? true
+        decision = try container.decodeIfPresent(AIAgentApprovalDecision.self, forKey: .decision)
     }
 }
 
@@ -428,7 +490,14 @@ public struct AIAgentCheckpoint: Identifiable, Codable, Equatable, Sendable {
     public let createdAt: Date
     public let workingDirectoryPath: String
     public var gitHeadHash: String?
+    /// Immutable Git tree object captured via an isolated temporary index before the turn.
+    public var gitTreeHash: String?
+    /// Immutable Git tree object captured after the turn completes (for exact per-turn diffing).
+    public var gitPostTurnTreeHash: String?
     public var fileSnapshots: [AIAgentFileSnapshot]
+    /// Unsaved open-editor buffer contents captured immediately before the turn began so
+    /// reverting a CLI/Git checkpoint never overwrites pre-existing unsaved user edits.
+    public var preTurnDirtyBufferSnapshots: [AIAgentFileSnapshot]
 
     public init(
         id: UUID = UUID(),
@@ -437,7 +506,10 @@ public struct AIAgentCheckpoint: Identifiable, Codable, Equatable, Sendable {
         createdAt: Date = Date(),
         workingDirectoryPath: String,
         gitHeadHash: String? = nil,
-        fileSnapshots: [AIAgentFileSnapshot] = []
+        gitTreeHash: String? = nil,
+        gitPostTurnTreeHash: String? = nil,
+        fileSnapshots: [AIAgentFileSnapshot] = [],
+        preTurnDirtyBufferSnapshots: [AIAgentFileSnapshot] = []
     ) {
         self.id = id
         self.turnID = turnID
@@ -445,7 +517,39 @@ public struct AIAgentCheckpoint: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.workingDirectoryPath = workingDirectoryPath
         self.gitHeadHash = gitHeadHash
+        self.gitTreeHash = gitTreeHash
+        self.gitPostTurnTreeHash = gitPostTurnTreeHash
         self.fileSnapshots = fileSnapshots
+        self.preTurnDirtyBufferSnapshots = preTurnDirtyBufferSnapshots
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        turnID = try container.decode(UUID.self, forKey: .turnID)
+        label = try container.decode(String.self, forKey: .label)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        workingDirectoryPath = try container.decode(String.self, forKey: .workingDirectoryPath)
+        gitHeadHash = try container.decodeIfPresent(String.self, forKey: .gitHeadHash)
+        gitTreeHash = try container.decodeIfPresent(String.self, forKey: .gitTreeHash)
+        gitPostTurnTreeHash = try container.decodeIfPresent(String.self, forKey: .gitPostTurnTreeHash)
+        fileSnapshots = try container.decodeIfPresent([AIAgentFileSnapshot].self, forKey: .fileSnapshots) ?? []
+        preTurnDirtyBufferSnapshots = try container.decodeIfPresent(
+            [AIAgentFileSnapshot].self,
+            forKey: .preTurnDirtyBufferSnapshots
+        ) ?? []
+    }
+
+    public var hasTreeDiffChanges: Bool {
+        guard let pre = gitTreeHash, !pre.isEmpty else { return false }
+        if let post = gitPostTurnTreeHash, !post.isEmpty {
+            return pre != post
+        }
+        return false
+    }
+
+    public var canRevert: Bool {
+        !fileSnapshots.isEmpty || hasTreeDiffChanges
     }
 }
 
@@ -462,6 +566,7 @@ public struct AIAgentTurn: Identifiable, Codable, Equatable, Sendable {
     public let id: UUID
     public let prompt: String
     public let attachments: [AIAgentContextAttachment]
+    public let permissionMode: AIAgentPermissionMode
     public let startedAt: Date
     public var completedAt: Date?
     public var status: AIAgentTurnStatus
@@ -475,6 +580,7 @@ public struct AIAgentTurn: Identifiable, Codable, Equatable, Sendable {
         id: UUID = UUID(),
         prompt: String,
         attachments: [AIAgentContextAttachment] = [],
+        permissionMode: AIAgentPermissionMode = .supervised,
         startedAt: Date = Date(),
         completedAt: Date? = nil,
         status: AIAgentTurnStatus = .running,
@@ -487,6 +593,7 @@ public struct AIAgentTurn: Identifiable, Codable, Equatable, Sendable {
         self.id = id
         self.prompt = prompt
         self.attachments = attachments
+        self.permissionMode = permissionMode
         self.startedAt = startedAt
         self.completedAt = completedAt
         self.status = status
@@ -497,8 +604,45 @@ public struct AIAgentTurn: Identifiable, Codable, Equatable, Sendable {
         self.errorMessage = errorMessage
     }
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        prompt = try container.decode(String.self, forKey: .prompt)
+        attachments = try container.decodeIfPresent([AIAgentContextAttachment].self, forKey: .attachments) ?? []
+        permissionMode = try container.decodeIfPresent(AIAgentPermissionMode.self, forKey: .permissionMode) ?? .supervised
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
+        status = try container.decode(AIAgentTurnStatus.self, forKey: .status)
+        items = try container.decodeIfPresent([AIAgentTimelineItem].self, forKey: .items) ?? []
+        usage = try container.decodeIfPresent(AIAgentTokenUsage.self, forKey: .usage)
+        checkpoint = try container.decodeIfPresent(AIAgentCheckpoint.self, forKey: .checkpoint)
+        changedFiles = try container.decodeIfPresent([AIAgentFileChangeSummary].self, forKey: .changedFiles) ?? []
+        errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+    }
+
     public var isInFlight: Bool {
         status == .running || status == .waitingApproval
+    }
+
+    public var durationSeconds: TimeInterval? {
+        guard let completedAt else { return nil }
+        return max(0, completedAt.timeIntervalSince(startedAt))
+    }
+
+    public var assistantResponseText: String {
+        items.filter { $0.kind == .assistantText }
+            .map(\.content)
+            .joined(separator: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public var isCompletedPlanProposal: Bool {
+        permissionMode == .plan && status == .completed && !assistantResponseText.isEmpty
+    }
+
+    public var canRevertCheckpoint: Bool {
+        guard let checkpoint else { return false }
+        return checkpoint.canRevert || (checkpoint.gitTreeHash != nil && !changedFiles.isEmpty)
     }
 }
 
@@ -597,6 +741,8 @@ public struct AIAgentWorkingTreeDiff: Equatable, Sendable {
     public let rootPath: String
     public let branchName: String
     public let headHash: String?
+    public let aheadCount: Int
+    public let behindCount: Int
     public let files: [AIAgentFileChangeSummary]
     public let unifiedPatch: String
 
@@ -604,12 +750,16 @@ public struct AIAgentWorkingTreeDiff: Equatable, Sendable {
         rootPath: String,
         branchName: String = "",
         headHash: String? = nil,
+        aheadCount: Int = 0,
+        behindCount: Int = 0,
         files: [AIAgentFileChangeSummary] = [],
         unifiedPatch: String = ""
     ) {
         self.rootPath = rootPath
         self.branchName = branchName
         self.headHash = headHash
+        self.aheadCount = aheadCount
+        self.behindCount = behindCount
         self.files = files
         self.unifiedPatch = unifiedPatch
     }
@@ -652,6 +802,7 @@ public struct AIAgentSlashCommand: Identifiable, Equatable, Sendable {
         AIAgentSlashCommand(command: "/worktree", title: "Create Isolated Worktree", subtitle: "Run this thread in a dedicated Git worktree", iconName: "arrow.triangle.branch"),
         AIAgentSlashCommand(command: "/revert", title: "Revert Last Checkpoint", subtitle: "Restore files to the latest pre-turn checkpoint", iconName: "arrow.uturn.backward"),
         AIAgentSlashCommand(command: "/model", title: "Set Thread Model", subtitle: "Usage: /model <model-name>", iconName: "cpu"),
+        AIAgentSlashCommand(command: "/fork", title: "Fork Current Thread", subtitle: "Duplicate conversation history into a new thread", iconName: "arrow.branch"),
         AIAgentSlashCommand(command: "/new", title: "New Thread", subtitle: "Start a fresh agent conversation", iconName: "plus.bubble"),
         AIAgentSlashCommand(command: "/clear", title: "Clear Thread History", subtitle: "Clear turns and reset provider session", iconName: "trash")
     ]

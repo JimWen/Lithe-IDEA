@@ -155,6 +155,83 @@ struct AIAgentStreamParserTests {
 
         claudeThread.permissionMode = .plan
         #expect(AIAgentTurnRunner.buildClaudeArguments(thread: claudeThread).contains("plan"))
+
+        // Claude Code 2.1+ rejects --permission-mode default; supervised mode must omit it.
+        claudeThread.permissionMode = .supervised
+        let supervisedClaudeArgs = AIAgentTurnRunner.buildClaudeArguments(thread: claudeThread)
+        #expect(!supervisedClaudeArgs.contains("--permission-mode"))
+        #expect(!supervisedClaudeArgs.contains("default"))
+
+        // Codex exec and resume both forward attached images via -i.
+        let imageArgs = AIAgentTurnRunner.buildCodexArguments(
+            thread: codexThread,
+            workingDirectory: "/tmp/repo",
+            imagePaths: ["/tmp/screen.png"]
+        )
+        #expect(imageArgs.contains("-i"))
+        #expect(imageArgs.contains("/tmp/screen.png"))
+    }
+
+    @Test
+    func claudeParserDeduplicatesIdenticalAssistantAndResultErrors() {
+        var parser = ClaudeStreamJSONParser()
+        let first = parser.parseLine(#"{"type":"assistant","is_api_error_message":true,"message":{"id":"m1","content":[{"type":"text","text":"Not logged in"}]}}"#)
+        let second = parser.parseLine(#"{"type":"result","is_error":true,"result":"Not logged in"}"#)
+        #expect(first == [.failed("Not logged in")])
+        #expect(second.isEmpty)
+    }
+
+    @Test
+    func antigravityACPArgumentsModesAndStreamParserCoverFullProtocol() throws {
+        var agyThread = AIAgentThread(
+            workspacePath: "/tmp/repo",
+            backend: .antigravityCLI,
+            permissionMode: .supervised
+        )
+        #expect(AIAgentTurnRunner.buildAntigravityArguments(thread: agyThread) == ["acp"])
+        #expect(ACPJSONRPCBuilder.antigravityModeID(for: .plan) == "plan")
+        #expect(ACPJSONRPCBuilder.antigravityModeID(for: .supervised) == "default")
+        #expect(ACPJSONRPCBuilder.antigravityModeID(for: .autoEdit) == "accept-edits")
+        #expect(ACPJSONRPCBuilder.antigravityModeID(for: .fullAuto) == "auto")
+
+        agyThread.permissionMode = .fullAuto
+        #expect(AIAgentTurnRunner.buildAntigravityArguments(thread: agyThread) == ["acp", "--dangerously-skip-permissions"])
+
+        var parser = ACPStreamParser()
+        let thought = parser.parseLine(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Checking files"}}}}"#)
+        if case .sessionUpdate(let sid, let events) = thought {
+            #expect(sid == "s1")
+            #expect(events == [.reasoningDelta(itemID: "acp-thought-1", text: "Checking files", isReplacement: false)])
+        } else {
+            Issue.record("Expected thought sessionUpdate")
+        }
+
+        let cmd = parser.parseLine(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"c1","name":"run_command","kind":"execute","title":"echo hi","status":"completed","rawInput":{"CommandLine":"echo hi"},"rawOutput":{"output":"hi","exitCode":0}}}}"#)
+        if case .sessionUpdate(_, let events) = cmd {
+            #expect(events == [.commandUpdated(itemID: "c1", command: "echo hi", output: "hi", exitCode: 0, status: .completed)])
+        } else {
+            Issue.record("Expected command sessionUpdate")
+        }
+
+        let perm = parser.parseLine(#"{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"c2","name":"run_command","kind":"execute","title":"go test","rawInput":{"CommandLine":"go test ./..."}},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"deny","name":"Deny","kind":"reject_once"}]}}"#)
+        if case .permissionRequest(let reqID, let request, let options) = perm {
+            #expect(reqID == .string("perm-1"))
+            #expect(request.kind == .command)
+            #expect(request.command == "go test ./...")
+            #expect(options.count == 2)
+            let replyData = try ACPJSONRPCBuilder.permissionResponse(requestID: reqID, decision: .allowOnce, options: options)
+            let replyObj = try #require(try JSONSerialization.jsonObject(with: replyData) as? [String: Any])
+            #expect(replyObj["id"] as? String == "perm-1")
+            let outcome = ((replyObj["result"] as? [String: Any])?["outcome"] as? [String: Any])
+            #expect(outcome?["optionId"] as? String == "allow")
+        } else {
+            Issue.record("Expected permissionRequest")
+        }
+
+        let usage = ACPStreamParser.parsePromptUsage(from: [
+            "usage": ["inputTokens": 120, "cachedReadTokens": 40, "outputTokens": 25, "thoughtTokens": 10]
+        ])
+        #expect(usage == AIAgentTokenUsage(inputTokens: 120, cachedInputTokens: 40, outputTokens: 25, reasoningTokens: 10))
     }
 }
 
@@ -365,6 +442,508 @@ struct AIAgentModuleTests {
         #expect(feature.selectedThread?.turns.last?.checkpoint?.fileSnapshots.isEmpty == true)
     }
 
+    @Test
+    func planModeProposalCanTriggerImplementPlanAndForkExportMarkdown() async throws {
+        let processFactory = StubProcessSessionFactory(mode: .streamingAndComplete)
+        let runner = AIAgentTurnRunner(
+            processFactory: processFactory,
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        let host = StubWorkspaceHost(workspacePath: "/tmp/demo", files: ["main.go": "package main"])
+        feature.configure(host: host)
+
+        feature.updateSelectedThreadBackend(.codexCLI)
+        feature.updateSelectedThreadPermissionMode(.plan)
+        feature.sendPrompt("Design a feature")
+        let planTurn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let turn = feature.selectedThread?.turns.last, turn.status == .completed else { return nil }
+            return turn
+        }
+        #expect(planTurn.permissionMode == .plan)
+        #expect(planTurn.isCompletedPlanProposal == true)
+
+        feature.implementPlan(from: planTurn, inNewWorktree: false)
+        _ = try await waitForState(on: feature) { () -> Bool? in
+            guard let turns = feature.selectedThread?.turns, turns.count == 2, turns[1].status == .completed else { return nil }
+            return true
+        }
+        #expect(feature.selectedThread?.permissionMode == .autoEdit)
+        #expect(feature.selectedThread?.turns.last?.permissionMode == .autoEdit)
+
+        let sourceID = try #require(feature.selectedThreadID)
+        let markdown = feature.exportThreadMarkdown(sourceID)
+        #expect(markdown.contains("## Turn 1 · Plan"))
+        #expect(markdown.contains("## Turn 2 · Auto-Edit"))
+        #expect(markdown.contains("Design a feature"))
+
+        let forked = try #require(feature.forkThread(sourceID))
+        #expect(forked.id != sourceID)
+        #expect(forked.providerSessionID == nil)
+        #expect(forked.turns.count == 2)
+        #expect(feature.selectedThreadID == forked.id)
+    }
+
+    @Test
+    func gitTreeBackedCheckpointEnablesRevertForCLITurns() async throws {
+        let processFactory = StubProcessSessionFactory(mode: .streamingAndComplete)
+        let runner = AIAgentTurnRunner(
+            processFactory: processFactory,
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        let host = StubWorkspaceHost(workspacePath: "/tmp/demo", files: ["main.go": "package main"])
+        host.checkpointTrees = [
+            String(repeating: "a", count: 40),
+            String(repeating: "b", count: 40)
+        ]
+        host.treeDiffResult = [AIAgentFileChangeSummary(path: "main.go", kind: .modified, additions: 2, deletions: 1)]
+        feature.configure(host: host)
+
+        feature.updateSelectedThreadBackend(.codexCLI)
+        feature.updateSelectedThreadPermissionMode(.autoEdit)
+        feature.sendPrompt("Edit via Codex CLI")
+
+        let turn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let t = feature.selectedThread?.turns.last,
+                  t.status == .completed,
+                  t.checkpoint?.gitPostTurnTreeHash != nil else { return nil }
+            return t
+        }
+        #expect(turn.canRevertCheckpoint == true)
+        #expect(turn.changedFiles.map(\.path) == ["main.go"])
+
+        let checkpoint = try #require(turn.checkpoint)
+        await feature.revertToCheckpoint(checkpoint)
+        #expect(host.restoredTreeHashes == [String(repeating: "a", count: 40)])
+        #expect(feature.statusBannerMessage?.contains("Reverted 1 file") == true)
+    }
+
+    @Test
+    func directHTTPMultimodalEncodesAttachedImageInRequestBody() async throws {
+        let transport = StubStreamingTransport(chunks: [
+            Data("data: {\"choices\":[{\"delta\":{\"content\":\"Looks good!\"}}]}\n\ndata: [DONE]\n\n".utf8)
+        ])
+        let runner = AIAgentTurnRunner(
+            processFactory: StubProcessSessionFactory(mode: .streamingAndComplete),
+            cliResolver: StubCLIResolver(),
+            streamingTransport: transport,
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        let host = StubWorkspaceHost(workspacePath: "/tmp/demo", files: [:])
+        host.stubbedImages["/tmp/mock.png"] = ("image/png", Data([0x89, 0x50, 0x4E, 0x47]))
+        feature.configure(host: host)
+
+        feature.updateSelectedThreadBackend(.directHTTP)
+        feature.sendPrompt(
+            "Inspect this screenshot",
+            attachments: [AIAgentContextAttachment(kind: .image(path: "/tmp/mock.png", displayName: "mock.png"))]
+        )
+        _ = try await waitForState(on: feature) {
+            feature.selectedThread?.turns.last?.status == .completed ? true : nil
+        }
+
+        let capturedBody = String(decoding: transport.recordedRequests.first?.body ?? Data(), as: UTF8.self)
+            .replacingOccurrences(of: "\\/", with: "/")
+        #expect(capturedBody.contains("data:image/png;base64,"))
+        #expect(capturedBody.contains("image_url"))
+    }
+
+    @Test
+    func gitTreeRevertStillReconcilesFileSnapshotsForIgnoredOrUnsavedFiles() async throws {
+        let runner = AIAgentTurnRunner(
+            processFactory: StubProcessSessionFactory(mode: .streamingAndComplete),
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        let host = StubWorkspaceHost(workspacePath: "/tmp/demo", files: ["ignored.env": "MODIFIED_IGNORED"])
+        feature.configure(host: host)
+
+        let checkpoint = AIAgentCheckpoint(
+            turnID: UUID(),
+            label: "Before edit",
+            workingDirectoryPath: "/tmp/demo",
+            gitTreeHash: String(repeating: "a", count: 40),
+            gitPostTurnTreeHash: String(repeating: "b", count: 40),
+            fileSnapshots: [AIAgentFileSnapshot(relativePath: "ignored.env", previousContent: "ORIGINAL_IGNORED")]
+        )
+        await feature.revertToCheckpoint(checkpoint)
+
+        #expect(host.restoredTreeHashes == [String(repeating: "a", count: 40)])
+        #expect(host.files["ignored.env"] == "ORIGINAL_IGNORED")
+    }
+
+    @Test
+    func commitAndPushBindsPushToOriginalWorktreeRootWhenSelectionChanges() async throws {
+        let runner = AIAgentTurnRunner(
+            processFactory: StubProcessSessionFactory(mode: .streamingAndComplete),
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        let host = StubWorkspaceHost(workspacePath: "/tmp/main-repo", files: [:])
+        feature.configure(host: host)
+
+        let threadA = try #require(feature.createThread(worktree: AIAgentWorktreeInfo(path: "/tmp/wt-a", branchName: "agent/a")))
+        let threadB = try #require(feature.createThread(worktree: AIAgentWorktreeInfo(path: "/tmp/wt-b", branchName: "agent/b")))
+        feature.selectThread(threadA.id)
+
+        host.onCommitStart = {
+            // User switches to threadB while threadA's commit is in flight.
+            feature.selectThread(threadB.id)
+        }
+        let ok = await feature.commitAndPushWorkingTreeChanges(message: "feat: commit A")
+        #expect(ok == true)
+        #expect(host.committedRoots == ["/tmp/wt-a"])
+        #expect(host.pushedRoots == ["/tmp/wt-a"])
+    }
+
+    @Test
+    func sharedWorktreeRemovalBlocksWhileRunningAndClearsAllForkedThreadsWhenIdle() async throws {
+        let processFactory = StubProcessSessionFactory(mode: .streamingAndComplete)
+        let runner = AIAgentTurnRunner(
+            processFactory: processFactory,
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        let host = StubWorkspaceHost(workspacePath: "/tmp/main-repo", files: [:])
+        feature.configure(host: host)
+
+        let original = try #require(feature.createThread(worktree: AIAgentWorktreeInfo(path: "/tmp/wt-shared", branchName: "agent/shared")))
+        let forked = try #require(feature.forkThread(original.id))
+        #expect(forked.worktreePath == "/tmp/wt-shared")
+
+        // Start a supervised turn on `original` so it pauses at approval (isRunning == true).
+        feature.selectThread(original.id)
+        feature.updateSelectedThreadBackend(.codexCLI)
+        feature.updateSelectedThreadPermissionMode(.supervised)
+        feature.sendPrompt("Hold worktree active")
+        _ = try await waitForState(on: feature) { () -> Bool? in
+            feature.threads.first(where: { $0.id == original.id })?.hasPendingApproval == true ? true : nil
+        }
+
+        // Attempt to remove shared worktree via the fork MUST be refused while original is running.
+        await feature.removeWorktree(for: forked.id)
+        #expect(host.removedWorktrees.isEmpty)
+        #expect(feature.threads.first(where: { $0.id == original.id })?.worktreePath == "/tmp/wt-shared")
+
+        // Stop original and retry removal: BOTH threads must be cleared together.
+        await feature.stopTurn(for: original.id)
+        await feature.removeWorktree(for: forked.id)
+        #expect(host.removedWorktrees == ["/tmp/wt-shared"])
+        #expect(feature.threads.first(where: { $0.id == original.id })?.worktreePath == nil)
+        #expect(feature.threads.first(where: { $0.id == forked.id })?.worktreePath == nil)
+    }
+
+    @Test
+    func implementPlanEmbedsPlanAndForkedCLISessionSeedsPriorConversation() async throws {
+        let processFactory = StubProcessSessionFactory(mode: .streamingAndComplete)
+        let runner = AIAgentTurnRunner(
+            processFactory: processFactory,
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        let host = StubWorkspaceHost(workspacePath: "/tmp/demo", files: [:])
+        feature.configure(host: host)
+
+        feature.updateSelectedThreadBackend(.codexCLI)
+        feature.updateSelectedThreadPermissionMode(.plan)
+        feature.sendPrompt("Plan refactoring step")
+        let planTurn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let t = feature.selectedThread?.turns.last, t.status == .completed else { return nil }
+            return t
+        }
+        let originalID = try #require(feature.selectedThreadID)
+
+        // Fork the thread (providerSessionID == nil) and send a follow-up CLI turn.
+        _ = try #require(feature.forkThread(originalID))
+        feature.updateSelectedThreadPermissionMode(.autoEdit)
+        feature.sendPrompt("Continue from fork")
+        _ = try await waitForState(on: feature) { () -> Bool? in
+            guard let turns = feature.selectedThread?.turns, turns.count == 2, turns[1].status == .completed else { return nil }
+            return true
+        }
+        let forkedStdin = String(decoding: processFactory.capturedStdins.last ?? Data(), as: UTF8.self)
+        #expect(forkedStdin.contains("<prior_conversation>"))
+        #expect(forkedStdin.contains("Plan refactoring step"))
+
+        // Calling implementPlan embeds the selected plan inside <approved_plan>.
+        feature.implementPlan(from: planTurn, inNewWorktree: false)
+        _ = try await waitForState(on: feature) { () -> Bool? in
+            guard let turns = feature.selectedThread?.turns, turns.count == 3, turns[2].status == .completed else { return nil }
+            return true
+        }
+        let implStdin = String(decoding: processFactory.capturedStdins.last ?? Data(), as: UTF8.self)
+        #expect(implStdin.contains("<approved_plan>"))
+        #expect(implStdin.contains("Done"))
+    }
+
+    @Test
+    func antigravityACPEndToEndTurnHandlesInteractiveApprovalStreamingImagesAndResumeFallback() async throws {
+        let acpFactory = MockACPProcessSessionFactory()
+        let runner = AIAgentTurnRunner(
+            processFactory: acpFactory,
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        let host = StubWorkspaceHost(workspacePath: "/tmp/demo", files: [:])
+        host.stubbedImages["/tmp/ui.png"] = ("image/png", Data([0x89, 0x50, 0x4E, 0x47]))
+        feature.configure(host: host)
+
+        feature.updateSelectedThreadBackend(.antigravityCLI)
+        feature.updateSelectedThreadModel("gemini-4-neon-high")
+        feature.updateSelectedThreadPermissionMode(.supervised)
+        feature.sendPrompt(
+            "Run checks with Antigravity",
+            attachments: [AIAgentContextAttachment(kind: .image(path: "/tmp/ui.png", displayName: "ui.png"))]
+        )
+
+        // Wait for live mid-turn ACP session/request_permission approval card.
+        let approvalID: UUID = try await waitForState(on: feature) { () -> UUID? in
+            feature.selectedThread?.turns.last?.items.compactMap(\.approval).first(where: { $0.decision == nil })?.id
+        }
+        #expect(feature.selectedThread?.turns.last?.status == .waitingApproval)
+        feature.respondToApproval(requestID: approvalID, decision: .allowOnce)
+
+        let firstTurn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let t = feature.selectedThread?.turns.last, t.status == .completed else { return nil }
+            return t
+        }
+        #expect(feature.selectedThread?.providerSessionID == "acp-sess-1")
+        #expect(firstTurn.assistantResponseText == "Antigravity ACP Done")
+        #expect(firstTurn.usage?.inputTokens == 300)
+        #expect(acpFactory.sentMethods.contains("initialize"))
+        #expect(acpFactory.sentMethods.contains("session/new"))
+        #expect(acpFactory.sentMethods.contains("session/set_mode"))
+        #expect(acpFactory.sentMethods.contains("session/set_model"))
+        #expect(acpFactory.sentPromptContainedImage == true)
+        #expect(acpFactory.permissionReplyOptionIDs == ["allow"])
+
+        // Second turn attempts session/resume; mock rejects resume so runner transparently
+        // falls back to session/new and re-seeds <prior_conversation>.
+        acpFactory.failNextResume = true
+        feature.sendPrompt("Follow up after restart")
+        let secondTurn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let turns = feature.selectedThread?.turns, turns.count == 2, turns[1].status == .completed else { return nil }
+            return turns[1]
+        }
+        #expect(secondTurn.assistantResponseText == "Antigravity ACP Done")
+        #expect(acpFactory.sentMethods.contains("session/resume"))
+        #expect(acpFactory.lastPromptText.contains("<prior_conversation>"))
+        #expect(acpFactory.lastPromptText.contains("Run checks with Antigravity"))
+    }
+
+    @Test
+    func acpPermissionResponseNeverEscalatesAllowOnceToAllowAlways() throws {
+        var parser = ACPStreamParser()
+        let line = """
+        {"jsonrpc":"2.0","id":"perm-always-only","method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"tc-1","name":"run_command","kind":"execute","rawInput":{"CommandLine":"rm -rf build"}},"options":[{"optionId":"always-opt","name":"Always Allow","kind":"allow_always"},{"optionId":"deny-opt","name":"Reject","kind":"reject_once"}]}}
+        """
+        guard case .permissionRequest(let reqID, let request, let options) = parser.parseLine(line) else {
+            Issue.record("Expected permissionRequest frame")
+            return
+        }
+        #expect(!request.allowsAllowOnce)
+        #expect(request.allowsAllowAlways)
+
+        let allowOnceReply = try ACPJSONRPCBuilder.permissionResponse(
+            requestID: reqID,
+            decision: .allowOnce,
+            options: options
+        )
+        let allowOnceText = String(decoding: allowOnceReply, as: UTF8.self)
+        #expect(allowOnceText.contains("\"outcome\":\"cancelled\""))
+        #expect(!allowOnceText.contains("always-opt"))
+
+        let allowAlwaysReply = try ACPJSONRPCBuilder.permissionResponse(
+            requestID: reqID,
+            decision: .allowAlways,
+            options: options
+        )
+        #expect(String(decoding: allowAlwaysReply, as: UTF8.self).contains("\"optionId\":\"always-opt\""))
+    }
+
+    @Test
+    func acpFailsTurnWhenPermissionModeConfigurationFails() async throws {
+        let host = StubWorkspaceHost(workspacePath: "/tmp/acp-mode-fail", files: [:])
+        let acpFactory = MockACPProcessSessionFactory()
+        acpFactory.failNextSetMode = true
+        let runner = AIAgentTurnRunner(
+            processFactory: acpFactory,
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        feature.configure(host: host)
+        feature.updateSelectedThreadBackend(.antigravityCLI)
+        feature.updateSelectedThreadPermissionMode(.plan)
+        feature.updateSelectedThreadModel("")
+
+        feature.sendPrompt("Inspect repo without writing")
+        let failedTurn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let turn = feature.selectedThread?.turns.first, turn.status == .failed else { return nil }
+            return turn
+        }
+        #expect(failedTurn.errorMessage?.contains("permission mode") == true)
+        #expect(!acpFactory.sentMethods.contains("session/prompt"))
+    }
+
+    @Test
+    func acpTerminatesRunawaySubprocessWhenTransportBufferExceedsCap() async throws {
+        let host = StubWorkspaceHost(workspacePath: "/tmp/acp-flood", files: [:])
+        host.stubbedImages["/tmp/flood.png"] = ("image/png", Data([0x89, 0x50, 0x4E, 0x47]))
+        let acpFactory = MockACPProcessSessionFactory()
+        acpFactory.floodBytesOnPermissionPause = 4096
+        let runner = AIAgentTurnRunner(
+            processFactory: acpFactory,
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver(),
+            maxACPQueuedTransportBytes: 1024
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        feature.configure(host: host)
+        feature.updateSelectedThreadBackend(.antigravityCLI)
+        feature.updateSelectedThreadPermissionMode(.supervised)
+
+        feature.sendPrompt(
+            "Trigger flood while waiting approval",
+            attachments: [AIAgentContextAttachment(kind: .image(path: "/tmp/flood.png", displayName: "flood.png"))]
+        )
+        let failedTurn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let turn = feature.selectedThread?.turns.first, turn.status == .failed else { return nil }
+            return turn
+        }
+        #expect(failedTurn.errorMessage?.contains("transport buffer exceeded") == true)
+        #expect(acpFactory.stopCount >= 1)
+    }
+
+    @Test
+    func checkpointRevertPreservesPreTurnDirtyBuffersForCLITurns() async throws {
+        let host = StubWorkspaceHost(workspacePath: "/tmp/dirty-cli-revert", files: ["notes.txt": "unsaved-pre-turn"])
+        host.dirtySnapshots = [AIAgentFileSnapshot(relativePath: "notes.txt", previousContent: "unsaved-pre-turn")]
+        host.checkpointTrees = [
+            "1111111111111111111111111111111111111111",
+            "2222222222222222222222222222222222222222",
+            "2222222222222222222222222222222222222222"
+        ]
+        host.treeDiffResult = [
+            AIAgentFileChangeSummary(path: "notes.txt", kind: .modified, additions: 1, deletions: 1)
+        ]
+        host.onRestoreTree = { [weak host] in
+            // Simulate Git tree restore replacing open buffer with older pre-turn disk text.
+            host?.files["notes.txt"] = "older-disk-text"
+        }
+
+        let runner = AIAgentTurnRunner(
+            processFactory: StubProcessSessionFactory(mode: .streamingAndComplete),
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        feature.configure(host: host)
+        feature.updateSelectedThreadBackend(.codexCLI)
+        feature.updateSelectedThreadPermissionMode(.autoEdit)
+
+        feature.sendPrompt("Update notes")
+        let completedTurn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let turn = feature.selectedThread?.turns.first,
+                  turn.status == .completed,
+                  turn.checkpoint?.gitPostTurnTreeHash != nil else { return nil }
+            return turn
+        }
+        let checkpoint = try #require(completedTurn.checkpoint)
+        #expect(checkpoint.preTurnDirtyBufferSnapshots.count == 1)
+
+        await feature.revertToCheckpoint(checkpoint)
+        #expect(host.restoredTreeHashes == ["1111111111111111111111111111111111111111"])
+        #expect(host.files["notes.txt"] == "unsaved-pre-turn")
+    }
+
+    @Test
+    func acpAllowAlwaysDoesNotAutoApproveSubsequentDifferentCommands() async throws {
+        let host = StubWorkspaceHost(workspacePath: "/tmp/acp-scoped-always", files: [:])
+        host.stubbedImages["/tmp/two.png"] = ("image/png", Data([0x89, 0x50, 0x4E, 0x47]))
+        let acpFactory = MockACPProcessSessionFactory()
+        acpFactory.requestSecondPermissionAfterFirst = true
+        let runner = AIAgentTurnRunner(
+            processFactory: acpFactory,
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver()
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        feature.configure(host: host)
+        feature.updateSelectedThreadBackend(.antigravityCLI)
+        feature.updateSelectedThreadPermissionMode(.supervised)
+
+        feature.sendPrompt(
+            "Run two distinct commands",
+            attachments: [AIAgentContextAttachment(kind: .image(path: "/tmp/two.png", displayName: "two.png"))]
+        )
+
+        // First permission request: user clicks Allow Always.
+        let firstApprovalID: UUID = try await waitForState(on: feature) { () -> UUID? in
+            feature.selectedThread?.turns.last?.items.compactMap(\.approval).first(where: { $0.decision == nil })?.id
+        }
+        feature.respondToApproval(requestID: firstApprovalID, decision: .allowAlways)
+
+        // Second permission request of the SAME kind (.command) MUST still prompt the user
+        // rather than being auto-approved by a kind-wide client cache.
+        let secondApprovalID: UUID = try await waitForState(on: feature) { () -> UUID? in
+            feature.selectedThread?.turns.last?.items.compactMap(\.approval).first(where: { $0.decision == nil && $0.id != firstApprovalID })?.id
+        }
+        feature.respondToApproval(requestID: secondApprovalID, decision: .deny)
+
+        let completedTurn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let t = feature.selectedThread?.turns.last, t.status == .completed else { return nil }
+            return t
+        }
+        #expect(completedTurn.items.compactMap(\.approval).count == 2)
+        #expect(acpFactory.permissionReplyOptionIDs == ["allow-always", "deny"])
+    }
+
+    @Test
+    func acpFailsExplicitlyWhenOversizedFrameExceedsLineLimit() async throws {
+        let host = StubWorkspaceHost(workspacePath: "/tmp/acp-oversize-frame", files: [:])
+        let acpFactory = MockACPProcessSessionFactory()
+        acpFactory.emitOversizedLineBytes = 2048
+        let runner = AIAgentTurnRunner(
+            processFactory: acpFactory,
+            cliResolver: StubCLIResolver(),
+            streamingTransport: StubStreamingTransport(chunks: []),
+            credentialResolver: StubCredentialResolver(),
+            maxACPLineBytes: 1024
+        )
+        let feature = AIAgentFeatureModel(runner: runner, cliResolver: StubCLIResolver(), threadStore: InMemoryThreadStore())
+        feature.configure(host: host)
+        feature.updateSelectedThreadBackend(.antigravityCLI)
+        feature.updateSelectedThreadPermissionMode(.autoEdit)
+
+        feature.sendPrompt("Trigger oversized ACP frame")
+        let failedTurn: AIAgentTurn = try await waitForState(on: feature) { () -> AIAgentTurn? in
+            guard let turn = feature.selectedThread?.turns.first, turn.status == .failed else { return nil }
+            return turn
+        }
+        #expect(failedTurn.errorMessage?.contains("frame limit") == true)
+    }
+
     private func waitForState<T: Sendable>(
         on feature: AIAgentFeatureModel,
         timeout: DispatchTimeInterval = .seconds(5),
@@ -435,16 +1014,26 @@ private final class StubProcessSessionFactory: AIAgentProcessSessionFactory, @un
     let mode: Mode
     private let lock = NSLock()
     private var _spawnCount = 0
+    private var _capturedStdins: [Data] = []
     var spawnCount: Int { lock.withLock { _spawnCount } }
+    var capturedStdins: [Data] { lock.withLock { _capturedStdins } }
     init(mode: Mode) { self.mode = mode }
     func makeSession() -> any AIAgentProcessSession {
         lock.withLock { _spawnCount += 1 }
-        return StubProcessSession()
+        return StubProcessSession { [weak self] stdin in
+            guard let self, let stdin else { return }
+            self.lock.withLock { self._capturedStdins.append(stdin) }
+        }
     }
 }
 
 private final class StubProcessSession: AIAgentProcessSession, @unchecked Sendable {
+    private let onStartStdin: @Sendable (Data?) -> Void
+    init(onStartStdin: @escaping @Sendable (Data?) -> Void = { _ in }) {
+        self.onStartStdin = onStartStdin
+    }
     func start(_ request: AIAgentProcessLaunchRequest, onEvent: @escaping @Sendable (AIAgentProcessEvent) -> Void) throws {
+        onStartStdin(request.standardInput)
         let line = #"{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"Done"}}"# + "\n"
         onEvent(.stdout(Data(line.utf8)))
         onEvent(.terminated(0))
@@ -457,25 +1046,306 @@ private final class StubProcessSession: AIAgentProcessSession, @unchecked Sendab
 private struct StubCLIResolver: AIAgentCLIResolving {
     func detectCLIs(settings: AIAgentSettings) async -> [AIAgentCLIDetection] {
         [
+            AIAgentCLIDetection(backend: .antigravityCLI, isAvailable: true, executablePath: "/usr/local/bin/agy", version: "1.5.18", statusDetail: "ACP ready"),
             AIAgentCLIDetection(backend: .codexCLI, isAvailable: true, executablePath: "/usr/local/bin/codex", version: "0.163.0", statusDetail: "Ready"),
             AIAgentCLIDetection(backend: .claudeCLI, isAvailable: true, executablePath: "/usr/local/bin/claude", version: "2.1.0", statusDetail: "Ready")
         ]
     }
     func resolveExecutable(for backend: AIAgentBackendKind, settings: AIAgentSettings) async -> String? {
-        backend == .codexCLI ? "/usr/local/bin/codex" : "/usr/local/bin/claude"
+        switch backend {
+        case .antigravityCLI: "/usr/local/bin/agy"
+        case .codexCLI: "/usr/local/bin/codex"
+        case .claudeCLI: "/usr/local/bin/claude"
+        case .directHTTP: nil
+        }
     }
     func processEnvironment() async -> [String: String] { [:] }
+}
+
+private final class MockACPProcessSessionFactory: AIAgentProcessSessionFactory, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _sentMethods: [String] = []
+    private var _permissionReplyOptionIDs: [String] = []
+    private var _sentPromptContainedImage = false
+    private var _lastPromptText = ""
+    private var _failNextResume = false
+    private var _failNextSetMode = false
+    private var _floodBytesOnPermissionPause = 0
+    private var _requestSecondPermissionAfterFirst = false
+    private var _emitOversizedLineBytes = 0
+    private var _stopCount = 0
+    private var _sessionCounter = 0
+
+    var sentMethods: [String] { lock.withLock { _sentMethods } }
+    var permissionReplyOptionIDs: [String] { lock.withLock { _permissionReplyOptionIDs } }
+    var sentPromptContainedImage: Bool { lock.withLock { _sentPromptContainedImage } }
+    var lastPromptText: String { lock.withLock { _lastPromptText } }
+    var stopCount: Int { lock.withLock { _stopCount } }
+    var failNextResume: Bool {
+        get { lock.withLock { _failNextResume } }
+        set { lock.withLock { _failNextResume = newValue } }
+    }
+    var failNextSetMode: Bool {
+        get { lock.withLock { _failNextSetMode } }
+        set { lock.withLock { _failNextSetMode = newValue } }
+    }
+    var floodBytesOnPermissionPause: Int {
+        get { lock.withLock { _floodBytesOnPermissionPause } }
+        set { lock.withLock { _floodBytesOnPermissionPause = newValue } }
+    }
+    var requestSecondPermissionAfterFirst: Bool {
+        get { lock.withLock { _requestSecondPermissionAfterFirst } }
+        set { lock.withLock { _requestSecondPermissionAfterFirst = newValue } }
+    }
+    var emitOversizedLineBytes: Int {
+        get { lock.withLock { _emitOversizedLineBytes } }
+        set { lock.withLock { _emitOversizedLineBytes = newValue } }
+    }
+
+    func makeSession() -> any AIAgentProcessSession {
+        MockACPProcessSession(owner: self)
+    }
+
+    fileprivate func recordMethod(_ method: String) {
+        lock.withLock { _sentMethods.append(method) }
+    }
+
+    fileprivate func recordPermissionReply(_ optionID: String) {
+        lock.withLock { _permissionReplyOptionIDs.append(optionID) }
+    }
+
+    fileprivate func recordPrompt(text: String, hasImage: Bool) {
+        lock.withLock {
+            _lastPromptText = text
+            if hasImage { _sentPromptContainedImage = true }
+        }
+    }
+
+    fileprivate func nextSessionID() -> String {
+        lock.withLock {
+            _sessionCounter += 1
+            return "acp-sess-\(_sessionCounter)"
+        }
+    }
+
+    fileprivate func consumeFailResume() -> Bool {
+        lock.withLock {
+            let current = _failNextResume
+            _failNextResume = false
+            return current
+        }
+    }
+
+    fileprivate func consumeFailSetMode() -> Bool {
+        lock.withLock {
+            let current = _failNextSetMode
+            _failNextSetMode = false
+            return current
+        }
+    }
+
+    fileprivate func recordStop() {
+        lock.withLock { _stopCount += 1 }
+    }
+}
+
+private final class MockACPProcessSession: AIAgentProcessSession, @unchecked Sendable {
+    private let owner: MockACPProcessSessionFactory
+    private let lock = NSLock()
+    private var onEvent: (@Sendable (AIAgentProcessEvent) -> Void)?
+    private var lineBuffer = AIAgentLineBuffer()
+    private var pendingPromptReqID: Int?
+    private var activeSessionID = "acp-sess-1"
+    private var isClosed = false
+
+    init(owner: MockACPProcessSessionFactory) {
+        self.owner = owner
+    }
+
+    func start(
+        _ request: AIAgentProcessLaunchRequest,
+        onEvent: @escaping @Sendable (AIAgentProcessEvent) -> Void
+    ) throws {
+        lock.withLock { self.onEvent = onEvent }
+    }
+
+    func writeStandardInput(_ data: Data) throws {
+        let lines = lock.withLock { lineBuffer.append(data) }
+        for line in lines {
+            handleIncomingRPC(line)
+        }
+    }
+
+    func closeStandardInput() {}
+
+    func stopAndWait() async -> Bool {
+        owner.recordStop()
+        let callback: (@Sendable (AIAgentProcessEvent) -> Void)? = lock.withLock {
+            if isClosed { return nil }
+            isClosed = true
+            return onEvent
+        }
+        callback?(.terminated(0))
+        return true
+    }
+
+    private func emitJSON(_ object: [String: Any]) {
+        guard let data = try? ACPJSONRPCBuilder.encodeLine(object) else { return }
+        let callback = lock.withLock { isClosed ? nil : onEvent }
+        callback?(.stdout(data))
+    }
+
+    private func handleIncomingRPC(_ line: String) {
+        guard let data = line.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+        if let method = json["method"] as? String {
+            owner.recordMethod(method)
+            let reqID = (json["id"] as? NSNumber)?.intValue ?? 0
+            switch method {
+            case "initialize":
+                emitJSON(["jsonrpc": "2.0", "id": reqID, "result": ["protocolVersion": 1]])
+            case "session/resume":
+                if owner.consumeFailResume() {
+                    emitJSON(["jsonrpc": "2.0", "id": reqID, "error": ["code": -32000, "message": "Session expired"]])
+                } else {
+                    let sid = (json["params"] as? [String: Any])?["sessionId"] as? String ?? "acp-sess-1"
+                    lock.withLock { activeSessionID = sid }
+                    emitJSON(["jsonrpc": "2.0", "id": reqID, "result": ["sessionId": sid, "modes": ["availableModes": [["id": "default"], ["id": "accept-edits"], ["id": "auto"], ["id": "plan"]]]]])
+                }
+            case "session/new":
+                let sid = owner.nextSessionID()
+                lock.withLock { activeSessionID = sid }
+                emitJSON(["jsonrpc": "2.0", "id": reqID, "result": ["sessionId": sid, "modes": ["availableModes": [["id": "default"], ["id": "accept-edits"], ["id": "auto"], ["id": "plan"]]]]])
+            case "session/set_mode":
+                if owner.consumeFailSetMode() {
+                    emitJSON(["jsonrpc": "2.0", "id": reqID, "error": ["code": -32001, "message": "Mode rejected"]])
+                } else {
+                    emitJSON(["jsonrpc": "2.0", "id": reqID, "result": [:]])
+                }
+            case "session/set_model", "session/set_config_option":
+                emitJSON(["jsonrpc": "2.0", "id": reqID, "result": [:]])
+            case "session/prompt":
+                let params = json["params"] as? [String: Any]
+                let blocks = (params?["prompt"] as? [[String: Any]]) ?? []
+                let text = blocks.compactMap { ($0["type"] as? String) == "text" ? ($0["text"] as? String) : nil }.joined()
+                let hasImage = blocks.contains { ($0["type"] as? String) == "image" }
+                owner.recordPrompt(text: text, hasImage: hasImage)
+                let sid = lock.withLock { activeSessionID }
+                if hasImage {
+                    lock.withLock { pendingPromptReqID = reqID }
+                    emitJSON([
+                        "jsonrpc": "2.0",
+                        "id": "perm-1",
+                        "method": "session/request_permission",
+                        "params": [
+                            "sessionId": sid,
+                            "toolCall": [
+                                "toolCallId": "tc-1",
+                                "name": "run_command",
+                                "kind": "execute",
+                                "title": "go test",
+                                "rawInput": ["CommandLine": "go test ./..."]
+                            ],
+                            "options": [
+                                ["optionId": "allow", "name": "Allow", "kind": "allow_once"],
+                                ["optionId": "allow-always", "name": "Allow Always", "kind": "allow_always"],
+                                ["optionId": "deny", "name": "Deny", "kind": "reject_once"]
+                            ]
+                        ]
+                    ])
+                    let floodBytes = owner.floodBytesOnPermissionPause
+                    if floodBytes > 0 {
+                        let chunk = Data(repeating: UInt8(ascii: "x"), count: floodBytes)
+                        let callback = lock.withLock { isClosed ? nil : onEvent }
+                        callback?(.stderr(chunk))
+                    }
+                } else if owner.emitOversizedLineBytes > 0 {
+                    let padding = String(repeating: "a", count: owner.emitOversizedLineBytes)
+                    emitJSON([
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": [
+                            "sessionId": sid,
+                            "update": ["sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": padding]]
+                        ]
+                    ])
+                } else {
+                    emitPromptCompletion(reqID: reqID, sessionID: sid)
+                }
+            default:
+                break
+            }
+            return
+        }
+
+        // Response to server -> client permission request.
+        if let respID = json["id"] as? String, (respID == "perm-1" || respID == "perm-2"),
+           let result = json["result"] as? [String: Any],
+           let outcome = result["outcome"] as? [String: Any],
+           let optionID = outcome["optionId"] as? String {
+            owner.recordPermissionReply(optionID)
+            let (promptID, sid) = lock.withLock { (pendingPromptReqID, activeSessionID) }
+            if respID == "perm-1" && owner.requestSecondPermissionAfterFirst {
+                emitJSON([
+                    "jsonrpc": "2.0",
+                    "id": "perm-2",
+                    "method": "session/request_permission",
+                    "params": [
+                        "sessionId": sid,
+                        "toolCall": [
+                            "toolCallId": "tc-2",
+                            "name": "run_command",
+                            "kind": "execute",
+                            "title": "rm -rf dist",
+                            "rawInput": ["CommandLine": "rm -rf dist"]
+                        ],
+                        "options": [
+                            ["optionId": "allow", "name": "Allow", "kind": "allow_once"],
+                            ["optionId": "allow-always", "name": "Allow Always", "kind": "allow_always"],
+                            ["optionId": "deny", "name": "Deny", "kind": "reject_once"]
+                        ]
+                    ]
+                ])
+            } else if let promptID {
+                emitPromptCompletion(reqID: promptID, sessionID: sid)
+            }
+        }
+    }
+
+    private func emitPromptCompletion(reqID: Int, sessionID: String) {
+        emitJSON([
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": [
+                "sessionId": sessionID,
+                "update": ["sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": "Antigravity ACP Done"]]
+            ]
+        ])
+        emitJSON([
+            "jsonrpc": "2.0",
+            "id": reqID,
+            "result": [
+                "stopReason": "end_turn",
+                "usage": ["inputTokens": 300, "outputTokens": 12, "cachedReadTokens": 0, "thoughtTokens": 5]
+            ]
+        ])
+    }
 }
 
 private final class StubStreamingTransport: AIHTTPStreamingTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var chunks: [Data]
+    private var _recordedRequests: [AIHTTPRequest] = []
+    var recordedRequests: [AIHTTPRequest] { lock.withLock { _recordedRequests } }
 
     init(chunks: [Data]) { self.chunks = chunks }
 
     func stream(_ request: AIHTTPRequest) async throws -> AsyncThrowingStream<Data, Error> {
         let next: Data = lock.withLock {
-            chunks.isEmpty ? Data() : chunks.removeFirst()
+            _recordedRequests.append(request)
+            return chunks.isEmpty ? Data() : chunks.removeFirst()
         }
         return AsyncThrowingStream { continuation in
             if !next.isEmpty { continuation.yield(next) }
@@ -508,7 +1378,17 @@ private final class StubWorkspaceHost: AIAgentWorkspaceHost {
     var agentSettings = AIAgentSettings.default
     var commitMessageAISettings: CommitMessageAISettings
     var onWorktreeStart: (() -> Void)?
+    var onCommitStart: (() -> Void)?
     var pendingTaskBox: Task<Void, Never>?
+    var checkpointTrees: [String] = []
+    var dirtySnapshots: [AIAgentFileSnapshot] = []
+    var treeDiffResult: [AIAgentFileChangeSummary] = []
+    var restoredTreeHashes: [String] = []
+    var onRestoreTree: (() -> Void)?
+    var removedWorktrees: [String] = []
+    var committedRoots: [String] = []
+    var pushedRoots: [String] = []
+    var stubbedImages: [String: (mimeType: String, data: Data)] = [:]
     private var worktreeGate: CheckedContinuation<Void, Never>?
 
     func resumeWorktreeGate() {
@@ -556,6 +1436,23 @@ private final class StubWorkspaceHost: AIAgentWorkspaceHost {
     func workingTreeDiff(in rootPath: String) async -> AIAgentWorkingTreeDiff {
         AIAgentWorkingTreeDiff(rootPath: rootPath, branchName: "main", headHash: "abc123")
     }
+    func captureGitCheckpointTree(in rootPath: String) async -> String? {
+        checkpointTrees.isEmpty ? nil : checkpointTrees.removeFirst()
+    }
+    func openDirtyFileSnapshots(in rootPath: String) -> [AIAgentFileSnapshot] {
+        dirtySnapshots
+    }
+    func diffGitTrees(from preTree: String, to postTree: String, in rootPath: String) async -> [AIAgentFileChangeSummary] {
+        treeDiffResult
+    }
+    func restoreGitCheckpointTree(_ treeHash: String, in rootPath: String) async throws -> Int {
+        restoredTreeHashes.append(treeHash)
+        onRestoreTree?()
+        return max(1, treeDiffResult.count)
+    }
+    func readImageData(at path: String, maxBytes: Int) -> (mimeType: String, data: Data)? {
+        stubbedImages[path]
+    }
     func createIsolatedWorktree(branchName: String, from workspaceRoot: String) async throws -> AIAgentWorktreeInfo {
         if let onStart = onWorktreeStart {
             onWorktreeStart = nil
@@ -567,9 +1464,18 @@ private final class StubWorkspaceHost: AIAgentWorkspaceHost {
         let slug = branchName.replacingOccurrences(of: "/", with: "-")
         return AIAgentWorktreeInfo(path: "\(workspaceRoot)-worktrees/\(slug)", branchName: branchName)
     }
-    func removeIsolatedWorktree(path: String, from workspaceRoot: String) async throws {}
-    func commitChanges(message: String, in rootPath: String) async throws -> String { "Committed" }
-    func pushCurrentBranch(in rootPath: String) async throws -> String { "Pushed" }
+    func removeIsolatedWorktree(path: String, from workspaceRoot: String) async throws {
+        removedWorktrees.append(path)
+    }
+    func commitChanges(message: String, in rootPath: String) async throws -> String {
+        onCommitStart?()
+        committedRoots.append(rootPath)
+        return "Committed"
+    }
+    func pushCurrentBranch(in rootPath: String) async throws -> String {
+        pushedRoots.append(rootPath)
+        return "Pushed"
+    }
     func openFile(relativePath: String, rootPath: String) {}
     func openDiff(relativePath: String, rootPath: String) {}
     func refreshWorkspaceAndGit() async {}

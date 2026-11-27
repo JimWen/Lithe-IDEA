@@ -27,6 +27,7 @@ public enum AIAgentBackendError: LocalizedError, Sendable {
     case missingAPIKey(String)
     case invalidEndpoint(String)
     case processExitedWithError(Int32, String)
+    case acpProtocolError(String)
 
     public var errorDescription: String? {
         switch self {
@@ -44,6 +45,8 @@ public enum AIAgentBackendError: LocalizedError, Sendable {
                 return "Agent process exited with code \(code)."
             }
             return "Agent process exited with code \(code): \(String(detail.prefix(600)))"
+        case .acpProtocolError(let detail):
+            return detail
         }
     }
 }
@@ -54,22 +57,37 @@ public struct AIAgentTurnRunner: Sendable {
     private let cliResolver: any AIAgentCLIResolving
     private let streamingTransport: any AIHTTPStreamingTransport
     private let credentialResolver: any AIProviderCredentialResolver
+    private let maxACPQueuedTransportBytes: Int
+    private let maxACPLineBytes: Int
 
     public init(
         processFactory: any AIAgentProcessSessionFactory,
         cliResolver: any AIAgentCLIResolving,
         streamingTransport: any AIHTTPStreamingTransport,
-        credentialResolver: any AIProviderCredentialResolver
+        credentialResolver: any AIProviderCredentialResolver,
+        maxACPQueuedTransportBytes: Int = 16 * 1024 * 1024,
+        maxACPLineBytes: Int = 4 * 1024 * 1024
     ) {
         self.processFactory = processFactory
         self.cliResolver = cliResolver
         self.streamingTransport = streamingTransport
         self.credentialResolver = credentialResolver
+        self.maxACPQueuedTransportBytes = max(1024, maxACPQueuedTransportBytes)
+        self.maxACPLineBytes = max(1024, maxACPLineBytes)
+    }
+
+    public static func buildAntigravityArguments(thread: AIAgentThread) -> [String] {
+        var args = ["acp"]
+        if thread.permissionMode == .fullAuto {
+            args.append("--dangerously-skip-permissions")
+        }
+        return args
     }
 
     public static func buildCodexArguments(
         thread: AIAgentThread,
-        workingDirectory: String
+        workingDirectory: String,
+        imagePaths: [String] = []
     ) -> [String] {
         var args: [String] = ["exec"]
         if let sessionID = thread.providerSessionID, !sessionID.isEmpty {
@@ -77,6 +95,9 @@ public struct AIAgentTurnRunner: Sendable {
             let trimmedModel = thread.model.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmedModel.isEmpty {
                 args.append(contentsOf: ["-m", trimmedModel])
+            }
+            for imagePath in imagePaths where !imagePath.isEmpty {
+                args.append(contentsOf: ["-i", imagePath])
             }
             args.append(contentsOf: ["-c", "model_reasoning_effort=\"\(thread.reasoningEffort.rawValue)\""])
             switch thread.permissionMode {
@@ -95,6 +116,9 @@ public struct AIAgentTurnRunner: Sendable {
         let trimmedModel = thread.model.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedModel.isEmpty {
             args.append(contentsOf: ["-m", trimmedModel])
+        }
+        for imagePath in imagePaths where !imagePath.isEmpty {
+            args.append(contentsOf: ["-i", imagePath])
         }
         args.append(contentsOf: ["-c", "model_reasoning_effort=\"\(thread.reasoningEffort.rawValue)\""])
         switch thread.permissionMode {
@@ -124,11 +148,14 @@ public struct AIAgentTurnRunner: Sendable {
             args.append(contentsOf: ["--model", trimmedModel])
         }
         args.append(contentsOf: ["--effort", thread.reasoningEffort.rawValue])
+        // Claude Code 2.1+ accepts: acceptEdits, auto, bypassPermissions, manual, dontAsk, plan.
+        // In supervised mode, Lithe gates execution with a pre-turn approval card and omits
+        // --permission-mode so Claude uses its built-in safe default without failing option validation.
         switch thread.permissionMode {
         case .plan:
             args.append(contentsOf: ["--permission-mode", "plan"])
         case .supervised:
-            args.append(contentsOf: ["--permission-mode", "default"])
+            break
         case .autoEdit:
             args.append(contentsOf: ["--permission-mode", "acceptEdits"])
         case .fullAuto:
@@ -146,20 +173,42 @@ public struct AIAgentTurnRunner: Sendable {
         hooks: AIAgentTurnExecutionHooks
     ) async throws {
         let settings = host.agentSettings
+        // For fresh CLI sessions (no providerSessionID yet) on threads with prior completed turns
+        // (such as forked threads, provider switches, or newly attached worktrees), inject bounded
+        // prior conversation history so the new CLI session retains context.
+        let shouldSeedPriorHistory = thread.backend != .directHTTP
+            && (thread.providerSessionID?.isEmpty ?? true)
+        let priorTurnsForCLI = shouldSeedPriorHistory
+            ? thread.turns.filter { !$0.isInFlight }
+            : []
         let composedPrompt = await AIAgentPromptBuilder.buildPrompt(
             userPrompt: prompt,
             attachments: attachments,
             customInstructions: settings.customSystemInstructions,
             permissionMode: thread.permissionMode,
+            priorTurns: priorTurnsForCLI,
             rootPath: thread.effectiveRootPath,
             host: host
         )
+        let imagePaths = attachments.compactMap(\.imageFilePath)
 
         switch thread.backend {
+        case .antigravityCLI:
+            try await runAntigravityACP(
+                thread: thread,
+                rawPrompt: prompt,
+                composedPrompt: composedPrompt,
+                attachments: attachments,
+                imagePaths: imagePaths,
+                settings: settings,
+                host: host,
+                hooks: hooks
+            )
         case .codexCLI:
             try await runCodexCLI(
                 thread: thread,
                 prompt: composedPrompt,
+                imagePaths: imagePaths,
                 settings: settings,
                 hooks: hooks
             )
@@ -174,23 +223,421 @@ public struct AIAgentTurnRunner: Sendable {
             try await runDirectHTTP(
                 thread: thread,
                 userPrompt: composedPrompt,
+                imagePaths: imagePaths,
                 host: host,
                 hooks: hooks
             )
         }
     }
 
+    /// Runs a turn against Antigravity CLI via the Agent Client Protocol (`agy acp`),
+    /// matching T3 Code's bidirectional ACP stdio architecture with live streaming updates,
+    /// interactive per-tool `session/request_permission` approvals, session resume, and images.
+    @MainActor
+    private func runAntigravityACP(
+        thread: AIAgentThread,
+        rawPrompt: String,
+        composedPrompt: String,
+        attachments: [AIAgentContextAttachment],
+        imagePaths: [String],
+        settings: AIAgentSettings,
+        host: any AIAgentWorkspaceHost,
+        hooks: AIAgentTurnExecutionHooks
+    ) async throws {
+        guard let executable = await cliResolver.resolveExecutable(for: .antigravityCLI, settings: settings) else {
+            throw AIAgentBackendError.executableNotFound(.antigravityCLI)
+        }
+        let args = Self.buildAntigravityArguments(thread: thread)
+        let env = await cliResolver.processEnvironment()
+
+        let session = processFactory.makeSession()
+        hooks.onRegisterProcess(session)
+        defer { hooks.onRegisterProcess(nil) }
+
+        let transportBudget = ACPTransportBudgetBox(maxQueuedBytes: maxACPQueuedTransportBytes)
+
+        // ACP uses bidirectional JSON-RPC where dropping middle frames would corrupt RPC
+        // framing; enforce a hard queued-byte budget that terminates runaway subprocesses
+        // instead of silently dropping frames or exhausting memory while awaiting approvals.
+        let stream = AsyncStream<AIAgentProcessEvent>(bufferingPolicy: .unbounded) { continuation in
+            do {
+                try session.start(
+                    AIAgentProcessLaunchRequest(
+                        executablePath: executable,
+                        arguments: args,
+                        workingDirectory: thread.effectiveRootPath,
+                        environment: env,
+                        standardInput: nil
+                    )
+                ) { event in
+                    switch event {
+                    case .stdout(let data), .stderr(let data):
+                        if !transportBudget.recordEnqueue(bytes: data.count) {
+                            session.closeStandardInput()
+                            Task { _ = await session.stopAndWait() }
+                            continuation.finish()
+                            transportBudget.triggerOverflowHandler()
+                            return
+                        }
+                        continuation.yield(event)
+                    case .terminated:
+                        continuation.yield(event)
+                        continuation.finish()
+                    }
+                }
+            } catch {
+                continuation.yield(.stderr(Data(error.localizedDescription.utf8)))
+                continuation.yield(.terminated(127))
+                continuation.finish()
+            }
+        }
+
+        let stateBox = ACPRuntimeStateBox()
+        var lineBuffer = AIAgentLineBuffer(maxLineBytes: maxACPLineBytes)
+        var parser = ACPStreamParser()
+        var stderrCollector = Data()
+        var displayedUpdateBytes = 0
+        var didWarnOutputLimit = false
+        var terminatedCode: Int32?
+        var nextRequestID = 1
+
+        func allocateID() -> Int {
+            defer { nextRequestID += 1 }
+            return nextRequestID
+        }
+
+        func sendRPC(_ data: Data) throws {
+            try session.writeStandardInput(data)
+        }
+
+        enum ACPConfigStepKind {
+            case permissionMode(String)
+            case model
+            case thoughtLevel
+        }
+
+        struct ACPConfigStep {
+            let id: Int
+            let payload: Data
+            let kind: ACPConfigStepKind
+        }
+
+        enum ACPPhase {
+            case awaitingInitialize(Int)
+            case awaitingResume(Int)
+            case awaitingNew(Int)
+            case awaitingConfigure(current: ACPConfigStep, remaining: [ACPConfigStep], sessionID: String, didFallbackFromResume: Bool)
+            case awaitingPrompt(Int)
+            case completed
+        }
+
+        let encodedImages: [(mimeType: String, base64Data: String)] = imagePaths.prefix(4).compactMap { path in
+            guard let payload = host.readImageData(at: path, maxBytes: 4 * 1024 * 1024) else { return nil }
+            return (payload.mimeType, payload.data.base64EncodedString())
+        }
+
+        func dispatchPrompt(sessionID: String, didFallbackFromResume: Bool) async throws -> ACPPhase {
+            let finalPromptText: String
+            if didFallbackFromResume && !thread.turns.isEmpty {
+                finalPromptText = await AIAgentPromptBuilder.buildPrompt(
+                    userPrompt: rawPrompt,
+                    attachments: attachments,
+                    customInstructions: settings.customSystemInstructions,
+                    permissionMode: thread.permissionMode,
+                    priorTurns: thread.turns.filter { !$0.isInFlight },
+                    rootPath: thread.effectiveRootPath,
+                    host: host
+                )
+            } else {
+                finalPromptText = composedPrompt
+            }
+            let promptID = allocateID()
+            try sendRPC(try ACPJSONRPCBuilder.sessionPromptRequest(
+                id: promptID,
+                sessionID: sessionID,
+                text: finalPromptText,
+                images: encodedImages
+            ))
+            return .awaitingPrompt(promptID)
+        }
+
+        func beginConfigureOrPrompt(
+            payload: ACPResponsePayload,
+            didFallbackFromResume: Bool
+        ) async throws -> ACPPhase {
+            guard let sessionID = payload.sessionID, !sessionID.isEmpty else {
+                throw AIAgentBackendError.acpProtocolError("Antigravity ACP did not return a sessionId.")
+            }
+            stateBox.setSessionID(sessionID)
+            hooks.onEvent(.sessionEstablished(sessionID))
+
+            var configSteps: [ACPConfigStep] = []
+            let targetModeID = ACPJSONRPCBuilder.antigravityModeID(for: thread.permissionMode)
+            if !payload.availableModeIDs.isEmpty && !payload.availableModeIDs.contains(targetModeID) {
+                throw AIAgentBackendError.acpProtocolError(
+                    "Antigravity ACP server does not support requested permission mode '\(targetModeID)'."
+                )
+            }
+            let modeID = allocateID()
+            configSteps.append(ACPConfigStep(
+                id: modeID,
+                payload: try ACPJSONRPCBuilder.sessionSetModeRequest(
+                    id: modeID,
+                    sessionID: sessionID,
+                    modeID: targetModeID
+                ),
+                kind: .permissionMode(targetModeID)
+            ))
+
+            let trimmedModel = thread.model.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedModel.isEmpty {
+                let modelID = allocateID()
+                configSteps.append(ACPConfigStep(
+                    id: modelID,
+                    payload: try ACPJSONRPCBuilder.sessionSetModelRequest(
+                        id: modelID,
+                        sessionID: sessionID,
+                        modelID: trimmedModel
+                    ),
+                    kind: .model
+                ))
+            } else if payload.supportedThoughtLevels.contains(thread.reasoningEffort.rawValue) {
+                let effortID = allocateID()
+                configSteps.append(ACPConfigStep(
+                    id: effortID,
+                    payload: try ACPJSONRPCBuilder.sessionSetConfigOptionRequest(
+                        id: effortID,
+                        sessionID: sessionID,
+                        configID: "thought_level",
+                        value: thread.reasoningEffort.rawValue
+                    ),
+                    kind: .thoughtLevel
+                ))
+            }
+
+            if let first = configSteps.first {
+                try sendRPC(first.payload)
+                return .awaitingConfigure(
+                    current: first,
+                    remaining: Array(configSteps.dropFirst()),
+                    sessionID: sessionID,
+                    didFallbackFromResume: didFallbackFromResume
+                )
+            }
+            return try await dispatchPrompt(sessionID: sessionID, didFallbackFromResume: didFallbackFromResume)
+        }
+
+        var phase: ACPPhase = .awaitingInitialize(allocateID())
+        let initialReqID: Int = {
+            if case .awaitingInitialize(let id) = phase { return id }
+            return 1
+        }()
+
+        do {
+            try sendRPC(try ACPJSONRPCBuilder.initializeRequest(id: initialReqID))
+
+            try await withTaskCancellationHandler {
+                let readerTask = Task { @MainActor in
+                    eventLoop: for await event in stream {
+                        if transportBudget.isExceeded { break eventLoop }
+                        try Task.checkCancellation()
+                        switch event {
+                        case .stdout(let data):
+                            transportBudget.recordDequeue(bytes: data.count)
+                            // Always continue parsing ACP JSON-RPC lines so protocol responses and
+                            // interactive permission requests are never dropped; fail explicitly if
+                            // any single JSON-RPC frame exceeds the configured frame-size limit.
+                            let parsedLines = lineBuffer.append(data)
+                            if lineBuffer.droppedOversizedLineCount > 0 {
+                                throw AIAgentBackendError.acpProtocolError(
+                                    "Antigravity ACP emitted a JSON-RPC frame exceeding the \(maxACPLineBytes)-byte frame limit."
+                                )
+                            }
+                            for line in parsedLines {
+                                if transportBudget.isExceeded { break eventLoop }
+                                let incoming = parser.parseLine(line)
+                                switch incoming {
+                                case .sessionUpdate(_, let events):
+                                    if displayedUpdateBytes >= Self.maxTurnStdoutBytes {
+                                        if !didWarnOutputLimit {
+                                            didWarnOutputLimit = true
+                                            hooks.onEvent(.systemNotice("ACP stream output exceeded the 8 MiB per-turn cap; additional display deltas are suppressed while awaiting turn completion."))
+                                        }
+                                        continue
+                                    }
+                                    displayedUpdateBytes += line.utf8.count
+                                    for ev in events {
+                                        hooks.onEvent(ev)
+                                    }
+                                case .permissionRequest(let reqID, let approvalRequest, let options):
+                                    if transportBudget.isExceeded { break eventLoop }
+                                    let decision: AIAgentApprovalDecision
+                                    if thread.permissionMode == .fullAuto {
+                                        decision = .allowAlways
+                                    } else {
+                                        decision = await hooks.onRequestApproval(approvalRequest)
+                                    }
+                                    if transportBudget.isExceeded { break eventLoop }
+                                    let reply = try ACPJSONRPCBuilder.permissionResponse(
+                                        requestID: reqID,
+                                        decision: decision,
+                                        options: options
+                                    )
+                                    try sendRPC(reply)
+                                case .response(let responseID, let payload, let errorMessage):
+                                    switch phase {
+                                    case .awaitingInitialize(let expectedID) where responseID == .int(expectedID):
+                                        if let err = errorMessage {
+                                            throw AIAgentBackendError.acpProtocolError(err)
+                                        }
+                                        if let existingID = thread.providerSessionID, !existingID.isEmpty {
+                                            let resumeID = allocateID()
+                                            try sendRPC(try ACPJSONRPCBuilder.sessionResumeRequest(
+                                                id: resumeID,
+                                                sessionID: existingID,
+                                                cwd: thread.effectiveRootPath
+                                            ))
+                                            phase = .awaitingResume(resumeID)
+                                        } else {
+                                            let newID = allocateID()
+                                            try sendRPC(try ACPJSONRPCBuilder.sessionNewRequest(
+                                                id: newID,
+                                                cwd: thread.effectiveRootPath
+                                            ))
+                                            phase = .awaitingNew(newID)
+                                        }
+
+                                    case .awaitingResume(let expectedID) where responseID == .int(expectedID):
+                                        if errorMessage == nil, let sid = payload.sessionID, !sid.isEmpty {
+                                            phase = try await beginConfigureOrPrompt(payload: payload, didFallbackFromResume: false)
+                                        } else {
+                                            let newID = allocateID()
+                                            try sendRPC(try ACPJSONRPCBuilder.sessionNewRequest(
+                                                id: newID,
+                                                cwd: thread.effectiveRootPath
+                                            ))
+                                            phase = .awaitingNew(newID)
+                                        }
+
+                                    case .awaitingNew(let expectedID) where responseID == .int(expectedID):
+                                        if let err = errorMessage {
+                                            throw AIAgentBackendError.acpProtocolError(err)
+                                        }
+                                        let didFallback = !(thread.providerSessionID?.isEmpty ?? true)
+                                        phase = try await beginConfigureOrPrompt(payload: payload, didFallbackFromResume: didFallback)
+
+                                    case .awaitingConfigure(let currentStep, let remainingSteps, let sid, let didFallback) where responseID == .int(currentStep.id):
+                                        if let err = errorMessage {
+                                            switch currentStep.kind {
+                                            case .permissionMode(let modeID):
+                                                throw AIAgentBackendError.acpProtocolError(
+                                                    "Failed to apply Antigravity permission mode '\(modeID)': \(err)"
+                                                )
+                                            case .model, .thoughtLevel:
+                                                hooks.onEvent(.systemNotice("Antigravity session config warning: \(err)"))
+                                            }
+                                        }
+                                        if let next = remainingSteps.first {
+                                            try sendRPC(next.payload)
+                                            phase = .awaitingConfigure(
+                                                current: next,
+                                                remaining: Array(remainingSteps.dropFirst()),
+                                                sessionID: sid,
+                                                didFallbackFromResume: didFallback
+                                            )
+                                        } else {
+                                            phase = try await dispatchPrompt(sessionID: sid, didFallbackFromResume: didFallback)
+                                        }
+
+                                    case .awaitingPrompt(let expectedID) where responseID == .int(expectedID):
+                                        if let err = errorMessage {
+                                            throw AIAgentBackendError.acpProtocolError(err)
+                                        }
+                                        if let usage = payload.usage {
+                                            hooks.onEvent(.usage(usage))
+                                        }
+                                        phase = .completed
+                                        break eventLoop
+
+                                    default:
+                                        break
+                                    }
+                                case .ignored:
+                                    break
+                                }
+                            }
+
+                        case .stderr(let data):
+                            transportBudget.recordDequeue(bytes: data.count)
+                            if stderrCollector.count < 32_768 {
+                                stderrCollector.append(data.prefix(32_768 - stderrCollector.count))
+                            }
+
+                        case .terminated(let code):
+                            terminatedCode = code
+                        }
+                    }
+                }
+                transportBudget.setOverflowHandler { readerTask.cancel() }
+                defer { transportBudget.setOverflowHandler(nil) }
+                do {
+                    try await withTaskCancellationHandler {
+                        try await readerTask.value
+                    } onCancel: {
+                        readerTask.cancel()
+                    }
+                } catch is CancellationError {
+                    if !transportBudget.isExceeded {
+                        throw CancellationError()
+                    }
+                }
+
+                if transportBudget.isExceeded {
+                    throw AIAgentBackendError.acpProtocolError(
+                        "Antigravity ACP transport buffer exceeded \(maxACPQueuedTransportBytes) bytes; terminated runaway subprocess."
+                    )
+                }
+                if case .completed = phase {
+                    // Turn completed normally.
+                } else {
+                    let code = terminatedCode ?? 1
+                    let stderrText = String(decoding: stderrCollector, as: UTF8.self)
+                    throw AIAgentBackendError.processExitedWithError(code, stderrText)
+                }
+            } onCancel: {
+                if let sid = stateBox.sessionID,
+                   let cancelData = try? ACPJSONRPCBuilder.sessionCancelNotification(sessionID: sid) {
+                    try? session.writeStandardInput(cancelData)
+                }
+                session.closeStandardInput()
+                Task { _ = await session.stopAndWait() }
+            }
+        } catch {
+            session.closeStandardInput()
+            _ = await session.stopAndWait()
+            throw error
+        }
+
+        session.closeStandardInput()
+        _ = await session.stopAndWait()
+    }
+
     @MainActor
     private func runCodexCLI(
         thread: AIAgentThread,
         prompt: String,
+        imagePaths: [String],
         settings: AIAgentSettings,
         hooks: AIAgentTurnExecutionHooks
     ) async throws {
         guard let executable = await cliResolver.resolveExecutable(for: .codexCLI, settings: settings) else {
             throw AIAgentBackendError.executableNotFound(.codexCLI)
         }
-        let args = Self.buildCodexArguments(thread: thread, workingDirectory: thread.effectiveRootPath)
+        let args = Self.buildCodexArguments(
+            thread: thread,
+            workingDirectory: thread.effectiveRootPath,
+            imagePaths: imagePaths
+        )
         if thread.permissionMode == .supervised {
             let decision = await hooks.onRequestApproval(AIAgentApprovalRequest(
                 kind: .command,
@@ -355,6 +802,7 @@ public struct AIAgentTurnRunner: Sendable {
     private func runDirectHTTP(
         thread: AIAgentThread,
         userPrompt: String,
+        imagePaths: [String],
         host: any AIAgentWorkspaceHost,
         hooks: AIAgentTurnExecutionHooks
     ) async throws {
@@ -380,7 +828,16 @@ public struct AIAgentTurnRunner: Sendable {
             customInstructions: host.agentSettings.customSystemInstructions
         )
 
-        var conversationMessages = Self.seedConversationHistory(from: thread, latestPrompt: userPrompt)
+        let attachedImages: [EncodedImage] = imagePaths.prefix(4).compactMap { path in
+            guard let payload = host.readImageData(at: path, maxBytes: 4 * 1024 * 1024) else { return nil }
+            return EncodedImage(mimeType: payload.mimeType, base64Data: payload.data.base64EncodedString())
+        }
+
+        var conversationMessages = Self.seedConversationHistory(
+            from: thread,
+            latestPrompt: userPrompt,
+            latestImages: attachedImages
+        )
         let maxSteps = 10
 
         for step in 0..<maxSteps {
@@ -643,18 +1100,27 @@ public struct AIAgentTurnRunner: Sendable {
 
     // MARK: - Direct HTTP Payload Builders
 
+    private struct EncodedImage {
+        let mimeType: String
+        let base64Data: String
+    }
+
     private enum ConversationMessage {
-        case user(String)
+        case user(String, images: [EncodedImage])
         case assistant(text: String, toolCalls: [DirectHTTPToolInvocation])
         case toolResult(callID: String, name: String, output: String)
     }
 
-    private static func seedConversationHistory(from thread: AIAgentThread, latestPrompt: String) -> [ConversationMessage] {
+    private static func seedConversationHistory(
+        from thread: AIAgentThread,
+        latestPrompt: String,
+        latestImages: [EncodedImage] = []
+    ) -> [ConversationMessage] {
         var result: [ConversationMessage] = []
         // Include up to last 8 completed turns for coherent multi-turn context.
         let recentCompleted = thread.turns.filter { $0.status == .completed }.suffix(8)
         for turn in recentCompleted {
-            result.append(.user(turn.prompt))
+            result.append(.user(turn.prompt, images: []))
             let assistantReply = turn.items
                 .filter { $0.kind == .assistantText }
                 .map(\.content)
@@ -663,7 +1129,7 @@ public struct AIAgentTurnRunner: Sendable {
                 result.append(.assistant(text: assistantReply, toolCalls: []))
             }
         }
-        result.append(.user(latestPrompt))
+        result.append(.user(latestPrompt, images: latestImages))
         return result
     }
 
@@ -810,8 +1276,19 @@ public struct AIAgentTurnRunner: Sendable {
             var inputItems: [[String: Any]] = []
             for msg in messages {
                 switch msg {
-                case .user(let text):
-                    inputItems.append(["role": "user", "content": text])
+                case .user(let text, let images):
+                    if images.isEmpty {
+                        inputItems.append(["role": "user", "content": text])
+                    } else {
+                        var parts: [[String: Any]] = [["type": "input_text", "text": text]]
+                        for img in images {
+                            parts.append([
+                                "type": "input_image",
+                                "image_url": "data:\(img.mimeType);base64,\(img.base64Data)"
+                            ])
+                        }
+                        inputItems.append(["role": "user", "content": parts])
+                    }
                 case .assistant(let text, let toolCalls):
                     if !text.isEmpty {
                         inputItems.append(["role": "assistant", "content": text])
@@ -853,8 +1330,19 @@ public struct AIAgentTurnRunner: Sendable {
             var chatMessages: [[String: Any]] = [["role": "system", "content": systemPrompt]]
             for msg in messages {
                 switch msg {
-                case .user(let text):
-                    chatMessages.append(["role": "user", "content": text])
+                case .user(let text, let images):
+                    if images.isEmpty {
+                        chatMessages.append(["role": "user", "content": text])
+                    } else {
+                        var parts: [[String: Any]] = [["type": "text", "text": text]]
+                        for img in images {
+                            parts.append([
+                                "type": "image_url",
+                                "image_url": ["url": "data:\(img.mimeType);base64,\(img.base64Data)"]
+                            ])
+                        }
+                        chatMessages.append(["role": "user", "content": parts])
+                    }
                 case .assistant(let text, let toolCalls):
                     var dict: [String: Any] = ["role": "assistant", "content": text]
                     if !toolCalls.isEmpty {
@@ -889,8 +1377,24 @@ public struct AIAgentTurnRunner: Sendable {
             var anthropicMessages: [[String: Any]] = []
             for msg in messages {
                 switch msg {
-                case .user(let text):
-                    anthropicMessages.append(["role": "user", "content": text])
+                case .user(let text, let images):
+                    if images.isEmpty {
+                        anthropicMessages.append(["role": "user", "content": text])
+                    } else {
+                        var blocks: [[String: Any]] = []
+                        for img in images {
+                            blocks.append([
+                                "type": "image",
+                                "source": [
+                                    "type": "base64",
+                                    "media_type": img.mimeType,
+                                    "data": img.base64Data
+                                ]
+                            ])
+                        }
+                        blocks.append(["type": "text", "text": text])
+                        anthropicMessages.append(["role": "user", "content": blocks])
+                    }
                 case .assistant(let text, let toolCalls):
                     var blocks: [[String: Any]] = []
                     if !text.isEmpty {
@@ -957,5 +1461,64 @@ private final class MainActorParserBox {
 
     func parse(_ line: String) -> [AIAgentStreamEvent] {
         parser.parseLine(line)
+    }
+}
+
+private final class ACPRuntimeStateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _sessionID: String?
+
+    var sessionID: String? { lock.withLock { _sessionID } }
+
+    func setSessionID(_ id: String) {
+        lock.withLock { _sessionID = id }
+    }
+}
+
+private final class ACPTransportBudgetBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maxQueuedBytes: Int
+    private var queuedBytes = 0
+    private var exceeded = false
+    private var overflowHandler: (@Sendable () -> Void)?
+
+    init(maxQueuedBytes: Int) {
+        self.maxQueuedBytes = maxQueuedBytes
+    }
+
+    var isExceeded: Bool { lock.withLock { exceeded } }
+
+    func setOverflowHandler(_ handler: (@Sendable () -> Void)?) {
+        let shouldFireImmediately: Bool = lock.withLock {
+            overflowHandler = handler
+            return exceeded && handler != nil
+        }
+        if shouldFireImmediately {
+            handler?()
+        }
+    }
+
+    func triggerOverflowHandler() {
+        let handler: (@Sendable () -> Void)? = lock.withLock { overflowHandler }
+        handler?()
+    }
+
+    /// Records incoming bytes before enqueueing; returns `false` once the hard cap is breached.
+    func recordEnqueue(bytes: Int) -> Bool {
+        lock.withLock {
+            if exceeded { return false }
+            queuedBytes += max(0, bytes)
+            if queuedBytes > maxQueuedBytes {
+                exceeded = true
+                return false
+            }
+            return true
+        }
+    }
+
+    func recordDequeue(bytes: Int) {
+        lock.withLock {
+            queuedBytes = max(0, queuedBytes - max(0, bytes))
+        }
     }
 }
