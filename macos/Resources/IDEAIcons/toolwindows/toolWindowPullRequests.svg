@@ -1,0 +1,9 @@
+<!-- Lithe macOS workbench icon aligned with JetBrains New UI 16x16 1px stroke proportions -->
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="4.5" cy="3.5" r="1.75" stroke="#CED0D6"/>
+<circle cx="4.5" cy="12.5" r="1.75" stroke="#CED0D6"/>
+<path d="M4.5 5.25V10.75" stroke="#CED0D6" stroke-linecap="round"/>
+<circle cx="11.5" cy="12.5" r="1.75" stroke="#CED0D6"/>
+<path d="M11.5 10.75V5.5C11.5 4.39543 10.6046 3.5 9.5 3.5H8" stroke="#CED0D6" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M9.5 2L8 3.5L9.5 5" stroke="#CED0D6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

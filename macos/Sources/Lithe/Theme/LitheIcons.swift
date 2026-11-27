@@ -135,6 +135,9 @@ enum LitheIcons {
         "magnifyingglass.circle": "toolwindows/toolWindowFind.svg",
         "list.bullet.indent": "toolwindows/toolWindowStructure.svg",
         "arrow.triangle.branch": "toolwindows/toolWindowVcs.svg",
+        "arrow.triangle.pull": "toolwindows/toolWindowPullRequests.svg",
+        "cylinder.split.1x2": "toolwindows/toolWindowDatabase.svg",
+        "terminal": "toolwindows/toolWindowTerminal.svg",
         "checkmark.circle": "vcs/commit.svg",
         "plusminus": "vcs/diff.svg"
     ]

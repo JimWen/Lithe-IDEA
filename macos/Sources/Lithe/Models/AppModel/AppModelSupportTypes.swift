@@ -168,9 +168,9 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     var ideaAssetPath: String? {
         switch self {
         case .project: "toolwindows/toolWindowProject.svg"
-        case .structure: nil
+        case .structure: "toolwindows/toolWindowStructure.svg"
         case .changes: "toolwindows/toolWindowCommit.svg"
-        case .pullRequests: nil
+        case .pullRequests: "toolwindows/toolWindowPullRequests.svg"
         case .search: "toolwindows/toolWindowFind.svg"
         case .database: "toolwindows/toolWindowDatabase.svg"
         }

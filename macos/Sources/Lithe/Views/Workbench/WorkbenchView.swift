@@ -897,12 +897,12 @@ struct WorkbenchView: View {
                                 if let ideaAssetPath = destination.ideaAssetPath {
                                     LitheIDEAIcon(
                                         resourcePath: ideaAssetPath,
-                                        size: 20,
+                                        size: 18,
                                         fallbackSystemImage: destination.systemImage
                                     )
                                 } else {
                                     Image(systemName: destination.systemImage)
-                                        .font(.system(size: 18, weight: .regular))
+                                        .font(.system(size: 16, weight: .medium))
                                 }
                             }
                                 .frame(

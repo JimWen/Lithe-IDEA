@@ -34,7 +34,7 @@ enum WorkbenchModuleUIComposition {
         renderers: [
             .init(
                 id: "terminal.sessions",
-                ideaAssetPath: nil,
+                ideaAssetPath: "toolwindows/toolWindowTerminal.svg",
                 isVisible: { _ in true },
                 isSelected: { $0.isTerminalVisible },
                 content: { _ in AnyView(TerminalView()) }
@@ -58,7 +58,8 @@ enum WorkbenchModuleUIComposition {
                         return AnyView(WorkbenchModuleUIRegistry.moduleLoadingView)
                     }
                     return AnyView(GitLogView(feature: feature))
-                }
+                },
+                contentIdentity: { WorkbenchModuleUIRegistry.Renderer.featureIdentity($0.gitFeatureIfActive) }
             )
         ]
     )
@@ -96,7 +97,8 @@ enum WorkbenchModuleUIComposition {
                         return AnyView(WorkbenchModuleUIRegistry.moduleLoadingView)
                     }
                     return AnyView(RunView(feature: feature))
-                }
+                },
+                contentIdentity: { WorkbenchModuleUIRegistry.Renderer.featureIdentity($0.runFeatureIfActive) }
             ),
             .init(
                 id: "execution.tests",
@@ -108,7 +110,8 @@ enum WorkbenchModuleUIComposition {
                         return AnyView(WorkbenchModuleUIRegistry.moduleLoadingView)
                     }
                     return AnyView(LanguageTestsView(service: service))
-                }
+                },
+                contentIdentity: { WorkbenchModuleUIRegistry.Renderer.featureIdentity($0.languageTestServiceIfActive) }
             )
         ]
     )
@@ -166,7 +169,8 @@ enum WorkbenchModuleUIComposition {
                         return AnyView(WorkbenchModuleUIRegistry.moduleLoadingView)
                     }
                     return AnyView(GenericDebugView(feature: feature))
-                }
+                },
+                contentIdentity: { WorkbenchModuleUIRegistry.Renderer.featureIdentity($0.genericDebugFeatureIfActive) }
             )
         ]
     )
