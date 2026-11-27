@@ -61,3 +61,91 @@ fn incompatible_host_is_rejected_deterministically() {
         }
     );
 }
+
+#[test]
+fn declarative_config_only_language_plugin_validates_without_modules() {
+    let catalog = r#"{
+      "schemaVersion": 1,
+      "hostVersion": "0.3.1",
+      "pluginAPIVersion": 1,
+      "plugins": [
+        {
+          "id": "dev.lithe.plugin.acme-dsl",
+          "displayName": "Acme DSL",
+          "version": "0.3.1",
+          "apiVersion": 1,
+          "hostCompatibility": { "minimum": "0.3.1", "maximumExclusive": "0.4.0" },
+          "vendor": { "id": "dev.lithe", "displayName": "Lithe", "signatureRequirement": "sameTeamAsHost" },
+          "entrypoint": { "kind": "declarative" },
+          "moduleIDs": [],
+          "languageSupports": [
+            {
+              "id": "acme",
+              "displayName": "Acme DSL",
+              "fileExtensions": ["acme"],
+              "fileNames": [],
+              "projectFileNames": ["acme.toml"],
+              "syntaxProfilePath": "Resources/syntax.json"
+            }
+          ]
+        }
+      ]
+    }"#;
+    let owners = validate_plugin_catalog_json(
+        catalog,
+        PluginVersion {
+            major: 0,
+            minor: 3,
+            patch: 1,
+        },
+    )
+    .expect("declarative language plugin should validate cleanly");
+    assert!(owners.is_empty());
+}
+
+#[test]
+fn declarative_plugin_rejects_traversal_syntax_profile_path() {
+    let catalog = r#"{
+      "schemaVersion": 1,
+      "hostVersion": "0.3.1",
+      "pluginAPIVersion": 1,
+      "plugins": [
+        {
+          "id": "dev.lithe.plugin.bad-dsl",
+          "displayName": "Bad DSL",
+          "version": "0.3.1",
+          "apiVersion": 1,
+          "hostCompatibility": { "minimum": "0.3.1", "maximumExclusive": "0.4.0" },
+          "vendor": { "id": "dev.lithe", "displayName": "Lithe", "signatureRequirement": "sameTeamAsHost" },
+          "entrypoint": { "kind": "declarative" },
+          "moduleIDs": [],
+          "languageSupports": [
+            {
+              "id": "bad",
+              "displayName": "Bad",
+              "fileExtensions": ["bad"],
+              "fileNames": [],
+              "projectFileNames": [],
+              "syntaxProfilePath": "../escape.json"
+            }
+          ]
+        }
+      ]
+    }"#;
+    let error = validate_plugin_catalog_json(
+        catalog,
+        PluginVersion {
+            major: 0,
+            minor: 3,
+            patch: 1,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        PluginValidationError::InvalidLanguageSupport {
+            plugin: "dev.lithe.plugin.bad-dsl".into(),
+            language: "bad".into()
+        }
+    );
+}

@@ -62,13 +62,28 @@ done
 matched=0
 for plugin_source in "$ROOT_DIR"/Plugins/mac/Official/*(/N); do
     manifest="$plugin_source/plugin.json"
-    info_plist="$plugin_source/Info.plist"
-    [[ -f "$manifest" && -f "$info_plist" ]] || continue
+    [[ -f "$manifest" ]] || continue
     package_id=$(/usr/bin/plutil -extract id raw "$manifest")
     if [[ -n "$PLUGIN_ID" && "$package_id" != "$PLUGIN_ID" ]]; then
         continue
     fi
+    entrypoint_kind=$(/usr/bin/plutil -extract entrypoint.kind raw "$manifest")
     matched=$((matched + 1))
+    package_dir="$OUTPUT_DIR/$package_id"
+    rm -rf "$package_dir"
+    mkdir -p "$package_dir"
+    cp "$manifest" "$package_dir/plugin.json"
+    if [[ -d "$plugin_source/Resources" ]]; then
+        cp -R "$plugin_source/Resources" "$package_dir/Resources"
+    fi
+    if [[ "$entrypoint_kind" == "declarative" ]]; then
+        continue
+    fi
+    info_plist="$plugin_source/Info.plist"
+    if [[ ! -f "$info_plist" ]]; then
+        print -u2 -- "Official native plugin $package_id is missing Info.plist"
+        exit 1
+    fi
     module_suffix="${plugin_source:t}"
     source_dir="$plugin_source/Sources/Lithe${module_suffix}Module"
     source_files=("$source_dir"/**/*.swift(N))
@@ -78,13 +93,10 @@ for plugin_source in "$ROOT_DIR"/Plugins/mac/Official/*(/N); do
     fi
     bundle_name=$(/usr/bin/plutil -extract entrypoint.bundlePath raw "$manifest")
     executable_name=$(/usr/bin/plutil -extract CFBundleExecutable raw "$info_plist")
-    package_dir="$OUTPUT_DIR/$package_id"
     bundle_dir="$package_dir/$bundle_name"
     executable_dir="$bundle_dir/Contents/MacOS"
 
-    rm -rf "$package_dir"
     mkdir -p "$executable_dir"
-    cp "$manifest" "$package_dir/plugin.json"
     cp "$info_plist" "$bundle_dir/Contents/Info.plist"
 
     "$SWIFT_COMPILER" \

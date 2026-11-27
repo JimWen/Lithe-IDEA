@@ -550,7 +550,8 @@ final class MacServiceContainer {
             launchMode: moduleLaunchMode,
             startup: pluginStartup,
             managedBuiltInPlugins: (BuiltInPluginCatalog.manifest(forModule: .database).map { [$0] } ?? [])
-                + bundledLanguageManifests
+                + bundledLanguageManifests,
+            syntaxProfileRegistry: .shared
         )
         let pluginCatalog: ValidatedPluginCatalog
         do {

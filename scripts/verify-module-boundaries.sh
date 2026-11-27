@@ -332,6 +332,30 @@ for target in "${module_targets[@]}"; do
     fi
 done
 
+for official_plugin_dir in Plugins/mac/Official/*(/N); do
+    plugin_sources="$official_plugin_dir/Sources"
+    [[ -d "$plugin_sources" ]] || continue
+    if rg -n '^import ' "$plugin_sources" | rg -v ':import (Foundation|LitheCoreContracts|LitheModuleAPI|LitheLanguageExtensionSupport)$'; then
+        print -u2 "Official plugin ${official_plugin_dir:t} may import only Foundation, LitheCoreContracts, LitheModuleAPI, and LitheLanguageExtensionSupport"
+        exit 1
+    fi
+    if rg -n '(Process|Pipe|FileHandle|FileManager)\(' "$plugin_sources"; then
+        print -u2 "Official plugin ${official_plugin_dir:t} must not directly spawn processes or perform host filesystem I/O"
+        exit 1
+    fi
+done
+
+if awk '
+    /\.executableTarget\(/ { in_exec = 1; next }
+    in_exec && /name: "Lithe",/ { in_lithe = 1; in_exec = 0; next }
+    in_exec && /name:/ { in_exec = 0 }
+    in_lithe { print }
+    in_lithe && /path: "macos\/Sources\/Lithe"/ { exit }
+' Package.swift | rg -q 'Lithe(Go|Rust|Python)SupportModule'; then
+    print -u2 "Executable target Lithe must not statically link official language plugin bundles"
+    exit 1
+fi
+
 if find macos/Sources -maxdepth 1 -type d -name 'Lithe*Module' | while read -r target; do
     [[ -n "$(find "$target" -type f -name '*.swift' -print -quit)" ]] || {
         print -u2 "Empty feature target is not a valid module boundary: $target"

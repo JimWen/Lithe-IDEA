@@ -20,7 +20,8 @@ struct PluginManagementPresentationTests {
         ])
 
         #expect(content.standalonePlugins.map(\.id) == [databaseManifest.id])
-        #expect(content.languageExtensions.map(\.id) == [pythonManifest.id, rustManifest.id])
+        #expect(content.installedLanguagePlugins.map(\.id) == [pythonManifest.id, rustManifest.id])
+        #expect(content.languageExtensions.isEmpty)
     }
 
     @Test
@@ -30,6 +31,7 @@ struct PluginManagementPresentationTests {
         )
 
         #expect(content.standalonePlugins.isEmpty)
+        #expect(content.installedLanguagePlugins.isEmpty)
         #expect(content.languageExtensions.count == BundledLanguagePluginCatalog.manifests.count)
     }
 

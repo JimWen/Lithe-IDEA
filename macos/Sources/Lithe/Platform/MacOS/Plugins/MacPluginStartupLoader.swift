@@ -1,5 +1,6 @@
 import Foundation
 import LitheApplicationKernel
+import LitheCoreContracts
 import LitheModuleAPI
 
 struct PluginStartupIssue: Equatable {
@@ -12,7 +13,25 @@ struct MacPluginStartupResult {
     let installedPlugins: [InstalledPluginPackage]
     let activeNativeManifests: [PluginManifest]
     let factoriesByPlugin: [PluginID: [ModuleFactory]]
+    let syntaxProfilesByPlugin: [PluginID: [LanguageSyntaxProfile]]
+    let syntaxEnrichmentsByPlugin: [PluginID: [String: LanguageSyntaxEnrichment]]
     let issues: [PluginStartupIssue]
+
+    init(
+        installedPlugins: [InstalledPluginPackage],
+        activeNativeManifests: [PluginManifest],
+        factoriesByPlugin: [PluginID: [ModuleFactory]],
+        syntaxProfilesByPlugin: [PluginID: [LanguageSyntaxProfile]] = [:],
+        syntaxEnrichmentsByPlugin: [PluginID: [String: LanguageSyntaxEnrichment]] = [:],
+        issues: [PluginStartupIssue]
+    ) {
+        self.installedPlugins = installedPlugins
+        self.activeNativeManifests = activeNativeManifests
+        self.factoriesByPlugin = factoriesByPlugin
+        self.syntaxProfilesByPlugin = syntaxProfilesByPlugin
+        self.syntaxEnrichmentsByPlugin = syntaxEnrichmentsByPlugin
+        self.issues = issues
+    }
 
     var installedManifests: [PluginManifest] {
         installedPlugins.map(\.manifest).sorted { $0.id < $1.id }
@@ -106,7 +125,28 @@ final class MacPluginStartupLoader {
         }
 
         var activeNativeManifests: [PluginManifest] = []
+        var syntaxProfilesByPlugin: [PluginID: [LanguageSyntaxProfile]] = [:]
+        var syntaxEnrichmentsByPlugin: [PluginID: [String: LanguageSyntaxEnrichment]] = [:]
         for installed in candidatePackages {
+            if installed.manifest.entrypoint.kind == .declarative {
+                do {
+                    let definitions = try MacPluginPackageStore.loadSyntaxDefinitions(
+                        at: installed.packageURL,
+                        manifest: installed.manifest
+                    )
+                    syntaxProfilesByPlugin[installed.manifest.id] = definitions.map(\.profile)
+                    syntaxEnrichmentsByPlugin[installed.manifest.id] = Dictionary(
+                        definitions.map { ($0.profile.languageID, $0.enrichment) },
+                        uniquingKeysWith: { _, latest in latest }
+                    )
+                } catch {
+                    issues.append(PluginStartupIssue(
+                        pluginID: installed.manifest.id,
+                        message: error.localizedDescription
+                    ))
+                }
+                continue
+            }
             let moduleIDs = installed.manifest.modules.map(\.manifest.id).sorted()
             if let recoveryStore = policy.recoveryStore, let runtimeRecovery {
                 runtimeRecovery.prepareToLoad(moduleIDs, using: recoveryStore)
@@ -118,6 +158,17 @@ final class MacPluginStartupLoader {
                 guard let factories = loaded[installed.manifest.id] else {
                     clearPendingLoad(using: policy.recoveryStore)
                     continue
+                }
+                let definitions = try MacPluginPackageStore.loadSyntaxDefinitions(
+                    at: installed.packageURL,
+                    manifest: installed.manifest
+                )
+                if !definitions.isEmpty {
+                    syntaxProfilesByPlugin[installed.manifest.id] = definitions.map(\.profile)
+                    syntaxEnrichmentsByPlugin[installed.manifest.id] = Dictionary(
+                        definitions.map { ($0.profile.languageID, $0.enrichment) },
+                        uniquingKeysWith: { _, latest in latest }
+                    )
                 }
                 activeNativeManifests.append(installed.manifest)
                 factoriesByPlugin[installed.manifest.id] = factories
@@ -152,6 +203,8 @@ final class MacPluginStartupLoader {
             installedPlugins: scan.packages,
             activeNativeManifests: activeNativeManifests.sorted { $0.id < $1.id },
             factoriesByPlugin: factoriesByPlugin,
+            syntaxProfilesByPlugin: syntaxProfilesByPlugin,
+            syntaxEnrichmentsByPlugin: syntaxEnrichmentsByPlugin,
             issues: issues
         )
     }

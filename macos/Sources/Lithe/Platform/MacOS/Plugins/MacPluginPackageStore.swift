@@ -1,5 +1,6 @@
 import Foundation
 import LitheApplicationKernel
+import LitheCoreContracts
 import LitheModuleAPI
 import Security
 
@@ -18,6 +19,7 @@ enum PluginPackageStoreError: Error, Equatable, LocalizedError {
     case requiredPluginCannotBeUninstalled(PluginID)
     case unsupportedEntrypoint(PluginID)
     case invalidBundlePath(PluginID)
+    case invalidSyntaxProfile(PluginID, String)
     case unsignedCode(URL)
     case invalidCodeSignature(URL)
     case signingTeamMismatch
@@ -33,8 +35,9 @@ enum PluginPackageStoreError: Error, Equatable, LocalizedError {
         case .missingInstallation(let id): "Plugin \(id) is not installed."
         case .rollbackUnavailable(let id): "Plugin \(id) has no previous version to restore."
         case .requiredPluginCannotBeUninstalled(let id): "Required plugin \(id) cannot be uninstalled."
-        case .unsupportedEntrypoint(let id): "Plugin \(id) is not an installable native bundle."
+        case .unsupportedEntrypoint(let id): "Plugin \(id) is not an installable native bundle or declarative package."
         case .invalidBundlePath(let id): "Plugin \(id) has an invalid bundle path."
+        case .invalidSyntaxProfile(let id, let detail): "Plugin \(id) has an invalid syntax profile: \(detail)"
         case .unsignedCode(let url): "Plugin code is not signed: \(url.lastPathComponent)."
         case .invalidCodeSignature(let url): "Plugin signature is invalid: \(url.lastPathComponent)."
         case .signingTeamMismatch: "Plugin and host application signing teams do not match."
@@ -404,7 +407,7 @@ final class MacPluginPackageStore {
         ), to: pluginDirectory.appendingPathComponent("installation.json"))
     }
 
-    private func loadManifest(at packageURL: URL) throws -> PluginManifest {
+    func loadManifest(at packageURL: URL) throws -> PluginManifest {
         let values = try packageURL.resourceValues(forKeys: [.isDirectoryKey])
         guard values.isDirectory == true else {
             throw PluginPackageStoreError.invalidPackageDirectory
@@ -413,6 +416,19 @@ final class MacPluginPackageStore {
             PluginManifest.self,
             at: packageURL.appendingPathComponent("plugin.json")
         )
+    }
+
+    func rollbackTargetManifest(for pluginID: PluginID) throws -> PluginManifest {
+        try validatePathComponent(pluginID.rawValue)
+        let pluginDirectory = rootURL.appendingPathComponent(pluginID.rawValue, isDirectory: true)
+        let record = try installationRecord(at: pluginDirectory)
+        guard let previousVersion = record.previousVersion else {
+            throw PluginPackageStoreError.rollbackUnavailable(pluginID)
+        }
+        return try loadManifest(at: versionDirectory(
+            pluginDirectory: pluginDirectory,
+            version: previousVersion
+        ))
     }
 
     private func installationRecord(at pluginDirectory: URL) throws -> PluginInstallationRecord {
@@ -453,10 +469,72 @@ final class MacPluginPackageStore {
             throw PluginPackageStoreError.unsafeIdentifier(value)
         }
     }
+    struct LoadedSyntaxDefinition: Equatable, Sendable {
+        let profile: LanguageSyntaxProfile
+        let enrichment: LanguageSyntaxEnrichment
+    }
+
+    static func loadSyntaxDefinitions(
+        at packageURL: URL,
+        manifest: PluginManifest
+    ) throws -> [LoadedSyntaxDefinition] {
+        let packageRoot = packageURL.standardizedFileURL.path + "/"
+        let decoder = JSONDecoder()
+        var definitions: [LoadedSyntaxDefinition] = []
+        for support in manifest.languageSupports ?? [] {
+            guard let relativePath = support.syntaxProfilePath else { continue }
+            guard !relativePath.isEmpty,
+                  !relativePath.hasPrefix("/"),
+                  !relativePath.split(separator: "/", omittingEmptySubsequences: false).contains("..") else {
+                throw PluginPackageStoreError.invalidSyntaxProfile(manifest.id, relativePath)
+            }
+            let fileURL = packageURL.appendingPathComponent(relativePath).standardizedFileURL
+            guard fileURL.path.hasPrefix(packageRoot) else {
+                throw PluginPackageStoreError.invalidSyntaxProfile(manifest.id, relativePath)
+            }
+            let data: Data
+            do {
+                data = try Data(contentsOf: fileURL)
+            } catch {
+                throw PluginPackageStoreError.invalidSyntaxProfile(manifest.id, error.localizedDescription)
+            }
+            let profile: LanguageSyntaxProfile
+            let enrichment: LanguageSyntaxEnrichment
+            do {
+                profile = try decoder.decode(LanguageSyntaxProfile.self, from: data)
+                enrichment = try decoder.decode(LanguageSyntaxEnrichment.self, from: data)
+            } catch {
+                throw PluginPackageStoreError.invalidSyntaxProfile(manifest.id, error.localizedDescription)
+            }
+            guard profile.languageID == support.id else {
+                throw PluginPackageStoreError.invalidSyntaxProfile(
+                    manifest.id,
+                    "syntax profile languageID '\(profile.languageID)' does not match '\(support.id)'"
+                )
+            }
+            definitions.append(LoadedSyntaxDefinition(profile: profile, enrichment: enrichment))
+        }
+        return definitions
+    }
+
+    static func loadSyntaxProfiles(
+        at packageURL: URL,
+        manifest: PluginManifest
+    ) throws -> [LanguageSyntaxProfile] {
+        try loadSyntaxDefinitions(at: packageURL, manifest: manifest).map(\.profile)
+    }
 }
 
 struct MacOfficialPluginSignatureVerifier: PluginPackageSignatureVerifying {
     func verify(packageAt packageURL: URL, manifest: PluginManifest) throws {
+        _ = try MacPluginPackageStore.loadSyntaxProfiles(at: packageURL, manifest: manifest)
+        if manifest.entrypoint.kind == .declarative {
+            guard manifest.modules.isEmpty,
+                  manifest.languageSupports?.isEmpty == false else {
+                throw PluginPackageStoreError.unsupportedEntrypoint(manifest.id)
+            }
+            return
+        }
         guard manifest.entrypoint.kind == .nativeBundle else {
             throw PluginPackageStoreError.unsupportedEntrypoint(manifest.id)
         }

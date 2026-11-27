@@ -351,6 +351,9 @@ final class AppModel: ObservableObject, Identifiable, UnsavedDocumentHandling {
             if support.testingModuleID == moduleID {
                 languageTestServiceIfActive?.unregisterLanguageTestExtension(languageID: support.id)
             }
+            if support.debugModuleID == moduleID {
+                genericDebugFeatureIfActive?.unregisterLanguageDebugExtension(languageID: support.id)
+            }
         }
     }
 

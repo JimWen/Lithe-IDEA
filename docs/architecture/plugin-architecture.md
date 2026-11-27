@@ -46,6 +46,26 @@ flowchart TB
 - 插件通过 `PluginHostContext` 按 ID 取窄协议，不构造 `Mac*` 适配器。
 - 宿主不 import 插件实现；它只认 manifest、工厂和能力 ID。
 
+## 三维抽象边界（接口 · 配置 · 渲染）与独立语言 Bundle 矩阵
+
+Lithe 的语言支持遵循严格的**三层解耦边界**，确保 Go、Rust、Python 各自作为独立签名 Bundle 打包在 `Contents/Resources/OfficialPlugins/`（宿主可执行目标 `Lithe` 不静态链接任何官方语言插件），同时支持纯 JSON 配置驱动的零代码语言快速扩展：
+
+| 边界 | 职责与契约 | 独立与隔离验证点 |
+| --- | --- | --- |
+| **接口边界（Interface）** | `LitheModuleAPI`（`PluginManifest`、`PluginEntrypoint`、`ModuleManifest`、`ModuleCapabilityID`）+ `LitheCoreContracts`（`LanguageServerExtensionProviding`、`LanguageRunExtensionProviding`、`LanguageTestExtensionProviding`、`LanguageDebugExtensionProviding`、`LanguageProjectToolsProviding`、`LanguageSyntaxExtensionProviding`）+ `LitheLanguageExtensionSupport`（`LanguageExecutionResource`、`LanguageProjectToolResource`） | 插件只能 `import Foundation / LitheCoreContracts / LitheModuleAPI / LitheLanguageExtensionSupport`，禁止直接 `Process`/`FileManager`/SwiftUI/AppKit；禁用或休眠时 `clearModuleBindings` 同步注销 LSP/Run/Test/Debug 绑定，并停止外部库与环境探测 |
+| **配置边界（Declarative Config）** | `plugin.json`（含 `metadata` 与 `languageSupports[].syntaxProfilePath`）+ `Resources/syntax.json`（声明式 `LanguageSyntaxProfile`）；支持 `entrypoint.kind = "declarative"`（`modules: []`，零 Swift 代码、零 Bundle 编译、无需重启即生效） | `PluginManifestValidator` 与 `rust/lithe-core/src/plugins/mod.rs` 双向校验相对路径与 schema；启动与开关同步刷新 `LanguageSyntaxProfileRegistry`，禁用官方语言插件后回退至通用词法 |
+| **渲染边界（Rendering）** | 宿主 UI（`PluginManagementView`、`WorkbenchModuleUIRegistry`、`SettingsView`、`ExternalLibrariesSidebarSection`、`RunnableGutterMenu`）仅读取 `PluginManifest.metadata`、`ModuleContribution` 与 `isLanguageSupportEnabled(languageID:)` 门控，不在宿主写具体语言实现 | 官方独立 Bundle 与声明式语言包在 Plugins 面板顶层 **Official Language Bundles** 分组直接展示（带 `Bundle` / `Config` 徽标与能力清单），不再折叠隐藏；禁用后对应语言设置页、外部库与 Gutter 运行图标同步隐藏 |
+
+### 官方独立语言 Bundle 对标矩阵
+
+| 独立 Bundle | `plugin.json` ID | 导出模块与能力 | 声明式语法配置 | 右侧工具窗 Contribution |
+| --- | --- | --- | --- | --- |
+| `GoSupport.bundle` | `dev.lithe.plugin.go-support` | `LSP (gopls + ui.semanticTokens)` · `Run (go run)` · `Test (go test)` · `Debug (dlv)` · `Project Tools (go list/mod)` | `Resources/syntax.json` | `Go Tools` (`go.project`) |
+| `RustSupport.bundle` | `dev.lithe.plugin.rust-support` | `LSP (rust-analyzer)` · `Run (cargo run)` · `Test (cargo test)` · `Debug (lldb-dap)` · `Project Tools (cargo metadata)` | `Resources/syntax.json` | `Cargo` (`cargo.project`) |
+| `PythonSupport.bundle` | `dev.lithe.plugin.python-support` | `LSP (basedpyright/pyright)` · `Run (python)` · `Test (pytest)` · `Debug (debugpy)` | `Resources/syntax.json` | — |
+
+> TypeScript / Node.js 暂保持内置轻量配置，待后续单独评估是否抽离为独立 Bundle。
+
 ## 契约类型
 
 ### PluginManifest（`plugin.json`）
@@ -58,9 +78,10 @@ flowchart TB
 | `apiVersion` | 必须等于宿主支持的 Plugin API 版本（当前 1） |
 | `hostCompatibility` | `minimum` / 可选 `maximumExclusive`，必须包含宿主版本（当前 0.3.0） |
 | `vendor.signatureRequirement` | 目前只有 `sameTeamAsHost` |
-| `entrypoint` | `builtIn`（只填 `targetName`）或 `nativeBundle`（填 `bundleIdentifier` + `principalClass` + 相对 `bundlePath`），两组字段互斥 |
-| `modules` | 至少一个模块声明；ID 按字典序稳定排序 |
-| `languageSupports` | 可选；语言包用它做惰性识别 |
+| `entrypoint` | `builtIn`（只填 `targetName`）、`nativeBundle`（填 `bundleIdentifier` + `principalClass` + 相对 `bundlePath`）或 `declarative`（全空，`modules: []`，仅靠 `languageSupports[].syntaxProfilePath` 驱动），三组字段互斥 |
+| `modules` | `builtIn`/`nativeBundle` 至少一个模块声明；`declarative` 必须为空数组；ID 按字典序稳定排序 |
+| `languageSupports` | 可选（`declarative` 必填）；可声明 `syntaxProfilePath`（包内相对路径，指向 `LanguageSyntaxProfile` JSON） |
+| `metadata` | 可选展示元数据（`summary`、`iconSystemName`、`category`），由 Plugins 面板直接读取渲染 |
 
 模块声明使用扁平 JSON 而不是嵌套 manifest：`id`、`displayName`、`scope`、`defaultState`、
 `activationPolicy`、`sleepPolicy{kind,afterSeconds}`、`moduleDependencies`、
@@ -221,6 +242,23 @@ flowchart TB
    code bundle，不要往里放包目录。
 7. **测试**：必须覆盖禁用不构造工厂、激活导出声明的能力、活跃租约阻止休眠、休眠释放全部资源、
    停止后进程确实退出。`OfficialPluginCatalog` 只接受已具备这些测试的包。
+
+### 路径三：纯配置声明式语言扩展（`entrypoint.kind = declarative`，零代码快速扩展）
+
+适用于仅需语法高亮、注释规则、文件/项目识别与离线关键字补全的新语言（如 DSL、配置语言、新兴脚本语言），**无需编写或编译任何 Swift 代码，也无需代码签名或重启应用**：
+
+1. **目录结构**：
+   ```text
+   <pluginID>/
+   ├── plugin.json             # entrypoint.kind = "declarative", modules = [], languageSupports[].syntaxProfilePath
+   └── Resources/
+       └── syntax.json         # LanguageSyntaxProfile JSON（关键字、内置类型、内置函数、注释/字符串规则）
+   ```
+2. **安装与即时生效**：通过 Plugins 面板 `Install` 导入目录后，`MacPluginPackageStore` 校验 `plugin.json` 与 `Resources/syntax.json` 的相对路径安全与 schema；启用/禁用时 `MacPluginManager` 即时向 `LanguageSyntaxProfileRegistry` 注册或注销该语言配置，无需重启进程。
+3. **隔离验证**：
+   ```bash
+   swift run LitheOfficialPluginVerifier --declarative <package-directory>
+   ```
 
 ### 提交前检查清单
 

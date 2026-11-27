@@ -120,6 +120,7 @@ public struct PluginVendor: Equatable, Codable, Sendable {
 public enum PluginEntrypointKind: String, Codable, Sendable {
     case builtIn
     case nativeBundle
+    case declarative
 }
 
 public struct PluginEntrypoint: Equatable, Codable, Sendable {
@@ -145,6 +146,26 @@ public struct PluginEntrypoint: Equatable, Codable, Sendable {
 
     public static func builtIn(targetName: String) -> Self {
         Self(kind: .builtIn, targetName: targetName)
+    }
+
+    public static let declarative = Self(kind: .declarative)
+}
+
+/// Optional presentation metadata carried directly inside `plugin.json` so
+/// host plugin management UI does not need hardcoded per-plugin descriptions.
+public struct PluginMetadata: Equatable, Codable, Sendable {
+    public let summary: String?
+    public let iconSystemName: String?
+    public let category: String?
+
+    public init(
+        summary: String? = nil,
+        iconSystemName: String? = nil,
+        category: String? = nil
+    ) {
+        self.summary = summary
+        self.iconSystemName = iconSystemName
+        self.category = category
     }
 }
 
@@ -289,6 +310,7 @@ public struct LanguageSupportDeclaration: Equatable, Codable, Sendable {
     public let executionModuleID: ModuleID?
     public let testingModuleID: ModuleID?
     public let debugModuleID: ModuleID?
+    public let syntaxProfilePath: String?
 
     public init(
         id: String,
@@ -299,7 +321,8 @@ public struct LanguageSupportDeclaration: Equatable, Codable, Sendable {
         languageServerModuleID: ModuleID? = nil,
         executionModuleID: ModuleID? = nil,
         testingModuleID: ModuleID? = nil,
-        debugModuleID: ModuleID? = nil
+        debugModuleID: ModuleID? = nil,
+        syntaxProfilePath: String? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -310,6 +333,7 @@ public struct LanguageSupportDeclaration: Equatable, Codable, Sendable {
         self.executionModuleID = executionModuleID
         self.testingModuleID = testingModuleID
         self.debugModuleID = debugModuleID
+        self.syntaxProfilePath = syntaxProfilePath
     }
 
     public var moduleIDs: [ModuleID] {
@@ -355,6 +379,7 @@ public struct PluginManifest: Equatable, Codable, Sendable {
     public let entrypoint: PluginEntrypoint
     public let modules: [PluginModuleDeclaration]
     public let languageSupports: [LanguageSupportDeclaration]?
+    public let metadata: PluginMetadata?
 
     public init(
         schemaVersion: Int = currentSchemaVersion,
@@ -366,7 +391,8 @@ public struct PluginManifest: Equatable, Codable, Sendable {
         vendor: PluginVendor,
         entrypoint: PluginEntrypoint,
         modules: [PluginModuleDeclaration],
-        languageSupports: [LanguageSupportDeclaration] = []
+        languageSupports: [LanguageSupportDeclaration] = [],
+        metadata: PluginMetadata? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -379,6 +405,7 @@ public struct PluginManifest: Equatable, Codable, Sendable {
         self.modules = modules.sorted { $0.manifest.id < $1.manifest.id }
         let sortedLanguageSupports = languageSupports.sorted { $0.id < $1.id }
         self.languageSupports = sortedLanguageSupports.isEmpty ? nil : sortedLanguageSupports
+        self.metadata = metadata
     }
 }
 

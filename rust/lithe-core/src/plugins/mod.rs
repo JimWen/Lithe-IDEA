@@ -161,6 +161,8 @@ pub struct LanguageSupportManifest {
     /// Package-owned module providing debug integration.
     #[serde(rename = "debugModuleID")]
     pub debug_module_id: Option<String>,
+    /// Package-relative JSON file describing the declarative syntax profile.
+    pub syntax_profile_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,9 +189,9 @@ pub struct PluginVendor {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Mutually exclusive loading metadata for built-in and native-bundle plugins.
+/// Mutually exclusive loading metadata for built-in, native-bundle, and declarative plugins.
 pub struct PluginEntrypoint {
-    /// Entrypoint discriminator: `builtIn` or `nativeBundle`.
+    /// Entrypoint discriminator: `builtIn`, `nativeBundle`, or `declarative`.
     pub kind: String,
     /// Build target used by a built-in plugin.
     pub target_name: Option<String>,
@@ -270,7 +272,15 @@ pub fn validate_plugin_catalog_json(
         {
             return Err(PluginValidationError::InvalidEntrypoint { plugin: plugin.id });
         }
-        if plugin.module_ids.is_empty() {
+        let is_declarative = plugin.entrypoint.kind == "declarative";
+        if is_declarative {
+            if !plugin.module_ids.is_empty() {
+                return Err(PluginValidationError::InvalidEntrypoint { plugin: plugin.id });
+            }
+            if plugin.language_supports.is_empty() {
+                return Err(PluginValidationError::EmptyPlugin(plugin.id));
+            }
+        } else if plugin.module_ids.is_empty() {
             return Err(PluginValidationError::EmptyPlugin(plugin.id));
         }
         if !plugin.module_ids.windows(2).all(|pair| pair[0] < pair[1]) {
@@ -291,6 +301,7 @@ pub fn validate_plugin_catalog_json(
 
 fn validate_language_supports(plugin: &PluginPackageManifest) -> Result<(), PluginValidationError> {
     let owned_modules: BTreeSet<&str> = plugin.module_ids.iter().map(String::as_str).collect();
+    let is_declarative = plugin.entrypoint.kind == "declarative";
     let mut language_ids = BTreeSet::new();
     for support in &plugin.language_supports {
         let module_ids: Vec<&str> = [
@@ -320,11 +331,20 @@ fn validate_language_supports(plugin: &PluginPackageManifest) -> Result<(), Plug
                 .project_file_names
                 .iter()
                 .any(|value| value.contains('/'));
+        let invalid_syntax_path = match support.syntax_profile_path.as_deref() {
+            Some(path) => !valid_relative_path(path),
+            None => is_declarative,
+        };
+        let invalid_modules = if is_declarative {
+            !module_ids.is_empty()
+        } else {
+            module_ids.is_empty() || !module_ids.iter().all(|id| owned_modules.contains(id))
+        };
         if !language_ids.insert(support.id.as_str())
             || recognition_is_empty
             || invalid_names
-            || module_ids.is_empty()
-            || !module_ids.iter().all(|id| owned_modules.contains(id))
+            || invalid_syntax_path
+            || invalid_modules
         {
             return Err(PluginValidationError::InvalidLanguageSupport {
                 plugin: plugin.id.clone(),
@@ -371,6 +391,12 @@ fn valid_entrypoint(entrypoint: &PluginEntrypoint) -> bool {
                     .bundle_path
                     .as_ref()
                     .is_some_and(|value| valid_relative_path(value))
+        }
+        "declarative" => {
+            entrypoint.target_name.is_none()
+                && entrypoint.bundle_identifier.is_none()
+                && entrypoint.principal_class.is_none()
+                && entrypoint.bundle_path.is_none()
         }
         _ => false,
     }

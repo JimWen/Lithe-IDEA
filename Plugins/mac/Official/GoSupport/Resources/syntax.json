@@ -1,0 +1,45 @@
+{
+  "languageID": "go",
+  "displayName": "Go",
+  "fileExtensions": ["go"],
+  "fileNames": [],
+  "supportsSlashComments": true,
+  "supportsBlockComments": true,
+  "supportsNestedBlockComments": false,
+  "supportsHashComments": false,
+  "supportsDashComments": false,
+  "supportsBacktickMultilineStrings": true,
+  "backtickAllowsEscape": false,
+  "supportsTripleQuotedStrings": false,
+  "supportsRustSyntax": false,
+  "supportsAtAnnotations": false,
+  "singleQuoteAllowsEscape": true,
+  "lineCommentPrefix": "//",
+  "blockCommentStart": "/*",
+  "blockCommentEnd": "*/",
+  "directivePrefixes": ["//go:", "// +build"],
+  "keywords": [
+    "break", "case", "chan", "const", "continue", "default", "defer", "else",
+    "fallthrough", "for", "func", "go", "goto", "if", "import", "interface",
+    "map", "package", "range", "return", "select", "struct", "switch", "type",
+    "var", "true", "false", "iota", "nil"
+  ],
+  "booleanLiterals": ["true", "false"],
+  "nullLiterals": ["nil", "iota"],
+  "builtinTypes": [
+    "any", "bool", "byte", "comparable", "complex64", "complex128", "error",
+    "float32", "float64", "int", "int8", "int16", "int32", "int64", "rune",
+    "string", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr"
+  ],
+  "builtinFunctions": [
+    "append", "cap", "clear", "close", "complex", "copy", "delete", "imag",
+    "len", "make", "max", "min", "new", "panic", "print", "println", "real", "recover"
+  ],
+  "functionDeclarationKeywords": ["func"],
+  "typeDeclarationKeywords": ["type"],
+  "completionKeywords": [
+    "break", "case", "chan", "const", "continue", "default", "defer", "else",
+    "fallthrough", "for", "func", "go", "goto", "if", "import", "interface",
+    "map", "package", "range", "return", "select", "struct", "switch", "type", "var"
+  ]
+}

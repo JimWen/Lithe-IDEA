@@ -10,6 +10,20 @@ extension AppModel {
         services.pluginManager.issues
     }
 
+    /// Returns whether a language's owning plugin is currently enabled.
+    /// When an official or installed language bundle owns `languageID`, disabling
+    /// or quarantining it cleanly suppresses host environment probes, Settings
+    /// pages, External Libraries, and runnable gutter markers for that language.
+    func isLanguageSupportEnabled(languageID: String) -> Bool {
+        let normalized = languageID.lowercased()
+        if let snapshot = pluginSnapshots.first(where: {
+            $0.manifest.languageSupports?.contains(where: { $0.id == normalized }) == true
+        }) {
+            return snapshot.isEnabled && !snapshot.isSuppressedBySafeMode
+        }
+        return true
+    }
+
     func applyPluginEnabledChanges(_ changes: [PluginID: Bool]) async -> Set<PluginID> {
         let snapshotsByID = Dictionary(uniqueKeysWithValues: pluginSnapshots.map { ($0.id, $0) })
         let closesDatabase = changes.contains { pluginID, enabled in
@@ -33,6 +47,9 @@ extension AppModel {
             }
         }
         objectWillChange.send()
+        if !appliedPluginIDs.isEmpty {
+            _ = refreshProjectEnvironmentSnapshot()
+        }
         return appliedPluginIDs
     }
 

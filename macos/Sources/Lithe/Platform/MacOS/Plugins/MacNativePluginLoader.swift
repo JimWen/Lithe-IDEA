@@ -32,6 +32,11 @@ struct MacPluginLoadPolicy {
             return true
         }
         guard launchMode == .normal else { return false }
+        if plugin.entrypoint.kind == .declarative {
+            let toggleID = ModuleID("plugin.\(plugin.id.rawValue)")
+            let enabled = configurationStore?.enabledState(for: toggleID) ?? true
+            return enabled && !(recoveryStore?.isQuarantined(toggleID) ?? false)
+        }
         return plugin.modules.contains { declaration in
             let manifest = declaration.manifest
             let enabled = configurationStore?.enabledState(for: manifest.id)

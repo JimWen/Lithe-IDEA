@@ -86,11 +86,11 @@ public struct ValidatedPluginCatalog: Sendable {
                     hostVersion: hostVersion
                 )
             }
-            guard !plugin.modules.isEmpty else {
-                throw PluginCatalogError.emptyPlugin(plugin.id)
-            }
             switch plugin.entrypoint.kind {
             case .builtIn:
+                guard !plugin.modules.isEmpty else {
+                    throw PluginCatalogError.emptyPlugin(plugin.id)
+                }
                 guard plugin.entrypoint.targetName?.isEmpty == false,
                       plugin.entrypoint.bundleIdentifier == nil,
                       plugin.entrypoint.principalClass == nil,
@@ -98,11 +98,25 @@ public struct ValidatedPluginCatalog: Sendable {
                     throw PluginCatalogError.invalidEntrypoint(plugin.id)
                 }
             case .nativeBundle:
+                guard !plugin.modules.isEmpty else {
+                    throw PluginCatalogError.emptyPlugin(plugin.id)
+                }
                 guard plugin.entrypoint.targetName == nil,
                       plugin.entrypoint.bundleIdentifier?.isEmpty == false,
                       plugin.entrypoint.principalClass?.isEmpty == false,
                       Self.isSafeRelativePath(plugin.entrypoint.bundlePath) else {
                     throw PluginCatalogError.invalidEntrypoint(plugin.id)
+                }
+            case .declarative:
+                guard plugin.entrypoint.targetName == nil,
+                      plugin.entrypoint.bundleIdentifier == nil,
+                      plugin.entrypoint.principalClass == nil,
+                      plugin.entrypoint.bundlePath == nil,
+                      plugin.modules.isEmpty else {
+                    throw PluginCatalogError.invalidEntrypoint(plugin.id)
+                }
+                guard plugin.languageSupports?.isEmpty == false else {
+                    throw PluginCatalogError.emptyPlugin(plugin.id)
                 }
             }
             for declaration in plugin.modules {
@@ -159,6 +173,7 @@ public struct ValidatedPluginCatalog: Sendable {
 
     private static func validateLanguageSupports(in plugin: PluginManifest) throws {
         let declaredModuleIDs = Set(plugin.modules.map(\.manifest.id))
+        let isDeclarative = plugin.entrypoint.kind == .declarative
         var languageIDs: Set<String> = []
         for support in plugin.languageSupports ?? [] {
             let moduleIDs = support.moduleIDs
@@ -172,11 +187,18 @@ public struct ValidatedPluginCatalog: Sendable {
                 || support.fileExtensions.contains(where: { $0.contains("/") || $0.hasPrefix(".") })
                 || support.fileNames.contains(where: { $0.contains("/") })
                 || support.projectFileNames.contains(where: { $0.contains("/") })
+            let hasValidSyntaxPath: Bool = {
+                guard let path = support.syntaxProfilePath else { return !isDeclarative }
+                return Self.isSafeRelativePath(path)
+            }()
+            let hasValidModuleOwnership = isDeclarative
+                ? moduleIDs.isEmpty
+                : (!moduleIDs.isEmpty && moduleIDs.allSatisfy(declaredModuleIDs.contains))
             guard languageIDs.insert(support.id).inserted,
                   hasRecognitionMetadata,
                   !hasInvalidName,
-                  !moduleIDs.isEmpty,
-                  moduleIDs.allSatisfy(declaredModuleIDs.contains) else {
+                  hasValidSyntaxPath,
+                  hasValidModuleOwnership else {
                 throw PluginCatalogError.invalidLanguageSupport(
                     plugin: plugin.id,
                     languageID: support.id

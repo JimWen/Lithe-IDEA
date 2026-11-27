@@ -374,8 +374,14 @@ public enum OfficialPluginCatalog {
                 languageServerModuleID: .languageServerExtension(goLanguageID),
                 executionModuleID: .languageExecutionExtension(goLanguageID),
                 testingModuleID: .languageExecutionExtension(goLanguageID),
-                debugModuleID: .languageExecutionExtension(goLanguageID)
-            )]
+                debugModuleID: .languageExecutionExtension(goLanguageID),
+                syntaxProfilePath: "Resources/syntax.json"
+            )],
+            metadata: PluginMetadata(
+                summary: "Official Go plugin providing gopls LSP, Delve debugging, running, testing, syntax profile, and Go Tools.",
+                iconSystemName: "g.circle.fill",
+                category: "official-language"
+            )
         ),
         PluginManifest(
             id: PluginID("dev.lithe.plugin.python-support"),
@@ -404,8 +410,14 @@ public enum OfficialPluginCatalog {
                 languageServerModuleID: .languageServerExtension(pythonLanguageID),
                 executionModuleID: .languageExecutionExtension(pythonLanguageID),
                 testingModuleID: .languageExecutionExtension(pythonLanguageID),
-                debugModuleID: .languageExecutionExtension(pythonLanguageID)
-            )]
+                debugModuleID: .languageExecutionExtension(pythonLanguageID),
+                syntaxProfilePath: "Resources/syntax.json"
+            )],
+            metadata: PluginMetadata(
+                summary: "Official Python plugin providing basedpyright/pyright LSP, debugpy debugging, running, pytest, and syntax profile.",
+                iconSystemName: "chevron.left.forwardslash.chevron.right",
+                category: "official-language"
+            )
         ),
         PluginManifest(
             id: PluginID("dev.lithe.plugin.rust-support"),
@@ -437,8 +449,14 @@ public enum OfficialPluginCatalog {
                 languageServerModuleID: .languageServerExtension(rustLanguageID),
                 executionModuleID: .languageExecutionExtension(rustLanguageID),
                 testingModuleID: .languageExecutionExtension(rustLanguageID),
-                debugModuleID: .languageExecutionExtension(rustLanguageID)
-            )]
+                debugModuleID: .languageExecutionExtension(rustLanguageID),
+                syntaxProfilePath: "Resources/syntax.json"
+            )],
+            metadata: PluginMetadata(
+                summary: "Official Rust plugin providing rust-analyzer LSP, LLDB debugging, running, testing, syntax profile, and Cargo Tools.",
+                iconSystemName: "gearshape.2.fill",
+                category: "official-language"
+            )
         )
     ].sorted { $0.id < $1.id }
 

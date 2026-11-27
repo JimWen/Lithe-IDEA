@@ -117,6 +117,13 @@ public protocol LanguageServerExtensionProviding: AnyObject {
     var lifecycle: any LanguageServerExtensionLifecycle { get }
 }
 
+/// Optional LSP `initializationOptions` exported by a language server capability
+/// without altering the frozen v1 `LanguageServerExtensionConfiguration` ABI.
+@MainActor
+public protocol LanguageServerInitializationOptionsProviding: AnyObject {
+    var initializationOptions: ToolingJSONValue? { get }
+}
+
 /// Optional syntax, highlighting, and offline-completion metadata exported by
 /// a language plugin so the editor and builtin completion share a single
 /// language-owned definition without hardcoding language branches in the host.

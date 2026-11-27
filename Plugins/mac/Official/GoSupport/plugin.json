@@ -91,7 +91,13 @@
       "languageServerModuleID": "dev.lithe.language.go.language-server",
       "executionModuleID": "dev.lithe.language.go.execution",
       "testingModuleID": "dev.lithe.language.go.execution",
-      "debugModuleID": "dev.lithe.language.go.execution"
+      "debugModuleID": "dev.lithe.language.go.execution",
+      "syntaxProfilePath": "Resources/syntax.json"
     }
-  ]
+  ],
+  "metadata": {
+    "summary": "Official Go plugin providing gopls LSP, Delve debugging, running, testing, syntax profile, and Go Tools.",
+    "iconSystemName": "g.circle.fill",
+    "category": "official-language"
+  }
 }

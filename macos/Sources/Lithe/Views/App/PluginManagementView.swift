@@ -54,6 +54,7 @@ struct PluginManagementView: View {
         .onAppear {
             let initialContent = PluginManagementListContent(plugins: model.pluginSnapshots)
             selectedPluginID = initialContent.standalonePlugins.first?.id
+                ?? initialContent.installedLanguagePlugins.first?.id
                 ?? initialContent.languageExtensions.first?.id
         }
         .onChange(of: searchText) { newValue in
@@ -108,6 +109,24 @@ struct PluginManagementView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(listContent.standalonePlugins) { plugin in
                         pluginRow(plugin)
+                    }
+                    if !listContent.installedLanguagePlugins.isEmpty {
+                        HStack {
+                            Text(LocalizedStringKey("Official Language Bundles"))
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(LitheTheme.secondaryText)
+                            Spacer()
+                            Text("\(listContent.installedLanguagePlugins.count)")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(LitheTheme.tertiaryText)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(LitheTheme.raised.opacity(0.55))
+
+                        ForEach(listContent.installedLanguagePlugins) { plugin in
+                            pluginRow(plugin)
+                        }
                     }
                     if !listContent.languageExtensions.isEmpty {
                         languageExtensionsDisclosure
@@ -185,8 +204,19 @@ struct PluginManagementView: View {
                 .frame(width: 42, height: 42)
                 .scaleEffect(isHovered && !isSelected ? 1.06 : 1)
             VStack(alignment: .leading, spacing: 3) {
-                Text(LocalizedStringKey(plugin.manifest.displayName)).lineLimit(1)
-                    .font(.system(size: 13, weight: .semibold))
+                HStack(spacing: 6) {
+                    Text(LocalizedStringKey(plugin.manifest.displayName)).lineLimit(1)
+                        .font(.system(size: 13, weight: .semibold))
+                    if let badge = entrypointBadge(for: plugin.manifest.entrypoint.kind) {
+                        Text(badge)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(LitheTheme.accent)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(LitheTheme.accent.opacity(0.14))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                }
                 Text(verbatim: "\(plugin.manifest.version)  \(plugin.manifest.vendor.displayName)")
                     .font(LitheTheme.smallFont).foregroundStyle(LitheTheme.secondaryText)
             }
@@ -255,6 +285,9 @@ struct PluginManagementView: View {
                     Text(LocalizedStringKey(presentation.summary))
                         .foregroundStyle(LitheTheme.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let supports = plugin.manifest.languageSupports, !supports.isEmpty {
+                        pluginLanguageBoundaryDetails(manifest: plugin.manifest, supports: supports)
+                    }
                     Label(
                         LocalizedStringKey(hasPendingChange ? "Pending confirmation" : plugin.statusMessage),
                         systemImage: hasPendingChange ? "clock.badge.exclamationmark" : (isEnabled ? "checkmark.circle.fill" : "pause.circle")
@@ -335,8 +368,94 @@ struct PluginManagementView: View {
         }
     }
 
+    private func entrypointBadge(for kind: PluginEntrypointKind) -> String? {
+        switch kind {
+        case .nativeBundle: "Bundle"
+        case .declarative: "Config"
+        case .builtIn: nil
+        }
+    }
+
+    private func pluginLanguageBoundaryDetails(
+        manifest: PluginManifest,
+        supports: [LanguageSupportDeclaration]
+    ) -> some View {
+        let extensions = supports.flatMap(\.fileExtensions).map { ".\($0)" }.joined(separator: ", ")
+        let markers = supports.flatMap(\.projectFileNames).joined(separator: ", ")
+        let capabilities = declaredCapabilityLabels(manifest: manifest, supports: supports)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(LocalizedStringKey("Package Type:"))
+                    .font(LitheTheme.smallFont)
+                    .foregroundStyle(LitheTheme.secondaryText)
+                Text(manifest.entrypoint.kind == .nativeBundle
+                     ? "Independent Native Bundle"
+                     : (manifest.entrypoint.kind == .declarative ? "Declarative Config Plugin" : "Built-in Language Support"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(LitheTheme.primaryText)
+            }
+            if !capabilities.isEmpty {
+                HStack(spacing: 5) {
+                    ForEach(capabilities, id: \.self) { label in
+                        Text(label)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(LitheTheme.secondaryText)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(LitheTheme.raised)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+            }
+            if !extensions.isEmpty {
+                Text("Files: \(extensions)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(LitheTheme.secondaryText)
+            }
+            if !markers.isEmpty {
+                Text("Project markers: \(markers)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(LitheTheme.secondaryText)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(LitheTheme.inputBackground.opacity(0.65))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(LitheTheme.divider, lineWidth: 1))
+    }
+
+    private func declaredCapabilityLabels(
+        manifest: PluginManifest,
+        supports: [LanguageSupportDeclaration]
+    ) -> [String] {
+        var labels: [String] = []
+        let allCapabilities = Set(manifest.modules.flatMap(\.manifest.providedCapabilities))
+        if supports.contains(where: { $0.syntaxProfilePath != nil }) { labels.append("Syntax JSON") }
+        if supports.contains(where: { $0.languageServerModuleID != nil }) { labels.append("LSP") }
+        if supports.contains(where: { $0.executionModuleID != nil }) { labels.append("Run") }
+        if supports.contains(where: { $0.testingModuleID != nil }) { labels.append("Test") }
+        if supports.contains(where: { $0.debugModuleID != nil }) { labels.append("Debug") }
+        if supports.contains(where: { allCapabilities.contains(.languageProjectTools($0.id)) }) {
+            labels.append("Project Tools")
+        }
+        return labels
+    }
+
     private func presentation(for plugin: PluginManagementSnapshot) -> PluginPresentation {
         let id = plugin.id.rawValue
+        let languageID = plugin.manifest.languageSupports?.first?.id ?? ""
+        if let meta = plugin.manifest.metadata,
+           let summary = meta.summary, !summary.isEmpty {
+            let icon = meta.iconSystemName ?? "puzzlepiece.extension.fill"
+            let tint: Color = switch languageID {
+            case "go": LitheTheme.accent
+            case "rust": Color.orange
+            case "python": LitheTheme.warning
+            default: LitheTheme.accent
+            }
+            return PluginPresentation(systemImage: icon, tint: tint, summary: summary)
+        }
         if id == "dev.lithe.plugin.database" {
             return PluginPresentation(
                 systemImage: "cylinder.split.1x2",
@@ -344,37 +463,21 @@ struct PluginManagementView: View {
                 summary: "Connect to databases, browse schemas, edit data, run SQL, and manage backups from the Database workspace."
             )
         }
-        if id == "dev.lithe.plugin.go-support" {
-            return PluginPresentation(
-                systemImage: "g.circle.fill",
-                tint: LitheTheme.accent,
-                summary: "Official Go plugin providing gopls LSP, Delve debugging, running, testing, syntax profile, and Go Tools."
-            )
-        }
-        if id == "dev.lithe.plugin.rust-support" {
-            return PluginPresentation(
-                systemImage: "gearshape.2.fill",
-                tint: Color.orange,
-                summary: "Official Rust plugin providing rust-analyzer LSP, LLDB debugging, running, testing, syntax profile, and Cargo Tools."
-            )
-        }
-        if id == "dev.lithe.plugin.python-support" {
-            return PluginPresentation(
-                systemImage: "chevron.left.forwardslash.chevron.right",
-                tint: LitheTheme.warning,
-                summary: "Official Python plugin providing basedpyright/pyright LSP, debugpy debugging, running, pytest, and syntax profile."
-            )
-        }
 
-        let languageID = plugin.manifest.languageSupports?.first?.id ?? ""
         let supportsExecution = plugin.manifest.modules.contains {
             $0.manifest.providedCapabilities.contains(.languageExecutionExtension(languageID))
         }
-        let summary = supportsExecution
-            ? "Adds language-server integration, formatting, running, and test support."
-            : "Adds language-server integration and formatting support."
+        let summary: String
+        if plugin.manifest.entrypoint.kind == .declarative {
+            summary = "Declarative language configuration providing syntax highlighting and offline keyword completion."
+        } else if supportsExecution {
+            summary = "Adds language-server integration, formatting, running, and test support."
+        } else {
+            summary = "Adds language-server integration and formatting support."
+        }
 
         switch languageID {
+        case "go": return .init(systemImage: "g.circle.fill", tint: LitheTheme.accent, summary: summary)
         case "python": return .init(systemImage: "chevron.left.forwardslash.chevron.right", tint: LitheTheme.warning, summary: summary)
         case "node": return .init(systemImage: "hexagon.fill", tint: LitheTheme.success, summary: summary)
         case "rust": return .init(systemImage: "gearshape.2.fill", tint: Color.orange, summary: summary)
@@ -398,14 +501,21 @@ struct PluginManagementView: View {
 
 struct PluginManagementListContent {
     let standalonePlugins: [PluginManagementSnapshot]
+    let installedLanguagePlugins: [PluginManagementSnapshot]
     let languageExtensions: [PluginManagementSnapshot]
 
     init(plugins: [PluginManagementSnapshot]) {
         standalonePlugins = plugins.filter { plugin in
             plugin.manifest.languageSupports?.isEmpty != false
         }
+        installedLanguagePlugins = plugins.filter { plugin in
+            plugin.manifest.languageSupports?.isEmpty == false
+                && (plugin.manifest.entrypoint.kind == .nativeBundle
+                    || plugin.manifest.entrypoint.kind == .declarative)
+        }
         languageExtensions = plugins.filter { plugin in
             plugin.manifest.languageSupports?.isEmpty == false
+                && plugin.manifest.entrypoint.kind == .builtIn
         }
     }
 }

@@ -168,7 +168,9 @@ package final class LanguageToolingSessionManager: ObservableObject,
             executableNames: configuration.executableNames,
             arguments: configuration.arguments,
             validationArguments: configuration.validationArguments,
-            environment: configuration.environment
+            environment: configuration.environment,
+            initializationOptions: (provider as? any LanguageServerInitializationOptionsProviding)?.initializationOptions
+                ?? base?.languageServerLaunch?.initializationOptions
         )
         let descriptor = LanguageProviderDescriptor(
             id: support.id,

@@ -77,6 +77,60 @@ public struct LanguageSyntaxProfile: Equatable, Codable, Sendable {
         self.completionKeywords = completionKeywords ?? keywords
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case languageID
+        case displayName
+        case fileExtensions
+        case fileNames
+        case supportsSlashComments
+        case supportsBlockComments
+        case supportsNestedBlockComments
+        case supportsHashComments
+        case supportsDashComments
+        case supportsBacktickMultilineStrings
+        case backtickAllowsEscape
+        case supportsTripleQuotedStrings
+        case supportsRustSyntax
+        case supportsAtAnnotations
+        case singleQuoteAllowsEscape
+        case lineCommentPrefix
+        case blockCommentStart
+        case blockCommentEnd
+        case keywords
+        case builtinTypes
+        case completionKeywords
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let languageID = try container.decode(String.self, forKey: .languageID)
+        let displayName = try container.decode(String.self, forKey: .displayName)
+        let keywords = try container.decodeIfPresent(Set<String>.self, forKey: .keywords) ?? []
+        self.init(
+            languageID: languageID,
+            displayName: displayName,
+            fileExtensions: try container.decodeIfPresent([String].self, forKey: .fileExtensions) ?? [],
+            fileNames: try container.decodeIfPresent([String].self, forKey: .fileNames) ?? [],
+            supportsSlashComments: try container.decodeIfPresent(Bool.self, forKey: .supportsSlashComments) ?? true,
+            supportsBlockComments: try container.decodeIfPresent(Bool.self, forKey: .supportsBlockComments) ?? true,
+            supportsNestedBlockComments: try container.decodeIfPresent(Bool.self, forKey: .supportsNestedBlockComments) ?? false,
+            supportsHashComments: try container.decodeIfPresent(Bool.self, forKey: .supportsHashComments) ?? false,
+            supportsDashComments: try container.decodeIfPresent(Bool.self, forKey: .supportsDashComments) ?? false,
+            supportsBacktickMultilineStrings: try container.decodeIfPresent(Bool.self, forKey: .supportsBacktickMultilineStrings) ?? false,
+            backtickAllowsEscape: try container.decodeIfPresent(Bool.self, forKey: .backtickAllowsEscape) ?? false,
+            supportsTripleQuotedStrings: try container.decodeIfPresent(Bool.self, forKey: .supportsTripleQuotedStrings) ?? false,
+            supportsRustSyntax: try container.decodeIfPresent(Bool.self, forKey: .supportsRustSyntax) ?? false,
+            supportsAtAnnotations: try container.decodeIfPresent(Bool.self, forKey: .supportsAtAnnotations) ?? false,
+            singleQuoteAllowsEscape: try container.decodeIfPresent(Bool.self, forKey: .singleQuoteAllowsEscape) ?? true,
+            lineCommentPrefix: try container.decodeIfPresent(String.self, forKey: .lineCommentPrefix),
+            blockCommentStart: try container.decodeIfPresent(String.self, forKey: .blockCommentStart),
+            blockCommentEnd: try container.decodeIfPresent(String.self, forKey: .blockCommentEnd),
+            keywords: keywords,
+            builtinTypes: try container.decodeIfPresent(Set<String>.self, forKey: .builtinTypes) ?? [],
+            completionKeywords: try container.decodeIfPresent(Set<String>.self, forKey: .completionKeywords)
+        )
+    }
+
     private static func normalized(
         _ values: [String],
         removingLeadingDot: Bool = false
@@ -181,7 +235,9 @@ public extension LanguageSyntaxProfile {
         ],
         builtinTypes: [
             "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize",
-            "str", "u8", "u16", "u32", "u64", "u128", "usize"
+            "str", "u8", "u16", "u32", "u64", "u128", "usize",
+            "String", "Vec", "Option", "Result", "Box", "Arc", "Rc", "Cow",
+            "HashMap", "HashSet", "BTreeMap", "BTreeSet", "Path", "PathBuf"
         ],
         completionKeywords: [
             "Self", "abstract", "as", "async", "await", "become", "box", "break", "const", "continue",
@@ -215,8 +271,11 @@ public extension LanguageSyntaxProfile {
             "while", "with", "yield", "self", "cls"
         ],
         builtinTypes: [
-            "bool", "bytes", "dict", "float", "frozenset", "int", "list", "object",
-            "set", "str", "tuple", "type"
+            "bool", "bytearray", "bytes", "complex", "dict", "float", "frozenset", "int",
+            "list", "memoryview", "object", "range", "set", "str", "tuple", "type",
+            "Exception", "BaseException", "ValueError", "TypeError", "KeyError",
+            "IndexError", "RuntimeError", "AttributeError", "NotImplementedError",
+            "StopIteration", "OSError"
         ],
         completionKeywords: [
             "False", "None", "True", "and", "as", "assert", "async", "await", "break", "case",
@@ -451,6 +510,98 @@ public extension LanguageSyntaxProfile {
     ]
 }
 
+/// Extended lexical metadata decoded from plugin `Resources/syntax.json` or
+/// supplied by built-in language definitions without modifying the frozen v1
+/// `LanguageSyntaxProfile` binary layout.
+public struct LanguageSyntaxEnrichment: Equatable, Codable, Sendable {
+    public let directivePrefixes: [String]
+    public let booleanLiterals: Set<String>
+    public let nullLiterals: Set<String>
+    public let builtinFunctions: Set<String>
+    public let functionDeclarationKeywords: Set<String>
+    public let typeDeclarationKeywords: Set<String>
+
+    public init(
+        directivePrefixes: [String] = [],
+        booleanLiterals: Set<String> = [],
+        nullLiterals: Set<String> = [],
+        builtinFunctions: Set<String> = [],
+        functionDeclarationKeywords: Set<String> = [],
+        typeDeclarationKeywords: Set<String> = []
+    ) {
+        self.directivePrefixes = directivePrefixes
+        self.booleanLiterals = booleanLiterals
+        self.nullLiterals = nullLiterals
+        self.builtinFunctions = builtinFunctions
+        self.functionDeclarationKeywords = functionDeclarationKeywords
+        self.typeDeclarationKeywords = typeDeclarationKeywords
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case directivePrefixes
+        case booleanLiterals
+        case nullLiterals
+        case builtinFunctions
+        case functionDeclarationKeywords
+        case typeDeclarationKeywords
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            directivePrefixes: try container.decodeIfPresent([String].self, forKey: .directivePrefixes) ?? [],
+            booleanLiterals: try container.decodeIfPresent(Set<String>.self, forKey: .booleanLiterals) ?? [],
+            nullLiterals: try container.decodeIfPresent(Set<String>.self, forKey: .nullLiterals) ?? [],
+            builtinFunctions: try container.decodeIfPresent(Set<String>.self, forKey: .builtinFunctions) ?? [],
+            functionDeclarationKeywords: try container.decodeIfPresent(Set<String>.self, forKey: .functionDeclarationKeywords) ?? [],
+            typeDeclarationKeywords: try container.decodeIfPresent(Set<String>.self, forKey: .typeDeclarationKeywords) ?? []
+        )
+    }
+
+    public static let empty = LanguageSyntaxEnrichment()
+
+    public static let go = LanguageSyntaxEnrichment(
+        directivePrefixes: ["//go:", "// +build"],
+        booleanLiterals: ["true", "false"],
+        nullLiterals: ["nil", "iota"],
+        builtinFunctions: [
+            "append", "cap", "clear", "close", "complex", "copy", "delete", "imag",
+            "len", "make", "max", "min", "new", "panic", "print", "println", "real", "recover"
+        ],
+        functionDeclarationKeywords: ["func"],
+        typeDeclarationKeywords: ["type"]
+    )
+
+    public static let rust = LanguageSyntaxEnrichment(
+        booleanLiterals: ["true", "false"],
+        builtinFunctions: ["drop"],
+        functionDeclarationKeywords: ["fn"],
+        typeDeclarationKeywords: ["struct", "enum", "trait", "type", "union"]
+    )
+
+    public static let python = LanguageSyntaxEnrichment(
+        booleanLiterals: ["True", "False"],
+        nullLiterals: ["None"],
+        builtinFunctions: [
+            "abs", "all", "any", "ascii", "bin", "breakpoint", "callable", "chr",
+            "classmethod", "compile", "delattr", "dir", "divmod", "enumerate", "eval",
+            "exec", "filter", "format", "getattr", "globals", "hasattr", "hash", "help",
+            "hex", "id", "input", "isinstance", "issubclass", "iter", "len", "locals",
+            "map", "max", "min", "next", "oct", "open", "ord", "pow", "print",
+            "property", "repr", "reversed", "round", "setattr", "slice", "sorted",
+            "staticmethod", "sum", "super", "vars", "zip"
+        ],
+        functionDeclarationKeywords: ["def"],
+        typeDeclarationKeywords: ["class"]
+    )
+
+    public static let builtInByID: [String: LanguageSyntaxEnrichment] = [
+        "go": .go,
+        "rust": .rust,
+        "python": .python
+    ]
+}
+
 /// Process-wide registry uniting built-in highlight-only language profiles with
 /// dynamic profiles contributed by activated language plugins.
 public final class LanguageSyntaxProfileRegistry: @unchecked Sendable {
@@ -458,30 +609,87 @@ public final class LanguageSyntaxProfileRegistry: @unchecked Sendable {
 
     private let lock = NSLock()
     private let builtInByID: [String: LanguageSyntaxProfile]
+    private let builtInEnrichmentsByID: [String: LanguageSyntaxEnrichment]
     private var pluginOverridesByID: [String: LanguageSyntaxProfile] = [:]
+    private var pluginEnrichmentsByID: [String: LanguageSyntaxEnrichment] = [:]
+    private var disabledLanguageIDs: Set<String> = []
+    private var _revision: UInt64 = 0
 
-    public init(builtInProfiles: [LanguageSyntaxProfile] = LanguageSyntaxProfile.builtInProfiles) {
+    public init(
+        builtInProfiles: [LanguageSyntaxProfile] = LanguageSyntaxProfile.builtInProfiles,
+        builtInEnrichments: [String: LanguageSyntaxEnrichment] = LanguageSyntaxEnrichment.builtInByID
+    ) {
         self.builtInByID = Dictionary(
             uniqueKeysWithValues: builtInProfiles.map { ($0.languageID, $0) }
         )
+        self.builtInEnrichmentsByID = builtInEnrichments
+    }
+
+    public var revision: UInt64 {
+        lock.withLock { _revision }
     }
 
     public func register(_ profile: LanguageSyntaxProfile) {
+        register(profile, enrichment: nil)
+    }
+
+    public func register(
+        _ profile: LanguageSyntaxProfile,
+        enrichment: LanguageSyntaxEnrichment?
+    ) {
         lock.withLock {
+            disabledLanguageIDs.remove(profile.languageID)
             pluginOverridesByID[profile.languageID] = profile
+            if let enrichment {
+                pluginEnrichmentsByID[profile.languageID] = enrichment
+            }
+            _revision &+= 1
         }
     }
 
     public func unregister(languageID: String) {
+        let normalized = languageID.lowercased()
         lock.withLock {
-            _ = pluginOverridesByID.removeValue(forKey: languageID.lowercased())
+            _ = pluginOverridesByID.removeValue(forKey: normalized)
+            _ = pluginEnrichmentsByID.removeValue(forKey: normalized)
+            _revision &+= 1
+        }
+    }
+
+    public func setPluginDisabled(_ disabled: Bool, forLanguageID languageID: String) {
+        let normalized = languageID.lowercased()
+        lock.withLock {
+            if disabled {
+                disabledLanguageIDs.insert(normalized)
+                _ = pluginOverridesByID.removeValue(forKey: normalized)
+                _ = pluginEnrichmentsByID.removeValue(forKey: normalized)
+            } else {
+                disabledLanguageIDs.remove(normalized)
+            }
+            _revision &+= 1
+        }
+    }
+
+    public func enrichment(for languageID: String) -> LanguageSyntaxEnrichment {
+        let normalized = languageID.lowercased()
+        return lock.withLock {
+            guard !disabledLanguageIDs.contains(normalized) else { return .empty }
+            return pluginEnrichmentsByID[normalized]
+                ?? builtInEnrichmentsByID[normalized]
+                ?? .empty
+        }
+    }
+
+    public func isLanguageDisabled(_ languageID: String) -> Bool {
+        lock.withLock {
+            disabledLanguageIDs.contains(languageID.lowercased())
         }
     }
 
     public var allProfiles: [LanguageSyntaxProfile] {
         lock.withLock {
-            var merged = builtInByID
-            for (id, profile) in pluginOverridesByID {
+            var merged = builtInByID.filter { !disabledLanguageIDs.contains($0.key) }
+            for (id, profile) in pluginOverridesByID where !disabledLanguageIDs.contains(id) {
                 merged[id] = profile
             }
             return merged.values.sorted { $0.languageID < $1.languageID }
@@ -508,12 +716,17 @@ public final class LanguageSyntaxProfileRegistry: @unchecked Sendable {
         fileName: String?,
         fileExtension: String
     ) -> LanguageSyntaxProfile? {
-        let (profiles, overrides) = lock.withLock { () -> ([LanguageSyntaxProfile], [String: LanguageSyntaxProfile]) in
-            var merged = builtInByID
-            for (id, profile) in pluginOverridesByID {
+        let (profiles, overrides, disabled) = lock.withLock {
+            () -> ([LanguageSyntaxProfile], [String: LanguageSyntaxProfile], Set<String>) in
+            var merged = builtInByID.filter { !disabledLanguageIDs.contains($0.key) }
+            for (id, profile) in pluginOverridesByID where !disabledLanguageIDs.contains(id) {
                 merged[id] = profile
             }
-            return (merged.values.sorted { $0.languageID < $1.languageID }, pluginOverridesByID)
+            return (
+                merged.values.sorted { $0.languageID < $1.languageID },
+                pluginOverridesByID,
+                disabledLanguageIDs
+            )
         }
         if let rawID = languageID?.lowercased(), !rawID.isEmpty {
             let normalizedID: String
@@ -524,6 +737,7 @@ public final class LanguageSyntaxProfileRegistry: @unchecked Sendable {
             case "shellscript": normalizedID = "shell"
             default: normalizedID = rawID
             }
+            guard !disabled.contains(normalizedID) else { return nil }
             if let exact = overrides[normalizedID] ?? builtInByID[normalizedID] {
                 return exact
             }

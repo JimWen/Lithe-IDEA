@@ -1,0 +1,52 @@
+{
+  "languageID": "python",
+  "displayName": "Python",
+  "fileExtensions": ["py", "pyi", "pyw"],
+  "fileNames": [],
+  "supportsSlashComments": false,
+  "supportsBlockComments": false,
+  "supportsNestedBlockComments": false,
+  "supportsHashComments": true,
+  "supportsDashComments": false,
+  "supportsBacktickMultilineStrings": false,
+  "backtickAllowsEscape": false,
+  "supportsTripleQuotedStrings": true,
+  "supportsRustSyntax": false,
+  "supportsAtAnnotations": true,
+  "singleQuoteAllowsEscape": true,
+  "lineCommentPrefix": "#",
+  "directivePrefixes": [],
+  "keywords": [
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break",
+    "case", "class", "continue", "def", "del", "elif", "else", "except",
+    "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
+    "match", "nonlocal", "not", "or", "pass", "raise", "return", "try",
+    "while", "with", "yield", "self", "cls"
+  ],
+  "booleanLiterals": ["True", "False"],
+  "nullLiterals": ["None"],
+  "builtinTypes": [
+    "bool", "bytearray", "bytes", "complex", "dict", "float", "frozenset", "int",
+    "list", "memoryview", "object", "range", "set", "str", "tuple", "type",
+    "Exception", "BaseException", "ValueError", "TypeError", "KeyError",
+    "IndexError", "RuntimeError", "AttributeError", "NotImplementedError",
+    "StopIteration", "OSError"
+  ],
+  "builtinFunctions": [
+    "abs", "all", "any", "ascii", "bin", "breakpoint", "callable", "chr",
+    "classmethod", "compile", "delattr", "dir", "divmod", "enumerate", "eval",
+    "exec", "filter", "format", "getattr", "globals", "hasattr", "hash", "help",
+    "hex", "id", "input", "isinstance", "issubclass", "iter", "len", "locals",
+    "map", "max", "min", "next", "oct", "open", "ord", "pow", "print",
+    "property", "repr", "reversed", "round", "setattr", "slice", "sorted",
+    "staticmethod", "sum", "super", "vars", "zip"
+  ],
+  "functionDeclarationKeywords": ["def"],
+  "typeDeclarationKeywords": ["class"],
+  "completionKeywords": [
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "case",
+    "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from",
+    "global", "if", "import", "in", "is", "lambda", "match", "nonlocal", "not", "or", "pass",
+    "raise", "return", "try", "while", "with", "yield"
+  ]
+}

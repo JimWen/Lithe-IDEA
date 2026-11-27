@@ -90,7 +90,13 @@
       "languageServerModuleID": "dev.lithe.language.rust.language-server",
       "executionModuleID": "dev.lithe.language.rust.execution",
       "testingModuleID": "dev.lithe.language.rust.execution",
-      "debugModuleID": "dev.lithe.language.rust.execution"
+      "debugModuleID": "dev.lithe.language.rust.execution",
+      "syntaxProfilePath": "Resources/syntax.json"
     }
-  ]
+  ],
+  "metadata": {
+    "summary": "Official Rust plugin providing rust-analyzer LSP, LLDB debugging, running, testing, syntax profile, and Cargo Tools.",
+    "iconSystemName": "gearshape.2.fill",
+    "category": "official-language"
+  }
 }

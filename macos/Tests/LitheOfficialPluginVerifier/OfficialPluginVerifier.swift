@@ -9,17 +9,21 @@ import LitheModuleAPI
 struct OfficialPluginVerifier {
     static func main() async throws {
         let arguments = Array(CommandLine.arguments.dropFirst())
-        let legacy: Bool
+        let mode: VerificationMode
         let packagePath: String
         switch arguments {
         case let values where values.count == 1:
-            legacy = false
+            mode = .currentNative
             packagePath = values[0]
         case let values where values.count == 2 && values[0] == "--legacy-go-0.3.0":
-            legacy = true
+            mode = .legacyGo
+            packagePath = values[1]
+        case let values where values.count == 2 && values[0] == "--declarative":
+            mode = .declarative
             packagePath = values[1]
         default: throw VerificationError.usage
         }
+        let legacy = mode == .legacyGo
         // All hosts below are in-memory fixtures. No child process needs to be
         // killed if a broken plugin lifecycle exceeds this local deadline.
         let watchdog = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
@@ -37,11 +41,18 @@ struct OfficialPluginVerifier {
             PluginManifest.self,
             from: Data(contentsOf: packageURL.appendingPathComponent("plugin.json"))
         )
+        if mode == .declarative {
+            try verifyDeclarativePackage(packageURL: packageURL, manifest: manifest, started: started)
+            return
+        }
         let accepted = legacy
             ? manifest == (try legacyGoManifest())
             : OfficialPluginCatalog.manifests.contains(manifest)
         guard accepted else {
             throw VerificationError.manifestMismatch
+        }
+        if !legacy {
+            try verifyPackagedSyntaxProfiles(packageURL: packageURL, manifest: manifest)
         }
 
         // As in the production startup loader, compatibility is checked before
@@ -110,6 +121,56 @@ struct OfficialPluginVerifier {
             }
         }
         print("Verified \(legacy ? "legacy 0.3.0" : "current") \(manifest.id): native Bundle, Run/LSP/Debug\(legacy ? "" : "/Syntax"), shutdown (\(started.duration(to: .now)))")
+    }
+
+    private enum VerificationMode: Equatable {
+        case currentNative
+        case legacyGo
+        case declarative
+    }
+
+    private static func verifyDeclarativePackage(
+        packageURL: URL,
+        manifest: PluginManifest,
+        started: ContinuousClock.Instant
+    ) throws {
+        guard manifest.entrypoint.kind == .declarative else {
+            throw VerificationError.invalidEntrypoint
+        }
+        _ = try ValidatedPluginCatalog(
+            manifests: BuiltInPluginCatalog.manifests + [manifest],
+            hostVersion: BuiltInPluginCatalog.hostVersion
+        )
+        let profiles = try verifyPackagedSyntaxProfiles(packageURL: packageURL, manifest: manifest)
+        guard !profiles.isEmpty else {
+            throw VerificationError.behavior("Declarative plugin did not provide any syntax profiles")
+        }
+        print("Verified declarative \(manifest.id): \(profiles.count) syntax profile(s), zero native code (\(started.duration(to: .now)))")
+    }
+
+    @discardableResult
+    private static func verifyPackagedSyntaxProfiles(
+        packageURL: URL,
+        manifest: PluginManifest
+    ) throws -> [LanguageSyntaxProfile] {
+        let packageRoot = packageURL.standardizedFileURL.path + "/"
+        var profiles: [LanguageSyntaxProfile] = []
+        for support in manifest.languageSupports ?? [] {
+            guard let relativePath = support.syntaxProfilePath else { continue }
+            let fileURL = packageURL.appendingPathComponent(relativePath).standardizedFileURL
+            guard fileURL.path.hasPrefix(packageRoot) else {
+                throw VerificationError.behavior("Syntax profile path escapes package root: \(relativePath)")
+            }
+            let profile = try JSONDecoder().decode(
+                LanguageSyntaxProfile.self,
+                from: Data(contentsOf: fileURL)
+            )
+            guard profile.languageID == support.id else {
+                throw VerificationError.behavior("Syntax profile languageID mismatch for \(support.id)")
+            }
+            profiles.append(profile)
+        }
+        return profiles
     }
 
     private static func verifyFactories(_ factories: [ModuleFactory], match manifest: PluginManifest) throws {
@@ -202,8 +263,34 @@ struct OfficialPluginVerifier {
               await runSession.stopAndWait(), !runSession.isRunning else {
             throw VerificationError.behavior("Run session could not start and stop through the host")
         }
-        guard lsp.configuration.languageID == "go", lsp.configuration.executableNames == ["gopls"] else {
+        guard lsp.configuration.languageID == "go",
+              lsp.configuration.executableNames == ["gopls"] else {
             throw VerificationError.behavior("LSP configuration changed across the native Bundle boundary")
+        }
+        if !legacy {
+            guard let initProvider = lsp as? any LanguageServerInitializationOptionsProviding,
+                  initProvider.initializationOptions == .object(["ui.semanticTokens": .bool(true)]) else {
+                throw VerificationError.behavior("Go LSP initializationOptions did not enable ui.semanticTokens")
+            }
+            guard let syntax = lsp as? any LanguageSyntaxExtensionProviding,
+                  syntax.syntaxProfile.languageID == "go",
+                  syntax.syntaxProfile.builtinTypes.contains("string"),
+                  syntax.syntaxProfile.supportsBacktickMultilineStrings else {
+                throw VerificationError.behavior("Go syntax profile capability is unavailable")
+            }
+            guard let testing = try await runtime.activateCapability(.languageTestingExtension("go"))
+                as? any LanguageTestExtensionProviding else {
+                throw VerificationError.behavior("Go testing capability is unavailable")
+            }
+            let testPlan = try testing.testPlan(for: LanguageTestExtensionRequest(
+                scope: .workspace,
+                relativeProjectFilePaths: ["go.mod", "main_test.go"]
+            ))
+            guard testPlan.frameworkID == "go",
+                  testPlan.launchPlan.executable == .toolchain("project-go"),
+                  testPlan.launchPlan.arguments == ["test", "./..."] else {
+                throw VerificationError.behavior("Go test plan changed across the native Bundle boundary")
+            }
         }
         let lspState = VerificationLSPState()
         lsp.lifecycle.attach(isRunning: { lspState.isRunning }, stop: {

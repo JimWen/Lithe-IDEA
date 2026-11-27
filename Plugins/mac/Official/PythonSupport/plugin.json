@@ -83,7 +83,13 @@
       "languageServerModuleID": "dev.lithe.language.python.language-server",
       "executionModuleID": "dev.lithe.language.python.execution",
       "testingModuleID": "dev.lithe.language.python.execution",
-      "debugModuleID": "dev.lithe.language.python.execution"
+      "debugModuleID": "dev.lithe.language.python.execution",
+      "syntaxProfilePath": "Resources/syntax.json"
     }
-  ]
+  ],
+  "metadata": {
+    "summary": "Official Python plugin providing basedpyright/pyright LSP, debugpy debugging, running, pytest, and syntax profile.",
+    "iconSystemName": "chevron.left.forwardslash.chevron.right",
+    "category": "official-language"
+  }
 }

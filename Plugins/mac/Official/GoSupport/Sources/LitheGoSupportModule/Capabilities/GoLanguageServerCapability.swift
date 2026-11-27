@@ -4,6 +4,7 @@ import LitheCoreContracts
 @MainActor
 public final class GoLanguageServerCapability: NSObject,
     LanguageServerExtensionProviding,
+    LanguageServerInitializationOptionsProviding,
     LanguageSyntaxExtensionProviding {
     public let configuration = LanguageServerExtensionConfiguration(
         languageID: goLanguageID,
@@ -12,6 +13,9 @@ public final class GoLanguageServerCapability: NSObject,
         validationArguments: ["version"],
         languageIdentifier: "go"
     )
+    public let initializationOptions: ToolingJSONValue? = .object([
+        "ui.semanticTokens": .bool(true)
+    ])
     public let syntaxProfile = LanguageSyntaxProfile.go
     public let lifecycle: any LanguageServerExtensionLifecycle
 

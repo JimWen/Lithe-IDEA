@@ -1,0 +1,46 @@
+{
+  "languageID": "rust",
+  "displayName": "Rust",
+  "fileExtensions": ["rs"],
+  "fileNames": [],
+  "supportsSlashComments": true,
+  "supportsBlockComments": true,
+  "supportsNestedBlockComments": true,
+  "supportsHashComments": false,
+  "supportsDashComments": false,
+  "supportsBacktickMultilineStrings": false,
+  "backtickAllowsEscape": false,
+  "supportsTripleQuotedStrings": false,
+  "supportsRustSyntax": true,
+  "supportsAtAnnotations": false,
+  "singleQuoteAllowsEscape": true,
+  "lineCommentPrefix": "//",
+  "blockCommentStart": "/*",
+  "blockCommentEnd": "*/",
+  "directivePrefixes": [],
+  "keywords": [
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn",
+    "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
+    "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
+    "self", "Self", "static", "struct", "super", "trait", "true", "type",
+    "unsafe", "use", "where", "while"
+  ],
+  "booleanLiterals": ["true", "false"],
+  "nullLiterals": [],
+  "builtinTypes": [
+    "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize",
+    "str", "u8", "u16", "u32", "u64", "u128", "usize",
+    "String", "Vec", "Option", "Result", "Box", "Arc", "Rc", "Cow",
+    "HashMap", "HashSet", "BTreeMap", "BTreeSet", "Path", "PathBuf"
+  ],
+  "builtinFunctions": ["drop"],
+  "functionDeclarationKeywords": ["fn"],
+  "typeDeclarationKeywords": ["struct", "enum", "trait", "type", "union"],
+  "completionKeywords": [
+    "Self", "abstract", "as", "async", "await", "become", "box", "break", "const", "continue",
+    "crate", "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen",
+    "if", "impl", "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override",
+    "priv", "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true",
+    "try", "type", "typeof", "union", "unsafe", "unsized", "use", "virtual", "where", "while", "yield"
+  ]
+}

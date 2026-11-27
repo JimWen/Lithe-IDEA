@@ -36,6 +36,7 @@ extension AppModel {
     }
 
     private func hasDetectedLanguage(id: String, manifestNames: Set<String>) -> Bool {
+        guard isLanguageSupportEnabled(languageID: id) else { return false }
         if projectFiles.contains(where: { manifestNames.contains($0.lastPathComponent.lowercased()) }) {
             return true
         }
@@ -143,19 +144,20 @@ extension AppModel {
         }
 
         var targets: [DetectedLanguagePromptTarget] = []
-        if !goManifestURLs.isEmpty {
+        if isLanguageSupportEnabled(languageID: "go"), !goManifestURLs.isEmpty {
             targets.append(.init(
                 id: "go", command: "go", displayName: "Go",
                 action: .configureGoRuntime, hasManifest: true
             ))
         }
-        if !cargoManifestURLs.isEmpty {
+        if isLanguageSupportEnabled(languageID: "rust"), !cargoManifestURLs.isEmpty {
             targets.append(.init(
                 id: "rust", command: "cargo", displayName: "Rust",
                 action: .configureRustRuntime, hasManifest: true
             ))
         }
-        if !pythonManifestURLs.isEmpty || hasDetectedPythonProject {
+        if isLanguageSupportEnabled(languageID: "python"),
+           (!pythonManifestURLs.isEmpty || hasDetectedPythonProject) {
             targets.append(.init(
                 id: "python", command: "python3", displayName: "Python",
                 action: .configurePythonRuntime, hasManifest: !pythonManifestURLs.isEmpty
