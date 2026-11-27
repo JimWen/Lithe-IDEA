@@ -41,7 +41,7 @@
   </p>
 </div>
 
-> **分支定位与状态 · 2026-11-26（`dev/aiide`，验证基线 `36e45432`）：** 本分支专注构建 **macOS 专用轻量高性能 IDE**，本质面向 **AI Agent 友好**（后续规划参考 **OpenIDEA** 与 **IDEA CCGUI** 接入 **基于 ACP 的 Agent 能力**）。第一梯队优先支持 **Go / Rust / Python**（项目框架工具、语法高亮、智能推荐、跳转导航、重构与调试对标 **GoLand / RustRover / PyCharm**），后续规划扩展 **TypeScript / JavaScript / HTML / CSS** 等 Web 栈。永久排除 Windows、Java 生态与框架增量、Linux.do 集成，Monaco 迁移继续暂缓。
+> **分支定位与状态 · 2026-11-27（`dev/aiide` / `feat/t3code-ai-agent`）：** 本分支专注构建 **macOS 专用轻量高性能 IDE（默认轻量智能 · LSP 按需升级）** 并内置 **面向 AI Agent 协作的右侧原生 Agent 工作台（对标 T3 Code，默认接入 Antigravity CLI ACP 双向协议，同时支持 Codex / Claude / Direct API）**。第一梯队优先支持 **Go / Rust / Python**（官方签名原生包、项目环境与外部库、单趟高亮与语义着色、现代补全/重构、三语言应用与单测断点调试对标 **GoLand / RustRover / PyCharm**），后续规划扩展 **TypeScript / JavaScript / HTML / CSS** 等 Web 栈。永久排除 Windows、Java 生态与框架增量、Linux.do 集成，Monaco 迁移继续暂缓。
 
 ## 为什么做 Lithe
 
@@ -53,7 +53,7 @@ Lithe 是一款 **macOS 专用**的原生轻量高性能 IDE，坚持 SwiftUI / 
 
 - **第一梯队语言（当前主力）：** **Go、Rust、Python**——持续向 **GoLand / RustRover / PyCharm** 对齐日常开发与语义能力。
 - **第二梯队语言（后续规划）：** **TypeScript / JavaScript / HTML / CSS 等 Web 栈**——在现有 Node 执行/调试底座与 HTML/SVG 预览基础上逐步扩展。
-- **AI Agent 友好定位（规划演进）：** 当前已内置 AI Commit 与本机 AI 配置导入；后续计划参考 **OpenIDEA** 与 **IDEA CCGUI** 接入 **基于 ACP（Agent Client Protocol）的 Agent 能力**，复用原生跨文件编辑事务、共享 Undo、Diff 审查、LSP 与调试反馈（规划方向，尚未实施）。
+- **AI Agent 协作工作台（已交付）：** 内置按需模块 `LitheAIAgentModule`（`⌘⇧L` 右侧可拖拽工作窗），对标 **T3 Code** 并默认接入 **Antigravity CLI（`agy acp` 双向 JSON-RPC 2.0 实时权限审批）**，同时支持 Codex CLI、Claude Code CLI 与 Direct HTTP Streaming（含多模态图片附件）；支持 Plan 模式提案转实施、独立 Git Worktree 隔离、通用 Git Tree + 脏缓冲检查点回滚、内联 Diff 审查/单文件 Discard/AI Commit & Push 及编辑器右键一键提问，同时保留既有 AI Commit 与本机 AI 配置导入。详见[AI Agent 架构与验收记录](./docs/architecture/ai-agent-t3code-done.md)。
 - **精简边界与上游同步：** 默认包不包含 JDK/JDTLS、Java Debug/Test；Maven、Spring、Windows 和 Linux.do 集成已永久移除，Monaco 编辑器迁移继续暂缓。已按版本顺序合入上游至 **v0.5.0**（保留原始提交历史）并挑选截至 **v0.6.5** 的通用输出、Git 与终端修复，详见[集成与验收记录](./docs/architecture/ai-ide-phase-one.md)。
 
 打开普通项目后，Lithe 应用本身的基础内存占用通常约为 **300～400 MB**。语言服务器、终端、构建工具、调试器和数据库组件均按需启停；实际占用随项目规模与启用服务变化。
@@ -113,10 +113,10 @@ Lithe 是一款 **macOS 专用**的原生轻量高性能 IDE，坚持 SwiftUI / 
 - [x] **2026-11-25 · B6a2 首个文本切片安装验收：** Go 重命名、格式化、代码动作、补全核实写盘与单次撤销；Rust 完成真实 `codeAction/resolve` 往返。[验收记录](./docs/architecture/goland-parity-b6-refactor.md#b6-text-edit-acceptance-2026-11-25)
 - [x] **2026-11-26 · P0 阻断项与高频正确性闭环（8 批提交 `aee8a009`..`36e45432`）：** 修复 `⌥F12`/`⌘⇧O` 焦点泄漏、打通 Go/Rust/Python 断点调试链路（Rust `cargo + lldb-dap` 本机冒烟通过）、补齐三语言符号索引与 Trigram/替换 Apply、消除双 `gopls` 竞态与恢复标签重命名误拒、改写单趟词法高亮、补齐 Git 后端搜索/本地时区/`parse_diff`/`pop_stash`，并加固 `lithe-db-sidecar`。
 - [x] **2026-11-26 · P1 语言快捷键、B6a2 协议与平台加固：** 注册 `⇧F6`/`⌥⌘L`/`⌥↩`/`⌃Space`/`F1`；补齐 `codeAction.dataSupport`、真实选区 Code Actions 与 `prepareRename`（真实 `gopls` 冒烟通过）；加固进程 FD、密钥 `0o600` 原子写、Local History O(N²) 与 LSP 子进程回收。[B6](./docs/architecture/goland-parity-b6-refactor.md)
-- [ ] **P1-A · L4a LSP 编辑器直通交互：** 接通 `inlayHint`（类型/参数内联提示）、`signatureHelp`（函数参数提示）、`documentHighlight`（符号出现点高亮）、`documentSymbol`（Structure 面板与面包屑）与 `semanticTokens`（语义着色）。[L4a](./docs/architecture/syntax-and-completion.md#l4a-split)
-- [ ] **P1-B · L0–L3 / L6 离线语法与现代补全引擎：** Tree-sitter 增量文档状态、Go/Rust/Python 高精度离线高亮与折叠结构、自动触发/过滤/排序/Snippet/文档预览补全 Popup，以及保存即格式化 `formatOnSave`。[L0–L2](./docs/architecture/syntax-l0-l2-engine.md)
-- [ ] **P1-C · B6 剩余语义重构与 B7b 运行 gutter 深化：** 内联 Rename UI（B6c）、文件/目录资源事务（B6b1）、Extract/Inline/Change Signature/Safe Delete（B6d）、按需反向 `workspace/applyEdit`；测试/基准测试行级 gutter 与 Go `dlv` / Python `debugpy` 真机断点复验。[B6](./docs/architecture/goland-parity-b6-refactor.md)
-- [ ] **P1-D · AI Agent 能力（基于 ACP，参考 OpenIDEA & IDEA CCGUI）：** 规划并接入 ACP（Agent Client Protocol）客户端会话、权限确认与工具面板，复用原生编辑事务/共享 Undo、Git Diff 审查、LSP 诊断与终端/调试反馈，保持低内存按需激活。
+- [x] **P1-A · L4a LSP 编辑器直通交互：** 已交付并验证 `inlayHint`、`signatureHelp`、`documentHighlight`、`documentSymbol`（`⌘7` Structure 与面包屑 + Rust Core 离线回落）与 `semanticTokens`。[总览](./docs/architecture/goland-parity-implementation.md#feature-progress-2026-11-26)
+- [x] **P1-B · 默认轻量智能 + 现代非阻塞补全与保存格式化：** 已交付默认 Lightweight Mode（Rust Core 进程内符号/Trigram/折叠/Hover/签名 18.36 MB RSS、0 子进程，一键升级 Precision LSP）、非阻塞 AppKit 悬浮 `CompletionPopupController`（`completionItem/resolve` 预览 + Snippet 展开）与共享保存流有界 `formatOnSave`；多 Worker 离线 Tree-sitter 运行时（L1/L2/L7）列入暂缓。
+- [x] **P1-C · 内联 Rename、Refactor This 与三语言运行/调试 Gutter：** 已交付非模态 `InlineRenamePanelController`（B6c）、`Refactor This`（`⌃T`）、Go/Rust/Python 行级运行/单测/基准测试 Gutter 与 6/6 真机应用+单测断点调试（`dlv` / `lldb-dap` / `debugpy + pytest`）；B6b1/B6a1b/AST Change Signature 列入暂缓。[B6](./docs/architecture/goland-parity-b6-refactor.md)
+- [x] **P1-D · AI Agent 工作台（对标 T3 Code + Antigravity ACP）：** 已交付按需模块 `LitheAIAgentModule` 与可拖拽右侧工作窗（`⌘⇧L`），默认支持 **Antigravity CLI ACP（`agy acp` 实时交互审批）** 及 Codex / Claude / Direct API、图片附件、Plan 模式提案执行、独立 Worktree、通用 Git Tree + 脏缓冲检查点回滚、Diff Discard / AI Commit & Push 与编辑器右键联动。[AI Agent 验收记录](./docs/architecture/ai-agent-t3code-done.md)
 - [ ] **P2-A · Web 语言栈扩展（TypeScript / JavaScript / HTML / CSS 等）：** 在 Go/Rust/Python 核心体验闭环后，通过模块化语言插件接入 TS/JS/HTML/CSS LSP、语法高亮、框架/包管理识别、格式化与前端调试。
 - [ ] **P2-B · 工作台体验补齐与暂缓项评估：** Search Everywhere 最近文件与 `⌘E`（B3c/B3d）、B4/B5 设置与主题资源插件、TODO 工具窗、G1 Git 图最终对照；B2（Project/Commit/PR）、E1 与 `.http` 继续暂缓。
 

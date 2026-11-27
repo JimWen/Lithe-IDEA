@@ -4,7 +4,7 @@
 > - **macOS 专用轻量高性能 IDE（默认轻量智能 · LSP 按需升级）**：坚持原生 SwiftUI/AppKit + `NSTextView` 编辑器 + Rust Core。默认以 **Lightweight Mode（零 LSP 冷启动、零工具探测子进程、进程内 Rust 符号/Trigram 索引约 18.36 MB RSS、毫秒级响应）** 覆盖约 80% 日常编码需求；需要跨文件安全重构、格式化、Code Actions、Go to Implementation 或实时类型诊断时，可一键按窗口或全局升级至 **Precision LSP（`gopls` / `rust-analyzer` / `basedpyright`）**，切回轻量即刻停止 LSP 进程释放内存。
 > - **第一梯队语言（优先深度对齐）**：**Go、Rust、Python**——官方签名原生包（`GoSupport` / `RustSupport` / `PythonSupport`）完整覆盖轻量智能、按需精确 LSP、Gutter 运行/测试与三语言断点调试。
 > - **第二梯队语言（后续规划）**：**Web 栈（TypeScript / JavaScript / HTML / CSS 等）**——在现有 Node 执行/调试底座、单趟高亮与 HTML/SVG 预览之上逐步扩展。
-> - **AI Agent 友好核心定位**：面向 AI Agent 协作设计，后续规划参考 **OpenIDEA** 与 **IDEA CCGUI** 接入 **基于 ACP（Agent Client Protocol）的 Agent 能力**，与原生编辑事务、Diff 审查、轻量/按需 LSP 验证和运行调试形成闭环（当前为规划方向，尚未实施）。
+> - **AI Agent 友好核心定位（已落地）**：面向 AI Agent 协作设计，已参考 **T3 Code (`pingdotgg/t3code`)** 并在原生侧边栏落地独立按需模块 `LitheAIAgentModule`（`dev.lithe.ai-agent`），默认接入 **Antigravity CLI（`agy acp`，ACP v1 JSON-RPC 2.0 双向协议）**，同时支持 Codex CLI、Claude Code CLI 与 Direct HTTP Streaming，与原生编辑事务、通用 Git Tree 检查点回滚、Diff 审查、独立 Worktree、Plan 模式及运行/调试形成闭环（详见 [ai-agent-t3code-done.md](ai-agent-t3code-done.md)）。
 > - **显式排除与边界**：永久排除 Windows 产品与构建、Java 生态与框架增量（Maven/Spring/MyBatis/JDT/JDTLS/内置 JDK）、Linux.do 集成；Monaco 编辑器迁移继续暂缓。
 
 历史演变说明：早期以 `c09f2cc4` 为基线推进 B1–B7、L0–L8 与 G1；B1、B3a/B3b 文本事务、B4a0–B4a6 Terminal、B7a（Cargo / Go Tools）与 B6a1a/B6a2 文本与协议切片已先后落地；2026-11-26 完成全仓审查与 8 批 P0/P1 修复（`aee8a009`..`36e45432`）并替换验收 `/Applications/Lithe.app`。总体方案复核见[审查记录](#plan-review)，2026-09-21 跨批次源码复核见[体验对齐复核](#experience-parity-review-2026-09-21)。
@@ -21,15 +21,15 @@ Lithe 采用「**原生 macOS 界面与平台适配层 + Swift 6 模块化内核
 flowchart TB
     subgraph UI["macOS 原生工作台层 (SwiftUI / AppKit)"]
         Editor["NSTextView 原生编辑器\n单趟高亮 · 装订线 · 折叠 · Undo"]
-        Panels["工具窗口\nProject · Search · Git/Diff · Run/Debug\nTerminal(SwiftTerm) · Go/Cargo · Database"]
+        Panels["工具窗口\nProject · Search · Git/Diff · Run/Debug\nTerminal(SwiftTerm) · AI Agent · Go/Cargo · Database"]
         Cmd["统一命令与焦点交接\nLitheCommandCatalog · MacFocusHandoffCoordinator"]
     end
 
     subgraph App["应用编排与模块化内核 (LitheApplicationKernel)"]
         AppModel["AppModel + Application FeatureModels + Services\nWorkspaceTextEditCoordinator (租约 / 新鲜度 / 共享 Undo / 磁盘补偿)"]
-        Modules["按需模块 (Swift 6 Targets)\nWorkspace · LanguageIntelligence · Execution · Debug\nGit · Search · LocalHistory · Terminal · Database · AIAssistance"]
+        Modules["按需模块 (Swift 6 Targets)\nWorkspace · LanguageIntelligence · Execution · Debug\nGit · Search · LocalHistory · Terminal · Database · AIAssistance · AIAgent"]
         Plugins["语言插件扩展\nOfficial Native Bundles: GoSupport · RustSupport · PythonSupport\nDeclarative Syntax Profiles: LanguageSyntaxProfileRegistry\nBundled: Node / C / C++ / Ruby 等 (按需启用)"]
-        FutureACP["[规划中] AI Agent 模块 (基于 ACP)\n参考 OpenIDEA / IDEA CCGUI\n复用编辑事务 · Diff 审查 · 运行/调试闭环"]
+        AIAgent["内置 AI Agent 模块 (LitheAIAgentModule)\nAntigravity ACP · Codex · Claude · Direct API\n通用 Git 检查点 · 独立 Worktree · Diff 审查闭环"]
     end
 
     subgraph Platform["macOS 平台适配层 (Platform/MacOS)"]
@@ -44,7 +44,7 @@ flowchart TB
     UI --> AppModel
     AppModel --> Modules
     Modules --> Plugins
-    FutureACP -.->|"规划接入"| AppModel
+    AIAgent --> AppModel
     AppModel --> Adapters
     Adapters -->|"JSON C ABI (-force_load)"| Core
     Adapters -->|"JSON-RPC / stdio / TCP"| Helpers
@@ -54,11 +54,11 @@ flowchart TB
 | --- | --- | --- |
 | **原生展示层** | `macos/Sources/Lithe/Views/` | SwiftUI 工作台与 AppKit 原生组件（`NSTextView`、`SwiftTerm`、`LitheSplitPaneView`）；禁止直接调用 Rust C ABI 或构造底层进程/文件适配器 |
 | **应用与服务编排层** | `macos/Sources/Lithe/{Models,Application,Services}/` | `AppModel` 聚合、`EditorChromeModel` 高频隔离状态、`WorkspaceTextEditCoordinator` 跨文件文本事务、`DebugLaunch*Resolver`、`RustDebugBuildService`；禁止引入 AppKit/SwiftUI |
-| **模块化内核与功能模块** | `LitheModuleAPI`、`LitheApplicationKernel`、`LitheCoreContracts`、`Lithe*Module`（10 个独立 Swift 6 模块） | 按需激活/休眠/关闭、在途激活去重防双进程、资源租约与 `ModuleRuntime` 生命周期管理；完全平台无关 |
+| **模块化内核与功能模块** | `LitheModuleAPI`、`LitheApplicationKernel`、`LitheCoreContracts`、`Lithe*Module`（11 个独立 Swift 6 模块） | 按需激活/休眠/关闭、在途激活去重防双进程、资源租约与 `ModuleRuntime` 生命周期管理；完全平台无关 |
 | **语言插件层** | `Plugins/mac/Official/{GoSupport,RustSupport,PythonSupport}`、`LanguageSyntaxProfileRegistry`、`BundledLanguagePluginCatalog` | Go/Rust/Python 各自以独立签名 `.bundle` 导出 LSP、Run、Test、Debug（`.languageDebugExtension`）与声明式词法/高亮/离线关键字配置（`LanguageSyntaxExtensionProviding`）；其余轻量/仅高亮语言通过 `LanguageSyntaxProfileRegistry` 零进程常驻；冻结 v1 兼容契约 |
 | **macOS 平台适配层** | `macos/Sources/Lithe/Platform/MacOS/` | 组合根 `MacServiceContainer`、进程组与 `ManagedProcessRegistry` 生命周期回收、工具链/Python `.venv`/Swiftly `lldb-dap` 发现、焦点交接与密钥存储 |
 | **Rust 确定性核心与 Helper** | `rust/lithe-core`、`rust/lithe-git-host`、`rust/lithe-db-sidecar`、`rust/lithe-db-mcp` | 承载确定性搜索索引/符号提取/替换、Git 流式历史与分支图、LSP 协议状态机与进程管理、多数据库运行时与 MCP 能力 |
-| **未来 AI Agent 扩展位（规划中）** | `LitheAIAssistanceModule` / 独立 ACP Agent 模块（待设计） | 计划参考 OpenIDEA 与 IDEA CCGUI 接入 ACP（Agent Client Protocol），通过原生事务与 Diff/LSP/Debug 通道实现可控、可回滚、可验证的 Agent 协作 |
+| **内置 AI Agent 模块（已交付）** | `LitheAIAgentModule`（`dev.lithe.ai-agent`）与 `Platform/MacOS/AI/`、`Views/AIAgent/` | 对标 T3 Code，接入 Antigravity CLI ACP（双向 JSON-RPC 2.0 权限审批）、Codex CLI、Claude Code CLI 与 Direct HTTP Streaming，通过通用 Git 检查点 + 脏缓冲保护、原生编辑事务、Diff 审查与独立 Worktree 闭环协作；详见 [ai-agent-t3code-done.md](ai-agent-t3code-done.md) |
 
 ---
 
@@ -81,6 +81,7 @@ flowchart TB
 | **终端与焦点交接** | GoLand / Zed 终端与键盘流 | 原生 SwiftTerm 终端（shell/参数/env/cwd/字体/滚动/venv 自动检测、退出关闭标签 `#1456`、Control 键归还终端 `#1360`）；`MacFocusHandoffCoordinator` 同步释放编辑器焦点并缓冲 250ms 按键，修复 `⌥F12`/`⌘⇧O` 按键泄漏写入源码 | `3724ea20`、`766b8619`、`c16c1201`、`553fa143`；[B4a](goland-parity-b4a-terminal-done.md) |
 | **Git 审查与本地历史** | GoLand Git Log / Diff / Local History | Git 后端流式历史过滤（最多 50,000 提交，支持文本/作者/日期/路径）、本地时区显示、分支图、双栏 Diff、Blame、Stash/Shelf/Worktree、隐藏仓库过滤、`--continue` 非交互保护；Local History 文件与项目快照（节流清理防 O(N²)） | `e14399e1`、`96285483`、`553fa143` |
 | **数据库与 AI 辅助** | DataGrip 基础 SQL 工作台 + AI Commit | 多数据库工作台（SQLite/Postgres/MySQL/SQL Server/MongoDB/Redis/Nacos）、`lithe-db-sidecar`（SQLite 动态类型解码、安全 SQL 导出/危险语句检测、SSH 隧道自动回收与防注入、SQL Server 事务回滚）与 `lithe-db-mcp`；AI Commit Message 生成与本机 AI 配置导入 | `6b729800`、`3ad474c3`；打包版 `lithe-db-sidecar` 冒烟通过 |
+| **AI Agent 侧边栏工作台（ACP + T3 Code）** | T3 Code 多模型 Agent + Antigravity ACP | 右侧可拖拽工作窗（`⌘⇧L`，`LitheSplitPaneView` + `SplitHandleView`）、多会话管理/Fork/Markdown 导出、默认 **Antigravity CLI（`agy acp` 双向 JSON-RPC 2.0 + 实时单工具权限审批 + 16 MiB 传输止损）** + Codex CLI + Claude Code CLI + Direct HTTP（多模态图片附件）、Plan 模式提案直转执行（可选新建 Worktree）、通用 Git Tree 检查点回滚（保留 `.gitattributes`/符号链接/权限/忽略文件与回合前未保存脏缓冲）、内联 Diff 审查（单文件 Discard / AI Commit 生成 / Commit & Push）、编辑器右键 `Ask/Explain/Review & Fix with AI Agent` | `feat/t3code-ai-agent` 验证：Rust **572/572**、聚焦 Swift **116/116**（4.413s）、全量 Swift 205 suites（1,720/1,721 + 复跑 5/5）、官方插件 3/3、真实 `agy acp` 与 `codex exec` 冒烟通过，**5 轮 Codex CLI 独立审查 34 项问题全部闭环**；详见 [ai-agent-t3code-done.md](ai-agent-t3code-done.md) |
 
 ### 后续 TODO 路线图（按优先级分层）
 
@@ -89,7 +90,7 @@ flowchart TB
 | **P1-A** | **L4a · LSP 编辑器直通交互** | **已完成并验证**：`inlayHint`（含滚屏增量刷新）、`signatureHelp`、`documentHighlight`、`documentSymbol`（`⌘7` Structure + Breadcrumbs + Rust Core 离线回落）、`semanticTokens`（含滚屏重叠加） | 真实 `gopls` / `rust-analyzer` / `basedpyright` 协议冒烟通过；见 [rust-core-api.md](../../shared/contracts/rust-core-api.md) |
 | **P1-B** | **现代非阻塞补全引擎与保存格式化** | **高收益主体已完成并验证**：非阻塞 AppKit 悬浮 `CompletionPopupController`、前缀/子序列/`preselect`/`sortText` 排序、`completionItem/resolve` 懒加载预览与代次隔离、Provider 容错回落与重载保留、Snippet 展开、共享保存流有界 `formatOnSave`；高复杂度离线多 Worker Tree-sitter 运行时（L1/L2）与外部语法 Worker（L7）移入下方「暂缓」 | 满足 Go/Rust/Python 接近 JetBrains 的日常编辑体验，且保持单趟词法 + LSP 语义层的低内存优势 |
 | **P1-C** | **内联 Rename、Refactor This 与三语言运行/调试 Gutter** | **高收益主体已完成并验证**：非模态 `InlineRenamePanelController`（B6c）、`Refactor This`（`⌃T`）、Go/Rust/Python 行级运行/单测/基准测试 Gutter（含 Rust 全限定模块路径）及三语言单测断点调试路由（Go `dlv` / Rust `cargo test --no-run` + `lldb-dap` / Python `debugpy + pytest` 全部 6 路真机断点通过）；复杂文件/目录资源事务（B6b1）、反向 `workspace/applyEdit`（B6a1b）与自研 AST Change Signature 移入「暂缓」 | 复用 `WorkspaceTextEditCoordinator` 与 B6a2 协议；见 [goland-parity-b6-refactor.md](goland-parity-b6-refactor.md) |
-| **P1-D** | **AI Agent 能力（基于 ACP，参考 OpenIDEA & IDEA CCGUI）** | 设计并接入 **ACP（Agent Client Protocol）** 客户端会话、权限审批与工具调用面板；复用 Lithe 原生跨文件编辑事务（租约/新鲜度/共享 Undo）、Git Diff 审查、LSP 诊断/跳转、终端与 Run/Debug 反馈，打造「低内存原生 IDE + ACP Agent」协作闭环 | 需先完成 ACP 架构与安全/事务边界细案，按独立按需模块落地，不拖累空载内存 |
+| **P1-D** | **AI Agent 能力（对标 T3 Code + Antigravity ACP）** | **已完成并验证**：独立按需模块 `LitheAIAgentModule`（`dev.lithe.ai-agent`）+ 可拖拽右侧工作窗（`⌘⇧L`），默认接入 **Antigravity CLI ACP（`agy acp` JSON-RPC 2.0 双向实时审批）** 及 Codex / Claude / Direct API 多后端、多模态图片附件、Plan 模式提案执行、通用 Git Tree + 脏缓冲检查点回滚、独立 Worktree 隔离、内联 Diff Discard / AI Commit / Commit & Push 与编辑器右键联动 | 真实 `agy acp` / `codex exec` 冒烟与 5 轮 Codex CLI 审查闭环；见 [ai-agent-t3code-done.md](ai-agent-t3code-done.md) |
 | **P2-A** | **Web 语言栈（TypeScript / JavaScript / HTML / CSS 等）** | 扩展 `BundledLanguagePluginCatalog` 与 LSP/调试/项目识别：`typescript-language-server`/`vtsls`、HTML/CSS/Tailwind、ESLint/Prettier 格式化、`package.json`/Vite/Next 运行与前端调试、语法高亮与框架补全 | 排在 Go/Rust/Python 核心体验闭环之后推进，复用 L0–L8 语法与插件体系 |
 | **P2-B** | **工作台与可配置性补齐** | Search Everywhere 空查询最近文件与 `⌘E`（B3c/B3d）、B4 其余 Editor/Keymap 导入设置、B5 主题与声明式资源插件包、TODO 工具窗、G1 Git 图最终对照 | 各批次相互独立，按需推进 |
 
