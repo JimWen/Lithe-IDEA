@@ -897,4 +897,119 @@ struct SyntaxHighlightingIncrementalPerformanceTests {
             overrides: nil
         )
     }
+
+    @Test
+    func genericViewportHighlightStopsAtRequiredEndWithoutScanningToEOF() {
+        let source = String(repeating: "var value string = \"hello\"\n", count: 20_000)
+        let storage = NSTextStorage(string: source)
+        let palette = performanceTestPalette
+        let firstViewportRange = NSRange(location: 0, length: min(storage.length, 600))
+
+        storage.beginEditing()
+        let scannedLineCount = GenericSyntaxHighlightingAdapter.apply(
+            to: storage,
+            palette: palette,
+            range: firstViewportRange,
+            fileExtension: "go",
+            fileName: "large.go"
+        )
+        storage.endEditing()
+
+        #expect(scannedLineCount < 40)
+    }
+
+    @Test
+    func goRustAndPythonLexicalHighlightingDistinguishesTypesFunctionsDirectivesAndLiterals() throws {
+        let palette = SyntaxHighlightingColorConfiguration.bundled.palette(
+            formatID: nil,
+            base: CodeEditorPalette(isDark: true, theme: .lithe)
+        )
+        #expect(palette.type != palette.text)
+
+        let goSource = #"""
+        //go:embed assets/*
+        package main
+
+        type Server struct {
+            Name string `json:"name"`
+            Port int
+        }
+
+        func (s *Server) Handle(ctx string, err error) bool {
+            buf := make([]byte, 0, 16)
+            _ = fmt.Println(s.name, 0x1.fp3, .5, true, nil, buf)
+            return false
+        }
+        """#
+        let goStorage = NSTextStorage(string: goSource)
+        SyntaxHighlighter.apply(
+            to: goStorage,
+            font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            fileName: "server.go",
+            fileExtension: "go",
+            isDark: true
+        )
+        let goNS = goSource as NSString
+        func goColor(_ token: String) throws -> NSColor {
+            let range = goNS.range(of: token)
+            return try #require(goStorage.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor)
+        }
+        #expect(try goColor("//go:embed") == palette.annotation)
+        #expect(try goColor("string") == palette.type)
+        #expect(try goColor("int") == palette.type)
+        #expect(try goColor("error") == palette.type)
+        #expect(try goColor("bool") == palette.type)
+        #expect(try goColor("`json:\"name\"`") == palette.string)
+        #expect(try goColor("Handle") == palette.functionDeclaration)
+        #expect(try goColor("make") == palette.functionCall)
+        #expect(try goColor("Println") == palette.functionCall)
+        #expect(try goColor("0x1.fp3") == palette.number)
+        #expect(try goColor(".5") == palette.number)
+        #expect(try goColor("true") == palette.boolean)
+        #expect(try goColor("nil") == palette.null)
+        let dotNameRange = goNS.range(of: "s.name")
+        let fieldColor = try #require(goStorage.attribute(.foregroundColor, at: dotNameRange.location + 2, effectiveRange: nil) as? NSColor)
+        #expect(fieldColor == palette.field)
+
+        let rustSource = #"""
+        /// Greets user
+        #[derive(Debug)]
+        fn greet<'a>(name: &'a str) -> String {
+            println!("{}", r#"raw"#);
+            name.to_string()
+        }
+        """#
+        let rustStorage = NSTextStorage(string: rustSource)
+        SyntaxHighlighter.apply(
+            to: rustStorage,
+            font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            fileName: "lib.rs",
+            fileExtension: "rs",
+            isDark: true
+        )
+        let rustNS = rustSource as NSString
+        #expect(try #require(rustStorage.attribute(.foregroundColor, at: rustNS.range(of: "/// Greets").location, effectiveRange: nil) as? NSColor) == palette.documentationComment)
+        #expect(try #require(rustStorage.attribute(.foregroundColor, at: rustNS.range(of: "#[derive(Debug)]").location, effectiveRange: nil) as? NSColor) == palette.annotation)
+        #expect(try #require(rustStorage.attribute(.foregroundColor, at: rustNS.range(of: "greet").location, effectiveRange: nil) as? NSColor) == palette.functionDeclaration)
+        #expect(try #require(rustStorage.attribute(.foregroundColor, at: rustNS.range(of: "println!").location, effectiveRange: nil) as? NSColor) == palette.annotation)
+        #expect(try #require(rustStorage.attribute(.foregroundColor, at: rustNS.range(of: "String").location, effectiveRange: nil) as? NSColor) == palette.type)
+
+        // DiffSyntaxHighlighter handles Go backtick struct tags and Python `#` comments cleanly.
+        let diffGo = DiffSyntaxHighlighter.styled(
+            #"Name string `json:"name"` // tag"#,
+            comparing: nil,
+            fileExtension: "go",
+            side: .right,
+            highlightsWords: false
+        )
+        #expect(String(diffGo.characters) == #"Name string `json:"name"` // tag"#)
+        let diffPy = DiffSyntaxHighlighter.styled(
+            "def run(items: list) -> int: # count",
+            comparing: nil,
+            fileExtension: "py",
+            side: .right,
+            highlightsWords: false
+        )
+        #expect(String(diffPy.characters) == "def run(items: list) -> int: # count")
+    }
 }

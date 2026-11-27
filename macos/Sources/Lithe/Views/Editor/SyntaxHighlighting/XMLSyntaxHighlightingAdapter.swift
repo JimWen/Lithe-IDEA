@@ -532,6 +532,7 @@ enum XMLSyntaxHighlightingAdapter {
             return lineEnd >= sourceLength || state == .normal
         }
         guard lineRange.location >= requiredEnd else { return false }
+        guard let cachedExitState else { return true }
         return lineEnd >= sourceLength || cachedExitState == state
     }
 

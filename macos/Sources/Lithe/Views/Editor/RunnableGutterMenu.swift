@@ -3,13 +3,29 @@ import LitheCoreContracts
 
 /// Deterministic line-level runnable discovery for Go, Rust, and Python source files.
 enum DocumentRunnableDiscovery {
-    static func discover(in text: String, url: URL) -> [DocumentRunnable] {
+    static func languageID(for url: URL) -> String? {
+        switch url.pathExtension.lowercased() {
+        case "go": "go"
+        case "rs": "rust"
+        case "py": "python"
+        default: nil
+        }
+    }
+
+    static func discover(
+        in text: String,
+        url: URL,
+        isLanguageEnabled: (String) -> Bool = { _ in true }
+    ) -> [DocumentRunnable] {
         switch url.pathExtension.lowercased() {
         case "go":
+            guard isLanguageEnabled("go") else { return [] }
             return discoverGoRunnables(in: text, url: url)
         case "rs":
+            guard isLanguageEnabled("rust") else { return [] }
             return discoverRustRunnables(in: text, url: url)
         case "py":
+            guard isLanguageEnabled("python") else { return [] }
             return discoverPythonRunnables(in: text, url: url)
         default:
             return []

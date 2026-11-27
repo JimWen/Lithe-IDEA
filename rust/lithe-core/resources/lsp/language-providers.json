@@ -26,7 +26,10 @@
       "languageId": "go",
       "languageServerLaunch": {
         "executableNames": ["gopls"],
-        "arguments": []
+        "arguments": [],
+        "initializationOptions": {
+          "ui.semanticTokens": true
+        }
       },
       "languageServerInstallation": {
         "homebrewFormula": "gopls",

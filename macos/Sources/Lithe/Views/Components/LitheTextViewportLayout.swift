@@ -82,11 +82,14 @@ enum LitheTextViewportLayout {
         )
         textView.textContainer?.widthTracksTextView = true
         // Autoresizing only reacts to later clip-view bounds changes; pin the
-        // frame width now so toggling wraps immediately. When the scroll view
-        // has not been laid out yet the clip view takes over once it resizes.
-        let contentWidth = max(1, scrollView.contentSize.width)
-        textView.setFrameSize(
-            NSSize(width: contentWidth, height: textView.frame.height)
-        )
+        // frame width now so toggling wraps immediately. Skip when the scroll
+        // view has not been laid out yet (width <= 1) to avoid laying out the
+        // entire document at 1pt width before SwiftUI assigns the real frame.
+        let contentWidth = scrollView.contentSize.width
+        if contentWidth > 1 {
+            textView.setFrameSize(
+                NSSize(width: contentWidth, height: textView.frame.height)
+            )
+        }
     }
 }

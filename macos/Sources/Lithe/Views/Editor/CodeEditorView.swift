@@ -129,9 +129,8 @@ enum EditorCaretGeometry {
             )
         }
 
-        layoutManager.ensureLayout(for: textContainer)
-
         if safeLocation >= sourceLength {
+            layoutManager.ensureLayout(for: textContainer)
             return documentEndRect(
                 sourceLength: sourceLength,
                 layoutManager: layoutManager,
@@ -140,6 +139,11 @@ enum EditorCaretGeometry {
                 fallbackLineHeight: fallbackLineHeight
             )
         }
+
+        let probeLocation = min(safeLocation, max(0, sourceLength - 1))
+        layoutManager.ensureLayout(
+            forCharacterRange: NSRange(location: probeLocation, length: sourceLength > 0 ? 1 : 0)
+        )
 
         let source = (layoutManager.textStorage?.string as NSString?) ?? ("" as NSString)
         if source.length > safeLocation {
@@ -694,6 +698,7 @@ struct CodeEditorView: NSViewRepresentable {
     @EnvironmentObject private var settings: AppSettings
     @ObservedObject var document: EditorDocument
     var shouldFocus = true
+    var isActiveInPane = true
     var previewLine: Int? = nil
     var markdownScrollPosition: Binding<MarkdownScrollPosition>? = nil
     let viewportStore: EditorViewportStore
@@ -804,8 +809,20 @@ struct CodeEditorView: NSViewRepresentable {
         }
         textView.textContainerInset = NSSize(width: EditorLayoutMetrics.leadingInset, height: 0)
         textView.textContainer?.lineFragmentPadding = EditorLayoutMetrics.lineFragmentPadding
-        textView.font = LitheTheme.editorFont(size: settings.editorFontSize)
-        textView.defaultParagraphStyle = LitheTheme.editorParagraphStyle
+        let editorFont = LitheTheme.editorFont(size: settings.editorFontSize)
+        let editorParagraphStyle = LitheTheme.editorParagraphStyle
+        textView.font = editorFont
+        textView.defaultParagraphStyle = editorParagraphStyle
+        if let storage = textView.textStorage, storage.length > 0 {
+            let fullRange = NSRange(location: 0, length: storage.length)
+            storage.beginEditing()
+            storage.addAttributes([
+                .font: editorFont,
+                .paragraphStyle: editorParagraphStyle,
+                .foregroundColor: palette.text
+            ], range: fullRange)
+            storage.endEditing()
+        }
         textView.indentationWidth = settings.tabWidth
         textView.applyAppearance(palette, isTransparent: true)
         textView.drawsBackground = false
@@ -818,6 +835,15 @@ struct CodeEditorView: NSViewRepresentable {
         )
         context.coordinator.appliedSelectionRestorationRevision = viewportState.selectionRestorationRevision
         textView.isEditable = !document.isReadOnly
+        textView.isActiveInPane = isActiveInPane
+        container.isHidden = !isActiveInPane
+        context.coordinator.isActiveInPane = isActiveInPane
+        context.coordinator.seedAppliedChrome(
+            fontSize: settings.editorFontSize,
+            tabWidth: settings.tabWidth,
+            languageFeatures: languageFeatures,
+            isReadOnly: document.isReadOnly
+        )
         // 注释符在动作触发时经 Rust Core 解析，文档改名后无需失效缓存
         textView.onLineEditingAction = { [weak coordinator = context.coordinator] action in
             coordinator?.performLineEditing(action)
@@ -987,7 +1013,7 @@ struct CodeEditorView: NSViewRepresentable {
         context.coordinator.updateCodeVisionAndBlame()
         context.coordinator.updateGitLineChanges()
         context.coordinator.updateDiagnostics()
-        context.coordinator.applyInitialRunnableMarkers()
+        context.coordinator.refreshRunnableMarkersIfNeeded()
         context.coordinator.scheduleDocumentSymbolRefresh()
         context.coordinator.scheduleSemanticTokensRefresh()
         context.coordinator.scheduleInlayHintRefresh()
@@ -1003,9 +1029,44 @@ struct CodeEditorView: NSViewRepresentable {
 
     func updateNSView(_ container: EditorContainerView, context: Context) {
         guard let textView = container.scrollView?.documentView as? NSTextView else { return }
+        let wasActive = context.coordinator.isActiveInPane
+        if wasActive && !isActiveInPane {
+            context.coordinator.breakUndoCoalescingForDeactivation()
+            context.coordinator.persistViewport()
+            context.coordinator.resetFocusRequestForReactivation()
+            context.coordinator.isActiveInPane = false
+            (textView as? CodeTextView)?.isActiveInPane = false
+            container.isHidden = true
+            return
+        }
+        if !isActiveInPane {
+            container.isHidden = true
+            (textView as? CodeTextView)?.isActiveInPane = false
+            return
+        }
+        let didReactivate = !wasActive && isActiveInPane
+        if didReactivate {
+            container.isHidden = false
+            (textView as? CodeTextView)?.isActiveInPane = true
+            context.coordinator.isActiveInPane = true
+            if let scrollView = container.scrollView {
+                LitheTextViewportLayout.apply(
+                    to: textView,
+                    in: scrollView,
+                    softWrap: context.coordinator.appliedSoftWrap
+                )
+            }
+        }
+
         let palette = CodeEditorPalette(isDark: colorScheme == .dark, theme: settings.colorTheme)
         let appearanceChanged = context.coordinator.isDarkAppearance != palette.isDark
             || context.coordinator.colorTheme != settings.colorTheme
+        let fileIdentityChanged = context.coordinator.updateFileIdentityIfNeeded(for: document.url)
+        let currentSyntaxRevision = LanguageSyntaxProfileRegistry.shared.revision
+        let syntaxRegistryChanged = context.coordinator.appliedSyntaxRegistryRevision != currentSyntaxRevision
+        if syntaxRegistryChanged {
+            context.coordinator.appliedSyntaxRegistryRevision = currentSyntaxRevision
+        }
         context.coordinator.document = document
         context.coordinator.model = model
         context.coordinator.chrome = chrome
@@ -1072,6 +1133,8 @@ struct CodeEditorView: NSViewRepresentable {
             context.coordinator.isApplyingEditorChange = true
             if textChanged {
                 textView.string = document.text
+                context.coordinator.bumpTextRevision()
+                (textView as? CodeTextView)?.markFoldAttributesDirtyAfterTextReplacement()
                 (textView as? CodeTextView)?.rebuildLineIndex()
                 container.gutter?.refreshLineNumberLayout()
                 context.coordinator.resetHighlightCache()
@@ -1097,13 +1160,17 @@ struct CodeEditorView: NSViewRepresentable {
             }
             context.coordinator.isApplyingEditorChange = false
         }
-        if appearanceChanged {
+        if (appearanceChanged || fileIdentityChanged || syntaxRegistryChanged), !textChanged {
             context.coordinator.resetHighlightCache()
             context.coordinator.highlight()
             context.coordinator.reapplyCachedSemanticTokens()
             (textView as? CodeTextView)?.updateEditorDecorations()
         } else if chromeChanged, !textChanged {
             (textView as? CodeTextView)?.updateEditorDecorations()
+        }
+        if didReactivate && !textChanged {
+            context.coordinator.scheduleCaretUpdate()
+            context.coordinator.scheduleDocumentSymbolRefresh()
         }
         context.coordinator.updateCodeVisionAndBlame()
         context.coordinator.updateGitLineChanges()
@@ -1118,7 +1185,7 @@ struct CodeEditorView: NSViewRepresentable {
             let findVisible = chrome.isFindBarVisible
             let findQuery = chrome.findBarQuery
             let findOptions = chrome.findOptions
-            if textChanged || context.coordinator.lastFindVisible != findVisible
+            if textChanged || didReactivate || context.coordinator.lastFindVisible != findVisible
                 || context.coordinator.lastFindQuery != findQuery
                 || context.coordinator.lastFindOptions != findOptions {
                 context.coordinator.lastFindVisible = findVisible
@@ -1136,7 +1203,7 @@ struct CodeEditorView: NSViewRepresentable {
                 }
             }
         }
-        context.coordinator.applyInitialRunnableMarkers()
+        context.coordinator.refreshRunnableMarkersIfNeeded()
         context.coordinator.applySynchronizedMarkdownScrollIfNeeded(to: container.scrollView)
     }
 
@@ -1145,8 +1212,14 @@ struct CodeEditorView: NSViewRepresentable {
         weak var document: EditorDocument?
         weak var model: AppModel?
         weak var chrome: EditorChromeModel?
-        let fileName: String
-        let fileExtension: String
+        var fileName: String
+        var fileExtension: String
+        var isActiveInPane = true
+        private var textRevision: UInt64 = 0
+        var appliedSyntaxRegistryRevision: UInt64 = LanguageSyntaxProfileRegistry.shared.revision
+        private var lastRunnableRevision: UInt64?
+        private var lastRunnableURL: URL?
+        private var lastRunnableLanguageEnabled: Bool?
         weak var textView: NSTextView?
         weak var gutter: LineNumberGutterView?
         weak var container: EditorContainerView?
@@ -1336,6 +1409,13 @@ struct CodeEditorView: NSViewRepresentable {
             }
         }
 
+        func breakUndoCoalescingForDeactivation() {
+            textView?.breakUndoCoalescing()
+            if let document {
+                model?.services.workspaceTextEditUndoController.breakNativeEditCoalescing(for: document)
+            }
+        }
+
         func detachStableNativeUndo() {
             guard usesStableNativeUndo else { return }
             (textView as? CodeTextView)?.canPerformSharedUndoRedo = nil
@@ -1359,6 +1439,8 @@ struct CodeEditorView: NSViewRepresentable {
             isApplyingEditorChange = true
             if !textView.string.utf8.elementsEqual(document.text.utf8) {
                 textView.string = document.text
+                bumpTextRevision()
+                textView.markFoldAttributesDirtyAfterTextReplacement()
                 textView.rebuildLineIndex()
                 if let model { applySoftWrapIfNeeded(enabled: model.settings.editorSoftWrapEnabled) }
                 gutter?.refreshLineNumberLayout()
@@ -1725,6 +1807,35 @@ struct CodeEditorView: NSViewRepresentable {
 
         private var hasRequestedInitialFocus = false
 
+        func resetFocusRequestForReactivation() {
+            hasRequestedInitialFocus = false
+        }
+
+        func bumpTextRevision() {
+            textRevision &+= 1
+        }
+
+        func updateFileIdentityIfNeeded(for url: URL) -> Bool {
+            let nextName = url.lastPathComponent
+            let nextExt = url.pathExtension
+            guard nextName != fileName || nextExt != fileExtension else { return false }
+            fileName = nextName
+            fileExtension = nextExt
+            return true
+        }
+
+        func seedAppliedChrome(
+            fontSize: CGFloat,
+            tabWidth: Int,
+            languageFeatures: LanguageServerFeatureSet,
+            isReadOnly: Bool
+        ) {
+            appliedFontSize = fontSize
+            appliedTabWidth = tabWidth
+            appliedLanguageFeatures = languageFeatures
+            appliedReadOnly = isReadOnly
+        }
+
         func pasteMarkdownImage() -> Bool {
             guard let document, let model, let textView,
                   let source = model.markdownImageFromClipboard() else { return false }
@@ -1798,6 +1909,7 @@ struct CodeEditorView: NSViewRepresentable {
             guard let textView else { return }
             guard !isApplyingEditorChange else { return }
             guard document?.isReadOnly != true, document?.hasMutationLease != true else { return }
+            bumpTextRevision()
             let codeTextView = textView as? CodeTextView
             let previousSource = document?.text
             if pendingEditNeedsReconciliation, let previousSource {
@@ -2189,8 +2301,15 @@ struct CodeEditorView: NSViewRepresentable {
                 highlightedRanges.insert(target)
                 return
             }
-            let visible = (textView as? CodeTextView)?.visibleCharacterRange()
-                ?? NSRange(location: 0, length: min(8_192, textStorage.length))
+            let visible: NSRange
+            if let currentVisible = (textView as? CodeTextView)?.visibleCharacterRange() {
+                visible = currentVisible
+            } else {
+                let anchor = textView.selectedRange().location
+                let start = max(0, min(anchor, textStorage.length) - 4_096)
+                let length = min(textStorage.length - start, 12_288)
+                visible = NSRange(location: start, length: max(0, length))
+            }
             let target = SyntaxHighlighter.targetRange(
                 for: visible,
                 in: textStorage.string as NSString,
@@ -2557,7 +2676,11 @@ struct CodeEditorView: NSViewRepresentable {
                 model?.resolveJavaNavigation(marker, in: document.url)
             }
             let text = textView?.string ?? ""
-            let runnableMarkers = Self.discoverRunnables(in: text, url: document.url)
+            let languageEnabled = isRunnableLanguageEnabled(for: document.url)
+            let runnableMarkers = discoverRunnables(in: text, url: document.url)
+            lastRunnableRevision = textRevision
+            lastRunnableURL = document.url.standardizedFileURL
+            lastRunnableLanguageEnabled = languageEnabled
             gutter?.updateRunnableMarkers(
                 runnableMarkers,
                 onRun: { [weak model] runnable in
@@ -2576,12 +2699,44 @@ struct CodeEditorView: NSViewRepresentable {
             scheduleEditorOverlayRelayout()
         }
 
-        private static func discoverRunnables(in text: String, url: URL) -> [DocumentRunnable] {
-            DocumentRunnableDiscovery.discover(in: text, url: url)
+        private func isRunnableLanguageEnabled(for url: URL) -> Bool {
+            guard let languageID = DocumentRunnableDiscovery.languageID(for: url) else { return true }
+            return model?.isLanguageSupportEnabled(languageID: languageID) ?? true
         }
 
-        func applyInitialRunnableMarkers() {
-            applyFoldState()
+        private func discoverRunnables(in text: String, url: URL) -> [DocumentRunnable] {
+            DocumentRunnableDiscovery.discover(in: text, url: url) { [weak model] languageID in
+                model?.isLanguageSupportEnabled(languageID: languageID) ?? true
+            }
+        }
+
+        func refreshRunnableMarkersIfNeeded() {
+            guard let document else { return }
+            let url = document.url.standardizedFileURL
+            let languageEnabled = isRunnableLanguageEnabled(for: document.url)
+            guard lastRunnableRevision != textRevision
+                || lastRunnableURL != url
+                || lastRunnableLanguageEnabled != languageEnabled else { return }
+            lastRunnableRevision = textRevision
+            lastRunnableURL = url
+            lastRunnableLanguageEnabled = languageEnabled
+            let text = textView?.string ?? ""
+            let runnableMarkers = discoverRunnables(in: text, url: document.url)
+            gutter?.updateRunnableMarkers(
+                runnableMarkers,
+                onRun: { [weak model] runnable in
+                    guard let model else { return }
+                    model.runDocumentRunnable(runnable, in: document.url, debug: false)
+                },
+                onDebug: { [weak model] runnable in
+                    guard let model else { return }
+                    model.runDocumentRunnable(runnable, in: document.url, debug: true)
+                },
+                onModify: { [weak model] runnable in
+                    guard let model else { return }
+                    model.modifyDocumentRunnable(runnable, in: document.url)
+                }
+            )
         }
 
         func updateCodeVisionAndBlame() {
@@ -2589,10 +2744,9 @@ struct CodeEditorView: NSViewRepresentable {
             let url = document.url.standardizedFileURL
             let hints = model.settings.showCodeVision ? model.javaCodeVisionHints[url] ?? [] : []
             let overlayLayoutChanged = appliedEditorOverlayLayoutRevision != editorOverlayLayoutRevision
-            // Further resize optimization can move this representable behind a stable
-            // layout boundary and skip all geometry-only updates before reaching here.
+            // Use the O(1) text revision counter instead of hashing the full document string.
             let inputKey = CodeVisionInputKey(
-                textHash: textView?.string.hashValue ?? 0,
+                textHash: Int(truncatingIfNeeded: textRevision),
                 hintCount: hints.count,
                 foldCount: foldRegions.count,
                 collapsedIDs: collapsedFoldIDs,
@@ -3270,6 +3424,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     private var trackingArea: NSTrackingArea?
     private var hoveredFoldID: String?
     private var lineIndex = TextLineIndex(source: "" as NSString)
+    var isActiveInPane = true
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -3279,6 +3434,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     override func setFrameSize(_ newSize: NSSize) {
         let previousWidth = frame.width
         super.setFrameSize(newSize)
+        guard !isHiddenOrHasHiddenAncestor else { return }
         if EditorOverlayLayout.requiresRelayout(
             previousWidth: previousWidth,
             newWidth: newSize.width
@@ -4092,12 +4248,18 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
         }
     }
 
+    private var foldAttributesDirtyAfterTextReplacement = false
+
+    func markFoldAttributesDirtyAfterTextReplacement() {
+        foldAttributesDirtyAfterTextReplacement = true
+    }
+
     func updateFolds(
         regions: [JavaFoldRegion],
         collapsedIDs: Set<String>,
         onToggle: @escaping (JavaFoldRegion) -> Void
     ) {
-        let hadFoldState = !foldRegions.isEmpty || !collapsedFoldIDs.isEmpty
+        let previousCollapsedRanges = collapsedHiddenRanges
         foldRegions = regions
         collapsedFoldIDs = collapsedIDs
         collapsedHiddenRanges = Self.mergeCollapsedRanges(
@@ -4110,9 +4272,15 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
            !collapsedIDs.contains(hoveredFoldID) {
             self.hoveredFoldID = nil
         }
-        // Runnable-gutter updates also use this entry for languages without
-        // folds. Preserve their decorations and avoid laying out the whole file.
-        guard hadFoldState || !regions.isEmpty || !collapsedIDs.isEmpty else { return }
+        // Uncollapsed fold regions only render gutter chevrons and do not alter text layout.
+        // Reapply temporary fold attributes whenever collapsed ranges change OR a full buffer
+        // replacement (external reload / Undo) cleared AppKit's temporary layout attributes.
+        let needsReapplyAfterBufferReplace = foldAttributesDirtyAfterTextReplacement
+            && !collapsedHiddenRanges.isEmpty
+        foldAttributesDirtyAfterTextReplacement = false
+        guard previousCollapsedRanges != collapsedHiddenRanges || needsReapplyAfterBufferReplace else {
+            return
+        }
         applyFoldAttributes()
         applyUnusedCodeFade()
         applyCollapsedFoldForeground()
@@ -5927,6 +6095,7 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     @objc private func handleFindQueryChanged(_ notification: Notification) {
+        guard isActiveInPane, !isHiddenOrHasHiddenAncestor else { return }
         let query = notification.userInfo?[FindNotificationKeys.query] as? String ?? ""
         let options = FindInFileOptions(
             matchCase: notification.userInfo?[FindNotificationKeys.matchCase] as? Bool ?? false,
@@ -5937,14 +6106,14 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     @objc private func handleFindReplaceNext(_ notification: Notification) {
-        guard isReplaceNotificationTarget(notification) else { return }
+        guard isActiveInPane, !isHiddenOrHasHiddenAncestor, isReplaceNotificationTarget(notification) else { return }
         replaceNextFindMatch(
             replacement: notification.userInfo?[FindNotificationKeys.replacement] as? String ?? ""
         )
     }
 
     @objc private func handleFindReplaceAll(_ notification: Notification) {
-        guard isReplaceNotificationTarget(notification) else { return }
+        guard isActiveInPane, !isHiddenOrHasHiddenAncestor, isReplaceNotificationTarget(notification) else { return }
         replaceAllFindMatches(
             replacement: notification.userInfo?[FindNotificationKeys.replacement] as? String ?? ""
         )
@@ -5958,11 +6127,13 @@ final class CodeTextView: NSTextView, NSLayoutManagerDelegate {
     }
 
     @objc private func handleFindNavigate(_ notification: Notification) {
+        guard isActiveInPane, !isHiddenOrHasHiddenAncestor else { return }
         let direction = notification.userInfo?[FindNotificationKeys.direction] as? Int ?? 1
         navigateFind(offset: direction)
     }
 
     @objc private func handleFindDismiss(_ notification: Notification) {
+        guard isActiveInPane, !isHiddenOrHasHiddenAncestor else { return }
         clearFindHighlights()
         window?.makeFirstResponder(self)
     }
@@ -7301,7 +7472,8 @@ final class CodeVisionOverlayController {
         currentHints = hints
         buttons.forEach { $0.removeFromSuperview() }
         buttons = []
-        guard let textView, let layoutManager = textView.layoutManager,
+        guard !hints.isEmpty,
+              let textView, let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else { return }
         layoutManager.ensureLayout(for: textContainer)
         let source = textView.string as NSString

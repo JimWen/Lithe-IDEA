@@ -73,9 +73,9 @@ enum GenericSyntaxHighlightingAdapter {
         let scanStart = lineRange(containing: target.location, in: source).location
         let requiredEnd = NSMaxRange(lineRange(containing: max(target.location, NSMaxRange(target) - 1), in: source))
 
+        let enrichment = LanguageSyntaxProfileRegistry.shared.enrichment(for: profile.languageID)
         let cachedBeforeTarget = cachedState(at: scanStart - 1, profileTag: profileTag, in: storage)
-        let shouldConverge = cachedBeforeTarget != nil
-            || cachedState(afterLineEndingAt: requiredEnd, profileTag: profileTag, in: storage) != nil
+        let shouldConverge = cachedState(afterLineEndingAt: requiredEnd, profileTag: profileTag, in: storage) != nil
         var state = cachedBeforeTarget ?? .normal
         var scannedLineCount = 0
 
@@ -87,6 +87,7 @@ enum GenericSyntaxHighlightingAdapter {
                     in: source,
                     lineRange: range,
                     profile: profile,
+                    enrichment: enrichment,
                     palette: palette,
                     storage: nil,
                     state: &state
@@ -111,6 +112,7 @@ enum GenericSyntaxHighlightingAdapter {
                 in: source,
                 lineRange: range,
                 profile: profile,
+                enrichment: enrichment,
                 palette: palette,
                 storage: storage,
                 state: &state
@@ -148,6 +150,7 @@ enum GenericSyntaxHighlightingAdapter {
         in source: NSString,
         lineRange: NSRange,
         profile: LanguageSyntaxProfile,
+        enrichment: LanguageSyntaxEnrichment,
         palette: SyntaxHighlightingPalette,
         storage: NSTextStorage?,
         state: inout LexerState
@@ -155,6 +158,11 @@ enum GenericSyntaxHighlightingAdapter {
         let contentRange = lineContentRange(in: source, lineRange: lineRange)
         let limit = NSMaxRange(contentRange)
         var cursor = contentRange.location
+        var awaitingFunctionName = false
+        var awaitingTypeName = false
+        var receiverParenDepth = 0
+        var inGoReceiver = false
+        var lastSignificantUnit: unichar = 0
 
         while cursor < limit {
             switch state {
@@ -259,11 +267,24 @@ enum GenericSyntaxHighlightingAdapter {
 
             let ch = source.character(at: cursor)
 
-            // Line comments (`//` or `#`)
+            // Line comments (`//` or `#`), compiler directives (`//go:...`), and doc comments (`///` / `//!`)
             if profile.supportsSlashComments, ch == 47, cursor + 1 < limit {
                 let next = source.character(at: cursor + 1)
                 if next == 47 {
-                    paint(palette.comment, range: NSRange(location: cursor, length: limit - cursor), to: storage)
+                    let commentRange = NSRange(location: cursor, length: limit - cursor)
+                    if storage != nil {
+                        let color: NSColor
+                        if matchesAnyPrefix(enrichment.directivePrefixes, in: source, at: cursor, limit: limit) {
+                            color = palette.annotation
+                        } else if cursor + 2 < limit,
+                                  (source.character(at: cursor + 2) == 47 || source.character(at: cursor + 2) == 33),
+                                  !(cursor + 3 < limit && source.character(at: cursor + 3) == 47) {
+                            color = palette.documentationComment
+                        } else {
+                            color = palette.comment
+                        }
+                        paint(color, range: commentRange, to: storage)
+                    }
                     return
                 }
                 if profile.supportsBlockComments, next == 42 {
@@ -289,6 +310,7 @@ enum GenericSyntaxHighlightingAdapter {
                 if let attrEnd = rustAttributeEnd(in: source, from: cursor, limit: limit) {
                     paint(palette.annotation, range: NSRange(location: cursor, length: attrEnd - cursor), to: storage)
                     cursor = attrEnd
+                    lastSignificantUnit = 93
                     continue
                 }
             }
@@ -307,6 +329,7 @@ enum GenericSyntaxHighlightingAdapter {
                     }
                 }
                 paint(palette.annotation, range: NSRange(location: start, length: cursor - start), to: storage)
+                lastSignificantUnit = 64
                 continue
             }
 
@@ -317,6 +340,7 @@ enum GenericSyntaxHighlightingAdapter {
                 cursor = rawStart.contentStart
                 state = .rustRawString(hashes: rawStart.hashes)
                 paint(palette.string, range: NSRange(location: start, length: cursor - start), to: storage)
+                lastSignificantUnit = 34
                 continue
             }
 
@@ -331,12 +355,14 @@ enum GenericSyntaxHighlightingAdapter {
                     cursor += 2
                     state = .rustDoubleString
                     paint(palette.string, range: NSRange(location: start, length: 2), to: storage)
+                    lastSignificantUnit = 34
                     continue
                 }
                 if ch == 98, next == 39,
                    let end = rustCharLiteralEnd(in: source, quoteAt: cursor + 1, limit: limit) {
                     paint(palette.string, range: NSRange(location: cursor, length: end - cursor), to: storage)
                     cursor = end
+                    lastSignificantUnit = 39
                     continue
                 }
             }
@@ -355,6 +381,7 @@ enum GenericSyntaxHighlightingAdapter {
                     paint(palette.string, range: NSRange(location: start, length: end - start), to: storage)
                     cursor = end
                 }
+                lastSignificantUnit = quote
                 continue
             }
 
@@ -367,17 +394,20 @@ enum GenericSyntaxHighlightingAdapter {
                     paint(palette.string, range: NSRange(location: cursor, length: 3), to: storage)
                     cursor += 3
                     state = .tripleDoubleString
+                    lastSignificantUnit = 34
                     continue
                 }
                 if profile.supportsRustSyntax {
                     paint(palette.string, range: NSRange(location: cursor, length: 1), to: storage)
                     cursor += 1
                     state = .rustDoubleString
+                    lastSignificantUnit = 34
                     continue
                 }
                 let end = scanSingleLineString(in: source, quote: 34, from: cursor + 1, limit: limit, allowsEscape: true)
                 paint(palette.string, range: NSRange(location: cursor, length: end - cursor), to: storage)
                 cursor = end
+                lastSignificantUnit = 34
                 continue
             }
 
@@ -387,6 +417,7 @@ enum GenericSyntaxHighlightingAdapter {
                     if let end = rustCharLiteralEnd(in: source, quoteAt: cursor, limit: limit) {
                         paint(palette.string, range: NSRange(location: cursor, length: end - cursor), to: storage)
                         cursor = end
+                        lastSignificantUnit = 39
                         continue
                     }
                     // Rust lifetime (`'a`, `'static`, `'_`): advance past `'` and its identifier.
@@ -394,6 +425,7 @@ enum GenericSyntaxHighlightingAdapter {
                     while cursor < limit, isIdentifierContinue(source.character(at: cursor)) {
                         cursor += 1
                     }
+                    lastSignificantUnit = 39
                     continue
                 }
                 if profile.supportsTripleQuotedStrings,
@@ -403,6 +435,7 @@ enum GenericSyntaxHighlightingAdapter {
                     paint(palette.string, range: NSRange(location: cursor, length: 3), to: storage)
                     cursor += 3
                     state = .tripleSingleString
+                    lastSignificantUnit = 39
                     continue
                 }
                 let end = scanSingleLineString(
@@ -414,6 +447,7 @@ enum GenericSyntaxHighlightingAdapter {
                 )
                 paint(palette.string, range: NSRange(location: cursor, length: end - cursor), to: storage)
                 cursor = end
+                lastSignificantUnit = 39
                 continue
             }
 
@@ -422,34 +456,120 @@ enum GenericSyntaxHighlightingAdapter {
                 paint(palette.string, range: NSRange(location: cursor, length: 1), to: storage)
                 cursor += 1
                 state = .backtickString
+                lastSignificantUnit = 96
                 continue
             }
 
-            // Numbers
-            if isAsciiDigit(ch) {
+            // Numbers (including leading-dot floats like `.5` and Go hex floats like `0x1.fp3`)
+            if isAsciiDigit(ch) || (ch == 46
+                && cursor + 1 < limit
+                && isAsciiDigit(source.character(at: cursor + 1))
+                && !isIdentifierContinue(lastSignificantUnit)
+                && lastSignificantUnit != 41
+                && lastSignificantUnit != 93) {
                 let start = cursor
                 cursor = scanNumberEnd(in: source, from: cursor, limit: limit)
                 paint(palette.number, range: NSRange(location: start, length: cursor - start), to: storage)
+                lastSignificantUnit = 48
                 continue
             }
 
-            // Identifiers, keywords, and types
+            // Identifiers, keywords, builtins, declarations, calls, fields, constants, and types
             if isIdentifierStart(ch) {
                 let start = cursor
+                let precededByDot = lastSignificantUnit == 46
                 cursor += 1
                 while cursor < limit, isIdentifierContinue(source.character(at: cursor)) {
                     cursor += 1
                 }
                 if storage != nil {
-                    let wordRange = NSRange(location: start, length: cursor - start)
+                    var wordRange = NSRange(location: start, length: cursor - start)
                     let word = source.substring(with: wordRange)
-                    if profile.keywords.contains(word) {
+                    let nextUnit = nextNonSpaceCharacter(in: source, from: cursor, limit: limit)
+                    let isRustMacro = profile.supportsRustSyntax
+                        && cursor < limit
+                        && source.character(at: cursor) == 33
+                        && !(cursor + 1 < limit && source.character(at: cursor + 1) == 61)
+
+                    if isRustMacro {
+                        cursor += 1
+                        wordRange = NSRange(location: start, length: cursor - start)
+                        paint(palette.annotation, range: wordRange, to: storage)
+                        awaitingFunctionName = false
+                        awaitingTypeName = false
+                    } else if enrichment.booleanLiterals.contains(word) {
+                        paint(palette.boolean, range: wordRange, to: storage)
+                        awaitingFunctionName = false
+                        awaitingTypeName = false
+                    } else if enrichment.nullLiterals.contains(word) {
+                        paint(palette.null, range: wordRange, to: storage)
+                        awaitingFunctionName = false
+                        awaitingTypeName = false
+                    } else if profile.keywords.contains(word) {
                         paint(palette.keyword, range: wordRange, to: storage)
-                    } else if profile.builtinTypes.contains(word) || isUpperCamelIdentifier(word, firstUnit: ch) {
+                        if enrichment.functionDeclarationKeywords.contains(word) {
+                            awaitingFunctionName = true
+                            awaitingTypeName = false
+                        } else if enrichment.typeDeclarationKeywords.contains(word) {
+                            awaitingTypeName = true
+                            awaitingFunctionName = false
+                        } else {
+                            awaitingFunctionName = false
+                            awaitingTypeName = false
+                        }
+                    } else if awaitingFunctionName && !inGoReceiver {
+                        paint(palette.functionDeclaration, range: wordRange, to: storage)
+                        awaitingFunctionName = false
+                    } else if awaitingTypeName && !inGoReceiver {
                         paint(palette.type, range: wordRange, to: storage)
+                        awaitingTypeName = false
+                    } else if profile.builtinTypes.contains(word) && !precededByDot {
+                        paint(palette.type, range: wordRange, to: storage)
+                    } else if !precededByDot && nextUnit == 40 && enrichment.builtinFunctions.contains(word) {
+                        paint(palette.functionCall, range: wordRange, to: storage)
+                    } else if nextUnit == 40 {
+                        paint(palette.functionCall, range: wordRange, to: storage)
+                    } else if isAllCapsConstant(word) {
+                        paint(palette.constant, range: wordRange, to: storage)
+                    } else if isUpperCamelIdentifier(word, firstUnit: ch) {
+                        paint(palette.type, range: wordRange, to: storage)
+                    } else if precededByDot {
+                        paint(palette.field, range: wordRange, to: storage)
+                    }
+                } else {
+                    awaitingFunctionName = false
+                    awaitingTypeName = false
+                }
+                lastSignificantUnit = 97
+                continue
+            }
+
+            if ch == 40 { // '('
+                if awaitingFunctionName && profile.languageID == "go" && !inGoReceiver {
+                    inGoReceiver = true
+                    receiverParenDepth = 1
+                } else if inGoReceiver {
+                    receiverParenDepth += 1
+                } else {
+                    awaitingFunctionName = false
+                    awaitingTypeName = false
+                }
+                lastSignificantUnit = ch
+            } else if ch == 41 { // ')'
+                if inGoReceiver {
+                    receiverParenDepth -= 1
+                    if receiverParenDepth <= 0 {
+                        inGoReceiver = false
+                        receiverParenDepth = 0
                     }
                 }
-                continue
+                lastSignificantUnit = ch
+            } else if ch != 32 && ch != 9 {
+                if !inGoReceiver && ch != 42 && ch != 38 {
+                    awaitingFunctionName = false
+                    awaitingTypeName = false
+                }
+                lastSignificantUnit = ch
             }
 
             cursor += 1
@@ -597,28 +717,60 @@ enum GenericSyntaxHighlightingAdapter {
     }
 
     private static func scanNumberEnd(in source: NSString, from start: Int, limit: Int) -> Int {
-        var cursor = start + 1
-        if source.character(at: start) == 48, cursor < limit {
-            let prefix = source.character(at: cursor)
-            if prefix == 120 || prefix == 88 || prefix == 98 || prefix == 66 || prefix == 111 || prefix == 79 {
-                cursor += 1
-                while cursor < limit, isHexOrUnderscore(source.character(at: cursor)) {
+        var cursor = start
+        if source.character(at: start) == 46 {
+            cursor += 1
+        } else {
+            cursor += 1
+            if source.character(at: start) == 48, cursor < limit {
+                let prefix = source.character(at: cursor)
+                if prefix == 120 || prefix == 88 || prefix == 98 || prefix == 66 || prefix == 111 || prefix == 79 {
+                    let isHex = prefix == 120 || prefix == 88
                     cursor += 1
+                    while cursor < limit, isHexOrUnderscore(source.character(at: cursor)) {
+                        cursor += 1
+                    }
+                    if isHex, cursor < limit, source.character(at: cursor) == 46 {
+                        cursor += 1
+                        while cursor < limit, isHexOrUnderscore(source.character(at: cursor)) {
+                            cursor += 1
+                        }
+                    }
+                    if isHex, cursor < limit,
+                       (source.character(at: cursor) == 112 || source.character(at: cursor) == 80) {
+                        cursor += 1
+                        if cursor < limit,
+                           (source.character(at: cursor) == 43 || source.character(at: cursor) == 45) {
+                            cursor += 1
+                        }
+                        while cursor < limit, isAsciiDigit(source.character(at: cursor)) || source.character(at: cursor) == 95 {
+                            cursor += 1
+                        }
+                    }
+                    while cursor < limit, isIdentifierContinue(source.character(at: cursor)) {
+                        cursor += 1
+                    }
+                    return cursor
                 }
-                while cursor < limit, isIdentifierContinue(source.character(at: cursor)) {
-                    cursor += 1
-                }
-                return cursor
             }
         }
-        var seenDot = false
+        var seenDot = source.character(at: start) == 46
         while cursor < limit {
             let unit = source.character(at: cursor)
             if isAsciiDigit(unit) || unit == 95 {
                 cursor += 1
-            } else if unit == 46, !seenDot, cursor + 1 < limit, isAsciiDigit(source.character(at: cursor + 1)) {
-                seenDot = true
-                cursor += 2
+            } else if unit == 46, !seenDot {
+                if cursor + 1 < limit, isAsciiDigit(source.character(at: cursor + 1)) {
+                    seenDot = true
+                    cursor += 2
+                } else if cursor + 1 == limit
+                            || (!isIdentifierStart(source.character(at: cursor + 1))
+                                && source.character(at: cursor + 1) != 46) {
+                    seenDot = true
+                    cursor += 1
+                } else {
+                    break
+                }
             } else if unit == 101 || unit == 69 {
                 let next = cursor + 1
                 if next < limit, (source.character(at: next) == 43 || source.character(at: next) == 45) {
@@ -638,6 +790,57 @@ enum GenericSyntaxHighlightingAdapter {
             }
         }
         return cursor
+    }
+
+    private static func matchesAnyPrefix(
+        _ prefixes: [String],
+        in source: NSString,
+        at index: Int,
+        limit: Int
+    ) -> Bool {
+        guard !prefixes.isEmpty else { return false }
+        let available = limit - index
+        for prefix in prefixes {
+            let prefixLength = (prefix as NSString).length
+            guard prefixLength > 0, prefixLength <= available else { continue }
+            if source.compare(
+                prefix,
+                options: [],
+                range: NSRange(location: index, length: prefixLength)
+            ) == .orderedSame {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func nextNonSpaceCharacter(in source: NSString, from index: Int, limit: Int) -> unichar? {
+        var cursor = index
+        while cursor < limit {
+            let unit = source.character(at: cursor)
+            if unit != 32 && unit != 9 {
+                return unit
+            }
+            cursor += 1
+        }
+        return nil
+    }
+
+    private static func isAllCapsConstant(_ word: String) -> Bool {
+        guard word.count >= 2 else { return false }
+        var hasUppercase = false
+        var hasSeparatorOrDigit = false
+        for scalar in word.unicodeScalars {
+            let value = scalar.value
+            if value >= 65 && value <= 90 {
+                hasUppercase = true
+            } else if value == 95 || (value >= 48 && value <= 57) {
+                hasSeparatorOrDigit = true
+            } else {
+                return false
+            }
+        }
+        return hasUppercase && (hasSeparatorOrDigit || word.count >= 3)
     }
 
     private static func isPrecededByIdentifier(in source: NSString, at index: Int, lineStart: Int) -> Bool {
@@ -722,6 +925,7 @@ enum GenericSyntaxHighlightingAdapter {
         guard lineEnd >= requiredEnd else { return false }
         guard shouldConverge else { return true }
         guard lineRange.location >= requiredEnd else { return false }
+        guard let cachedExitState else { return true }
         return cachedExitState == currentState
     }
 

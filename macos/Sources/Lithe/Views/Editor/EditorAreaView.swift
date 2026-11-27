@@ -57,7 +57,11 @@ struct EditorAreaView: View {
     @State private var documentPreviewModes: [UUID: DocumentPreviewMode] = [:]
     @State private var markdownScrollPositions: [UUID: MarkdownScrollPosition] = [:]
     @State private var editorViewportStore = EditorViewportStore()
+    @State private var warmEditorDocumentIDs: [UUID] = []
     @State private var resolvedJavaDocumentIconKinds: [String: LitheIconKind] = [:]
+
+    private static let maxWarmEditorPoolCount = 8
+    private static let maxWarmEditorByteCount = 512 * 1024
 
     var body: some View {
         let _ = LitheSignpost.bodyEvaluated("EditorAreaView")
@@ -103,7 +107,16 @@ struct EditorAreaView: View {
             }
             documentPreviewModes = documentPreviewModes.filter { ids.contains($0.key) }
             markdownScrollPositions = markdownScrollPositions.filter { ids.contains($0.key) }
-            editorViewportStore.retain(documentIDs: Set(ids))
+            let idSet = Set(ids)
+            warmEditorDocumentIDs.removeAll { !idSet.contains($0) }
+            editorViewportStore.retain(documentIDs: idSet)
+            recordWarmEditorDocument(model.activeDocument)
+        }
+        .onChange(of: model.activeDocumentID) { _ in
+            recordWarmEditorDocument(model.activeDocument)
+        }
+        .onAppear {
+            recordWarmEditorDocument(model.activeDocument)
         }
         .onChange(of: model.editorTabItems) { items in
             if let hoveredTabItem, !items.contains(hoveredTabItem) { self.hoveredTabItem = nil }
@@ -1269,7 +1282,7 @@ struct EditorAreaView: View {
             } else if isMarkdownFile(document) {
                 switch documentPreviewModes[document.id] ?? .editor {
                 case .editor:
-                    editorWithFindBar(document)
+                    warmPooledCodeEditor(activeDocument: document)
                 case .split:
                     let scrollPosition = markdownScrollPosition(for: document)
                     HStack(spacing: 0) {
@@ -1297,10 +1310,79 @@ struct EditorAreaView: View {
                     HTMLPreviewView(document: document)
                 }
             } else {
-                editorWithFindBar(document)
+                warmPooledCodeEditor(activeDocument: document)
             }
         } else {
             emptyState
+        }
+    }
+
+    private func usesWarmPlainCodePool(_ document: EditorDocument) -> Bool {
+        if isSVGFile(document) || isHTMLFile(document) {
+            return false
+        }
+        if isMarkdownFile(document) {
+            return (documentPreviewModes[document.id] ?? .editor) == .editor
+        }
+        return true
+    }
+
+    private func recordWarmEditorDocument(_ document: EditorDocument?) {
+        guard let document,
+              usesWarmPlainCodePool(document),
+              document.text.utf8.count <= Self.maxWarmEditorByteCount else {
+            return
+        }
+        warmEditorDocumentIDs.removeAll { $0 == document.id }
+        warmEditorDocumentIDs.append(document.id)
+        if warmEditorDocumentIDs.count > Self.maxWarmEditorPoolCount {
+            warmEditorDocumentIDs.removeFirst(warmEditorDocumentIDs.count - Self.maxWarmEditorPoolCount)
+        }
+    }
+
+    private func warmPooledDocuments(activeDocument: EditorDocument) -> [EditorDocument] {
+        var pooledIDs = Set(warmEditorDocumentIDs)
+        pooledIDs.insert(activeDocument.id)
+        if let splitDocumentID {
+            pooledIDs.remove(splitDocumentID)
+        }
+        var documents = model.openDocuments.filter { doc in
+            pooledIDs.contains(doc.id)
+                && usesWarmPlainCodePool(doc)
+                && (doc.id == activeDocument.id || doc.text.utf8.count <= Self.maxWarmEditorByteCount)
+        }
+        if !documents.contains(where: { $0.id == activeDocument.id }) {
+            documents.append(activeDocument)
+        }
+        return documents
+    }
+
+    private func warmPooledCodeEditor(activeDocument: EditorDocument) -> some View {
+        let pooledDocuments = warmPooledDocuments(activeDocument: activeDocument)
+        return ZStack {
+            ForEach(pooledDocuments, id: \.id) { pooledDocument in
+                let isActive = pooledDocument.id == activeDocument.id
+                CodeEditorView(
+                    document: pooledDocument,
+                    shouldFocus: isActive,
+                    isActiveInPane: isActive,
+                    viewportStore: editorViewportStore
+                )
+                .id(pooledDocument.id)
+                .clipped()
+                .opacity(isActive ? 1 : 0)
+                .allowsHitTesting(isActive)
+                .accessibilityHidden(!isActive)
+                .zIndex(isActive ? 1 : 0)
+            }
+        }
+        .overlay(alignment: .top) {
+            FindBarOverlay()
+        }
+        .overlay(alignment: .topTrailing) {
+            EditorSoftWrapToggle()
+                .padding(.top, 8)
+                .padding(.trailing, 10)
         }
     }
 

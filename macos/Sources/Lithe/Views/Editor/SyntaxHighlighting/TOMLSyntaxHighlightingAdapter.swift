@@ -30,8 +30,7 @@ enum TOMLSyntaxHighlightingAdapter {
         let scanStart = lineRange(containing: target.location, in: source).location
         let requiredEnd = NSMaxRange(lineRange(containing: max(target.location, NSMaxRange(target) - 1), in: source))
         let cachedStateBeforeTarget = cachedMultilineState(at: scanStart - 1, in: storage)
-        let shouldConverge = cachedStateBeforeTarget != nil
-            || cachedMultilineState(afterLineEndingAt: requiredEnd, in: storage) != nil
+        let shouldConverge = cachedMultilineState(afterLineEndingAt: requiredEnd, in: storage) != nil
         var multilineDelimiter = cachedStateBeforeTarget?.delimiter
         var scannedLineCount = 0
 
@@ -299,7 +298,8 @@ enum TOMLSyntaxHighlightingAdapter {
         guard lineEnd >= requiredEnd else { return false }
         guard shouldConverge else { return true }
         guard lineRange.location >= requiredEnd else { return false }
-        return cachedExitState?.delimiter == multilineDelimiter
+        guard let cachedExitState else { return true }
+        return cachedExitState.delimiter == multilineDelimiter
     }
 
     private static func lineRange(containing location: Int, in source: NSString) -> NSRange {

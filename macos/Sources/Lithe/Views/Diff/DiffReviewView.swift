@@ -1,5 +1,7 @@
-import SwiftUI
+import AppKit
+import LitheCoreContracts
 import LitheGitModule
+import SwiftUI
 
 struct DiffReviewView: View {
     @EnvironmentObject private var model: AppModel
@@ -1391,20 +1393,21 @@ enum DiffSyntaxHighlighter {
     }
 
     private static var keywordColor: Color { LitheTheme.skill }
-    private static var typeColor: Color { LitheTheme.accent }
+    private static var typeColor: Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            return SyntaxHighlightingColorConfiguration.bundled.palette(
+                formatID: nil,
+                base: CodeEditorPalette(isDark: isDark, theme: LitheTheme.activeTheme)
+            ).type
+        })
+    }
+    private static var functionColor: Color { LitheTheme.accent }
     private static var stringColor: Color { LitheTheme.success }
     private static var numberColor: Color { LitheTheme.warning }
     private static var commentColor: Color { LitheTheme.secondaryText }
     private static var tagColor: Color { LitheTheme.warning }
     private static var baseColor: Color { LitheTheme.primaryText }
-
-    private static let keywords: Set<String> = [
-        "class", "struct", "enum", "protocol", "extension", "func", "let", "var", "if", "else",
-        "guard", "switch", "case", "for", "while", "return", "throw", "throws", "try", "catch",
-        "async", "await", "public", "private", "internal", "protected", "static", "final", "new",
-        "import", "package", "interface", "implements", "extends", "void", "boolean", "int", "long",
-        "const", "function", "def", "in", "from", "as", "true", "false", "null", "nil", "self", "this"
-    ]
 
     static func styled(
         _ text: String,
@@ -1489,7 +1492,11 @@ enum DiffSyntaxHighlighter {
         if ["md", "markdown"].contains(fileExtension), text.trimmingCharacters(in: .whitespaces).hasPrefix("#") {
             return [Token(text: text, color: commentColor)]
         }
-        return tokenizeCode(text)
+        let profile = LanguageSyntaxProfileRegistry.shared.profile(
+            forFileName: nil,
+            fileExtension: fileExtension
+        )
+        return tokenizeCode(text, profile: profile)
     }
 
     private static func tokenizeMarkup(_ text: String) -> [Token] {
@@ -1514,7 +1521,8 @@ enum DiffSyntaxHighlighter {
         return tokens
     }
 
-    private static func tokenizeCode(_ text: String) -> [Token] {
+    private static func tokenizeCode(_ text: String, profile: LanguageSyntaxProfile) -> [Token] {
+        let enrichment = LanguageSyntaxProfileRegistry.shared.enrichment(for: profile.languageID)
         let characters = Array(text)
         var tokens: [Token] = []
         var index = 0
@@ -1523,12 +1531,106 @@ enum DiffSyntaxHighlighter {
             let start = index
             let character = characters[index]
 
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
+            if profile.supportsSlashComments, character == "/", index + 1 < characters.count {
+                if characters[index + 1] == "/" {
+                    let remainder = String(characters[index...])
+                    let isDirective = enrichment.directivePrefixes.contains { remainder.hasPrefix($0) }
+                    tokens.append(Token(text: remainder, color: isDirective ? tagColor : commentColor))
+                    break
+                }
+                if profile.supportsBlockComments, characters[index + 1] == "*" {
+                    index += 2
+                    while index + 1 < characters.count, !(characters[index] == "*" && characters[index + 1] == "/") {
+                        index += 1
+                    }
+                    index = index + 1 < characters.count ? index + 2 : characters.count
+                    tokens.append(Token(text: String(characters[start..<index]), color: commentColor))
+                    continue
+                }
+            }
+
+            if profile.supportsHashComments, character == "#" {
                 tokens.append(Token(text: String(characters[index...]), color: commentColor))
                 break
             }
 
+            if profile.supportsDashComments, character == "-", index + 1 < characters.count, characters[index + 1] == "-" {
+                tokens.append(Token(text: String(characters[index...]), color: commentColor))
+                break
+            }
+
+            if profile.supportsRustSyntax, character == "#",
+               index + 1 < characters.count,
+               characters[index + 1] == "[" || (characters[index + 1] == "!" && index + 2 < characters.count && characters[index + 2] == "[") {
+                var depth = 0
+                while index < characters.count {
+                    if characters[index] == "[" { depth += 1 }
+                    else if characters[index] == "]" {
+                        depth -= 1
+                        if depth == 0 {
+                            index += 1
+                            break
+                        }
+                    }
+                    index += 1
+                }
+                tokens.append(Token(text: String(characters[start..<index]), color: tagColor))
+                continue
+            }
+
+            if profile.supportsBacktickMultilineStrings, character == "`" {
+                index += 1
+                var escaped = false
+                while index < characters.count {
+                    let current = characters[index]
+                    index += 1
+                    if current == "`" && !escaped { break }
+                    escaped = profile.backtickAllowsEscape && current == "\\" && !escaped
+                    if current != "\\" { escaped = false }
+                }
+                tokens.append(Token(text: String(characters[start..<index]), color: stringColor))
+                continue
+            }
+
+            if profile.supportsRustSyntax, character == "r",
+               start == 0 || !(characters[start - 1].isLetter || characters[start - 1].isNumber || characters[start - 1] == "_") {
+                var probe = index + 1
+                while probe < characters.count, characters[probe] == "#" { probe += 1 }
+                if probe < characters.count, characters[probe] == "\"" {
+                    let hashCount = probe - (index + 1)
+                    index = probe + 1
+                    while index < characters.count {
+                        if characters[index] == "\"" {
+                            var matchedHashes = 0
+                            while matchedHashes < hashCount,
+                                  index + 1 + matchedHashes < characters.count,
+                                  characters[index + 1 + matchedHashes] == "#" {
+                                matchedHashes += 1
+                            }
+                            if matchedHashes == hashCount {
+                                index += 1 + hashCount
+                                break
+                            }
+                        }
+                        index += 1
+                    }
+                    tokens.append(Token(text: String(characters[start..<index]), color: stringColor))
+                    continue
+                }
+            }
+
             if character == "\"" || character == "'" {
+                if profile.supportsRustSyntax, character == "'",
+                   !(index + 2 < characters.count && characters[index + 2] == "'"),
+                   !(index + 1 < characters.count && characters[index + 1] == "\\") {
+                    index += 1
+                    while index < characters.count,
+                          characters[index].isLetter || characters[index].isNumber || characters[index] == "_" {
+                        index += 1
+                    }
+                    tokens.append(Token(text: String(characters[start..<index]), color: baseColor))
+                    continue
+                }
                 let quote = character
                 index += 1
                 var escaped = false
@@ -1536,7 +1638,8 @@ enum DiffSyntaxHighlighter {
                     let current = characters[index]
                     index += 1
                     if current == quote && !escaped { break }
-                    escaped = current == "\\" && !escaped
+                    let allowsEscape = quote == "\"" || profile.singleQuoteAllowsEscape
+                    escaped = allowsEscape && current == "\\" && !escaped
                     if current != "\\" { escaped = false }
                 }
                 tokens.append(Token(text: String(characters[start..<index]), color: stringColor))
@@ -1545,26 +1648,36 @@ enum DiffSyntaxHighlighter {
 
             if character.isNumber {
                 index += 1
-                while index < characters.count, characters[index].isNumber || characters[index] == "." {
+                while index < characters.count,
+                      characters[index].isNumber || characters[index] == "." || characters[index] == "_" || characters[index].isHexDigit || characters[index] == "x" || characters[index] == "X" {
                     index += 1
                 }
                 tokens.append(Token(text: String(characters[start..<index]), color: numberColor))
                 continue
             }
 
-            if character.isLetter || character == "_" || character == "@" {
+            if character.isLetter || character == "_" || (profile.supportsAtAnnotations && character == "@") {
                 index += 1
                 while index < characters.count,
                       characters[index].isLetter || characters[index].isNumber || characters[index] == "_" {
                     index += 1
                 }
                 let word = String(characters[start..<index])
+                var nextIndex = index
+                while nextIndex < characters.count, characters[nextIndex] == " " || characters[nextIndex] == "\t" {
+                    nextIndex += 1
+                }
+                let isCall = nextIndex < characters.count && characters[nextIndex] == "("
                 let color: Color
                 if word.hasPrefix("@") {
                     color = tagColor
-                } else if keywords.contains(word) {
+                } else if profile.keywords.contains(word) || enrichment.booleanLiterals.contains(word) || enrichment.nullLiterals.contains(word) {
                     color = keywordColor
-                } else if word.first?.isUppercase == true {
+                } else if profile.builtinTypes.contains(word) {
+                    color = typeColor
+                } else if isCall {
+                    color = functionColor
+                } else if word.first?.isUppercase == true && word.count >= 2 {
                     color = typeColor
                 } else {
                     color = baseColor
@@ -1576,10 +1689,18 @@ enum DiffSyntaxHighlighter {
             index += 1
             while index < characters.count {
                 let next = characters[index]
-                if next.isLetter || next.isNumber || next == "_" || next == "@" || next == "\"" || next == "'" {
+                if next.isLetter || next.isNumber || next == "_" || next == "\"" || next == "'"
+                    || (profile.supportsAtAnnotations && next == "@")
+                    || (profile.supportsBacktickMultilineStrings && next == "`")
+                    || (profile.supportsHashComments && next == "#")
+                    || (profile.supportsRustSyntax && next == "#") {
                     break
                 }
-                if next == "/", index + 1 < characters.count, characters[index + 1] == "/" {
+                if profile.supportsSlashComments, next == "/", index + 1 < characters.count,
+                   (characters[index + 1] == "/" || (profile.supportsBlockComments && characters[index + 1] == "*")) {
+                    break
+                }
+                if profile.supportsDashComments, next == "-", index + 1 < characters.count, characters[index + 1] == "-" {
                     break
                 }
                 index += 1

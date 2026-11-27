@@ -52,6 +52,14 @@ fn builtin_catalog_describes_market_lsp_providers() {
         .iter()
         .find(|provider| provider.id == "go")
         .expect("go provider should exist");
+    let go_launch = go
+        .language_server_launch
+        .as_ref()
+        .expect("go launch descriptor should exist");
+    assert_eq!(
+        go_launch.initialization_options,
+        Some(json!({ "ui.semanticTokens": true }))
+    );
     let go_installation = go
         .language_server_installation
         .as_ref()

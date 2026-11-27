@@ -374,14 +374,24 @@ extension AppModel {
         let expectedURL = document.url.standardizedFileURL
         let expectedText = document.text
         let filePath = document.url.lastPathComponent
-        let offlineFallback: () -> [LanguageServerDocumentSymbol] = {
-            RustCoreBridge().workspaceDocumentSymbols(path: filePath, source: expectedText)
+        let runOfflineFallback: () -> Void = { [weak document] in
+            Task.detached(priority: .userInitiated) {
+                let symbols = RustCoreBridge().workspaceDocumentSymbols(path: filePath, source: expectedText)
+                await MainActor.run {
+                    guard let document,
+                          document.url.standardizedFileURL == expectedURL,
+                          document.text.utf8.elementsEqual(expectedText.utf8) else {
+                        return
+                    }
+                    completion(symbols)
+                }
+            }
         }
 
         guard let root = workspaceURL,
               let manager = languageToolingSessionsIfActive,
               manager.features(for: document.url).contains(.documentSymbol) else {
-            completion(offlineFallback())
+            runOfflineFallback()
             return
         }
         do {
@@ -398,11 +408,11 @@ extension AppModel {
                 if case .success(let symbols) = result, !symbols.isEmpty {
                     completion(symbols)
                 } else {
-                    completion(offlineFallback())
+                    runOfflineFallback()
                 }
             }
         } catch {
-            completion(offlineFallback())
+            runOfflineFallback()
         }
     }
 

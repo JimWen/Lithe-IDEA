@@ -45,14 +45,14 @@
       "keyword": "#cf8e6d",
       "null": "#cf8e6d",
       "number": "#2aacb8",
-      "operator": "#bcbec4",
+      "operator": "#9aa7b0",
       "property": "#c77dbb",
       "punctuation": "#bcbec4",
       "regex": "#6aab73",
       "string": "#6aab73",
       "tag": "#d5b778",
       "text": "#dfe1e5",
-      "type": "#bcbec4",
+      "type": "#4ec9b0",
       "variable": "#bcbec4"
     }
   }

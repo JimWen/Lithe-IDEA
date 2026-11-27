@@ -36,7 +36,9 @@ struct SyntaxHighlightingColorConfigurationTests {
         #expect(rgba(dark.text) == [223, 225, 229, 255])
         #expect(rgba(dark.keyword) == [207, 142, 109, 255])
         #expect(rgba(dark.annotation) == [179, 174, 96, 255])
-        #expect(rgba(dark.type) == [188, 190, 196, 255])
+        #expect(rgba(dark.type) == [78, 201, 176, 255])
+        #expect(rgba(dark.type) != rgba(dark.text))
+        #expect(rgba(dark.typeParameter) == [78, 201, 176, 255])
         #expect(rgba(dark.property) == [199, 125, 187, 255])
         #expect(rgba(dark.number) == [42, 172, 184, 255])
         #expect(rgba(dark.string) == [106, 171, 115, 255])
@@ -45,7 +47,7 @@ struct SyntaxHighlightingColorConfigurationTests {
         #expect(rgba(dark.functionDeclaration) == [86, 168, 245, 255])
         #expect(rgba(dark.functionCall) == [86, 168, 245, 255])
         #expect(rgba(dark.parameter) == [188, 190, 196, 255])
-        #expect(rgba(dark.operator) == [188, 190, 196, 255])
+        #expect(rgba(dark.operator) == [154, 167, 176, 255])
     }
 
     @Test

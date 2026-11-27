@@ -17,7 +17,10 @@ enum SyntaxHighlighter {
         case "parameter":
             return .parameter
         case "variable":
-            return modifiers.contains("readonly") || modifiers.contains("constant") ? .constant : .variable
+            if modifiers.contains("readonly") || modifiers.contains("constant") || modifiers.contains("defaultLibrary") {
+                return .constant
+            }
+            return .variable
         case "property", "field":
             return .property
         case "enumMember":
@@ -38,6 +41,8 @@ enum SyntaxHighlighter {
             return .number
         case "operator":
             return .operator
+        case "label":
+            return .annotation
         default:
             return nil
         }
