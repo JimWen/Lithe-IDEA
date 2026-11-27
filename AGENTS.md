@@ -221,11 +221,21 @@ its regression tests intact:
    checks; roll back SQL Server transactions on error; reap `SshTunnel` in
    `Drop`.
 10. **Native `NSTextView`, UTF-16 & localization invariants**: preserve native
-    `UndoManager` across editor lifetimes, never split UTF-16 surrogate pairs
-    in caret/selection/edit offsets, keep `EditorChromeModel` silent on no-op
-    resets, and add both `en.lproj` and `zh-Hans.lproj` `Localizable.strings`
-    entries for every command added to `LitheCommandCatalog` (enforced by
+    `UndoManager` across editor lifetimes (call `breakUndoCoalescing()` +
+    `breakNativeEditCoalescing` on pooled tab deactivation), never split UTF-16
+    surrogate pairs in caret/selection/edit offsets, keep `EditorChromeModel`
+    silent on no-op resets, defer IME marked text in `MacReturnKeyMonitor`, and
+    add both `en.lproj` and `zh-Hans.lproj` `Localizable.strings` entries for
+    every command added to `LitheCommandCatalog` (enforced by
     `AppLocalizationTests`).
+11. **Rust FFI safety, SIGPIPE, symlink walks & frozen v1 plugin ABI**: wrap
+    every `extern "C"` FFI entry in `std::panic::catch_unwind`; set
+    `F_SETNOSIGPIPE` on macOS LSP child `stdin` pipes; use `entry.file_type()`
+    (never `path.is_dir()`) and skip unreadable dirs in recursive Rust walks;
+    never add stored properties to frozen v1 structs returned by value across
+    `.bundle` boundaries (`LanguageServerExtensionConfiguration`,
+    `LanguageSyntaxProfile`—extend via opt-in protocols or side tables). See
+    `docs/architecture/engineering-principles.md` for full Rust/Swift rules.
 
 ### 3. Multi-Dimensional Verification Gates & Acceptance Baseline
 
@@ -243,13 +253,17 @@ pass:
    - `./scripts/verify-core.sh`, `./scripts/verify-git-graph.sh`,
      `./scripts/verify-official-plugins.sh`
    - `git diff --check`
-2. **Full timed test suites (baseline as of 2026-11-26, commit `36e45432`)**:
+2. **Full timed test suites (baseline as of 2026-11-27, branch `feat/t3code-ai-agent`)**:
    - **Rust workspace timed suites** (`run-rust-tests-with-timing.mjs`):
-     **564/564** (`lithe-core` 535, `lithe-db-sidecar` 19, `lithe-db-mcp` 4,
+     **577/577** (`lithe-core` 548, `lithe-db-sidecar` 19, `lithe-db-mcp` 4,
      `lithe-git-host` 6).
    - **macOS full Swift timed suite** (`test-stability-macos.sh` with
-     `-Xlinker -force_load -Xlinker "$RUST_LIB"`): **1,630/1,630** across 193
-     suites.
+     `-Xlinker -force_load -Xlinker "$RUST_LIB"`): **1,741/1,742** across 207
+     suites (sole failure: pre-existing macOS 27.0 beta `hdiutil` >10s fixture
+     timeout in `StableRollbackTests`).
+   - **Official native plugins** (`./scripts/verify-official-plugins.sh`):
+     **3/3** (`GoSupport.bundle`, `RustSupport.bundle`, `PythonSupport.bundle`
+     Run/LSP/Debug/Syntax + shutdown isolation).
    - **Rust Core & C-bridge integration** (`./scripts/verify-rust-core.sh`):
      Swift C-bridge, strong linked symbols, `ProjectMetadataOperationsTests`,
      `test-git-execution.py`, and Git/LSP/Run bridge integration suites.
@@ -276,6 +290,9 @@ pass:
 5. **Mandatory doc sync, commit hygiene & milestone reporting**:
    - After major verified batches, update the owning feature documents
      (`docs/architecture/goland-parity-implementation.md`,
+     `docs/architecture/performance-optimization.md`,
+     `docs/architecture/engineering-principles.md`,
+     `docs/architecture/plugin-architecture.md`,
      `docs/architecture/goland-parity-b6-refactor.md`,
      `shared/contracts/rust-core-api.md`, `README.zh-CN.md`, `README.md`, and
      this file when baselines/pitfalls change) with only actually verified
